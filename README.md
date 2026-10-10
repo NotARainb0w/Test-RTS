@@ -49,6 +49,7 @@ Both have the same features and controls.
 | R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
 | N | Mirror the blueprint being pasted |
 | B, Alt+scroll | Air placement on/off, move its layer up/down |
+| P | Preset buildings |
 | Ctrl+scroll | Shape height (negative digs down); with Terrain, how high above the level to clear |
 | Arrow keys, Shift+Up/Down | Nudge the shape one block (camera-relative) / up and down |
 | Enter / X | Confirm / cancel a shape |
@@ -74,6 +75,10 @@ Both have the same features and controls.
 - **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
   blueprints are listed on the left (Shift+click deletes). Switch *Copy* to *Cut* and the source region is
   mined out after copying, so you can move a build.
+  - **Presets...** (P): ready-made buildings to place like a blueprint: starter house, smelter room (furnaces,
+    blast furnaces, smoker, chests), storage room, enchanting room (full bookshelf ring), workshop, watchtower,
+    animal pen, nether portal frame, bridge and lamp post. Rotate/mirror them like any blueprint; the material list
+    shows what you need, and missing blocks are fetched from storage.
   - **Load schematic...** opens the files in `.minecraft/schematics/`: Litematica `.litematic`,
     WorldEdit/Sponge `.schem`, and vanilla structure `.nbt` files. Only blocks are imported (not chest
     contents or entities).

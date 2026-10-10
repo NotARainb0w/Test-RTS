@@ -372,6 +372,9 @@ public final class RtsScreen extends Screen {
                         x, y, full, ROW - 1, () -> s.pasteClearsAir = !s.pasteClearsAir)
                         .dynamic(() -> s.pasteClearsAir ? "Air: clear" : "Air: keep").left();
                 y += ROW;
+                button("Presets...", "Ready-made buildings: house, smelter room, storage, enchanting room and more [P]",
+                        x, y, full, ROW - 1, () -> this.minecraft.setScreen(new PresetScreen(this))).glyph(Glyphs.BOX, Theme.ACCENT).left();
+                y += ROW;
                 button("Load schematic...", "Litematica .litematic, WorldEdit .schem or structure .nbt from .minecraft/schematics",
                         x, y, full, ROW - 1, () -> this.minecraft.setScreen(new SchematicBrowserScreen(this))).glyph(Glyphs.FOLDER, Theme.GOLD).left();
                 y += ROW + 3;
@@ -872,6 +875,7 @@ public final class RtsScreen extends Screen {
             }
             case GLFW.GLFW_KEY_H -> s.hollow = !s.hollow;
             case GLFW.GLFW_KEY_B -> toggleAir();
+            case GLFW.GLFW_KEY_P -> this.minecraft.setScreen(new PresetScreen(this));
             case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> this.actions.confirm();
             case GLFW.GLFW_KEY_Z -> {
                 if (hasControlDown() && this.minecraft.level != null) {
