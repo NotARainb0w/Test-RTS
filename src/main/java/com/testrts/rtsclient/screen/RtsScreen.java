@@ -92,6 +92,7 @@ public final class RtsScreen extends Screen {
     private final BuildSession session;
 
     private TextFieldWidget search;
+    private String searchText = "";
     private Tab tab = Tab.ALL;
     private List<PaletteEntry> palette = new ArrayList<>();
     private int paletteRefresh;
@@ -244,8 +245,11 @@ public final class RtsScreen extends Screen {
         int searchW = Math.min(160, this.width / 3);
         this.search = new TextFieldWidget(this.textRenderer, PAD + 1, headerY() + 1, searchW, 12, Text.literal("Search"));
         this.search.setMaxLength(50);
+        // init() runs again every time the screen comes back (after a chest, chat...), keep the query.
+        this.search.setText(this.searchText);
         this.search.setPlaceholder(Text.literal("Search items...").formatted(Formatting.DARK_GRAY));
         this.search.setChangedListener(s -> {
+            this.searchText = s;
             this.gridScroll = 0;
             refreshPalette();
         });
