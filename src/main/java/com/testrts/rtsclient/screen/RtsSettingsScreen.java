@@ -39,6 +39,12 @@ public final class RtsSettingsScreen extends Screen {
         y = row(x, y, w, () -> "Exact block rotation: " + onOff(c.strictOrientation),
                 "On: stairs/logs must face exactly as previewed or they're skipped. Off: placed as close as possible.",
                 () -> c.strictOrientation = !c.strictOrientation);
+        y = row(x, y, w, () -> "Buildable hollow shells: " + onOff(c.buildableShells),
+                "Hollow spheres and circles get extra blocks on the inside where needed so every block can be placed.",
+                () -> c.buildableShells = !c.buildableShells);
+        y = row(x, y, w, () -> "Remove scaffolding: " + onOff(c.removeScaffolding),
+                "The built-in engine adds temporary dirt/cobblestone to reach and support blocks; mine it out afterwards.",
+                () -> c.removeScaffolding = !c.removeScaffolding);
         y = row(x, y, w, () -> "Pick up drops after clearing: " + onOff(c.collectDrops),
                 "Walk over the items a clear order dropped.",
                 () -> c.collectDrops = !c.collectDrops);

@@ -143,6 +143,11 @@ public final class BuildTask implements RtsTask {
                 return Status.RUNNING;
             }
             Map<Item, Integer> missing = this.clearing ? Map.of() : MaterialPlanner.missing(client, this.blocks);
+            Item engineWants = Engine.missingItem();
+            if (missing.isEmpty() && engineWants != null) {
+                // Not a material of the order itself: scaffolding blocks.
+                missing = Map.of(engineWants, 64);
+            }
             if (!missing.isEmpty() && canFetch(missing)) {
                 // Builder can't continue without blocks: stop it, fetch, then this task restarts it.
                 Engine.stop();

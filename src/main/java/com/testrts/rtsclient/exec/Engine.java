@@ -160,6 +160,12 @@ public final class Engine {
         return NativeEngine.get().isBuilderPaused() || BaritoneBridge.isBuilderPaused();
     }
 
+    /** Item the built-in builder is paused for, e.g. scaffolding blocks. Null for Baritone. */
+    @org.jetbrains.annotations.Nullable
+    public static net.minecraft.item.Item missingItem() {
+        return NativeEngine.get().missingItem();
+    }
+
     public static void resumeBuilder() {
         NativeEngine.get().resumeBuilder();
         BaritoneBridge.resumeBuilder();

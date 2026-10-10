@@ -22,6 +22,7 @@ public final class NativeEngine {
     private PathFollower walk;
     @Nullable
     private NativeBuilder builder;
+    private final java.util.Set<BlockPos> orphanScaffolds = new java.util.LinkedHashSet<>();
     private String status = "Idle";
 
     public static NativeEngine get() {
@@ -101,7 +102,10 @@ public final class NativeEngine {
 
     public void build(Map<BlockPos, BlockState> order, boolean strict, boolean layered) {
         stop(MinecraftClient.getInstance());
-        this.builder = new NativeBuilder(order, strict, layered);
+        // Scaffolding left by an interrupted build (e.g. paused to fetch blocks) is cleaned up by this one.
+        java.util.Set<BlockPos> carry = new java.util.LinkedHashSet<>(this.orphanScaffolds);
+        this.orphanScaffolds.clear();
+        this.builder = new NativeBuilder(order, strict, layered, carry);
         this.status = "Building";
     }
 
@@ -117,6 +121,12 @@ public final class NativeEngine {
         return this.builder != null && this.builder.isPaused();
     }
 
+    /** What the built-in builder is waiting for (a block or scaffolding), if paused. */
+    @org.jetbrains.annotations.Nullable
+    public net.minecraft.item.Item missingItem() {
+        return this.builder != null && this.builder.isPaused() ? this.builder.missingItem() : null;
+    }
+
     public void resumeBuilder() {
         if (this.builder != null) {
             this.builder.resume();
@@ -130,6 +140,7 @@ public final class NativeEngine {
     public void stop(MinecraftClient client) {
         if (this.builder != null) {
             this.builder.stop(client);
+            this.orphanScaffolds.addAll(this.builder.scaffolds());
         }
         this.builder = null;
         this.walk = null;

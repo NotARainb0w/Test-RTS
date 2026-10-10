@@ -32,6 +32,18 @@ public final class RtsConfig {
     public int ghostBlockLimit = 24_000;
     /** Build one Y layer at a time (bottom-up; clearing goes top-down). */
     public boolean buildInLayers = true;
+    /** Cheap blocks the built-in engine may use as temporary scaffolding, in order of preference. */
+    public List<String> scaffoldBlocks = new ArrayList<>(List.of(
+            "minecraft:dirt", "minecraft:cobblestone", "minecraft:cobbled_deepslate", "minecraft:netherrack",
+            "minecraft:andesite", "minecraft:diorite", "minecraft:granite", "minecraft:tuff", "minecraft:stone",
+            "minecraft:deepslate", "minecraft:blackstone", "minecraft:basalt"));
+    /**
+     * Hollow spheres/circles get a shell that is thicker on the inside where needed, so every block
+     * touches its neighbours face to face and can actually be placed. Looks the same from outside.
+     */
+    public boolean buildableShells = true;
+    /** Mine the scaffolding back out when an order is finished. */
+    public boolean removeScaffolding = true;
     /** After a clear order, walk over the dropped items to pick them up. */
     public boolean collectDrops = true;
     /** Stop the camera at solid blocks. Off: the camera flies through walls. */
@@ -63,6 +75,9 @@ public final class RtsConfig {
                 if (loaded != null) {
                     if (loaded.pinned == null) {
                         loaded.pinned = new ArrayList<>();
+                    }
+                    if (loaded.scaffoldBlocks == null || loaded.scaffoldBlocks.isEmpty()) {
+                        loaded.scaffoldBlocks = new RtsConfig().scaffoldBlocks;
                     }
                     instance = loaded;
                 }

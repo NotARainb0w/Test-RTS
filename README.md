@@ -82,6 +82,20 @@ Orders are built **one layer at a time**, bottom-up (clearing goes top-down), so
 attach to. Blocks that can't be done yet are retried later, and when an order finishes with blocks missing it
 goes back for them (twice).
 
+The built-in engine also handles shapes that overhang or float, like spheres and domes:
+
+- **Scaffolding**: when a block has nothing to attach to, it places a few temporary blocks (dirt, cobblestone,
+  netherrack... see `scaffoldBlocks` in the config) to connect it to something solid, or a column down to the
+  ground.
+- **Pillaring**: when a block is too high to reach from the ground, it walks next to it, jumps and places blocks
+  under itself until it can reach.
+- **Cleanup**: when the order is done, the scaffolding and pillars are mined out again (Settings: Remove
+  scaffolding). If you run out of scaffolding blocks, it fetches more from linked storage.
+- **Buildable hollow shells** (on by default): hollow spheres and circles get a slightly thicker inside where
+  layers would otherwise only touch at the edges, so every block can be placed. The outside looks the same.
+
+Keep a stack of dirt or cobblestone in your inventory or storage for big domes and floating builds.
+
 ## Storage
 
 The item bar at the bottom shows **your inventory plus everything in linked containers**. Gold counts mean the

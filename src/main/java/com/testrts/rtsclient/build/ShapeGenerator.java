@@ -167,8 +167,7 @@ public final class ShapeGenerator {
                     if (x * x + z * z > limit) {
                         continue;
                     }
-                    if (hollow && insideDisc(x + 1, z, limit) && insideDisc(x - 1, z, limit)
-                            && insideDisc(x, z + 1, limit) && insideDisc(x, z - 1, limit)) {
+                    if (hollow && interiorOfDisc(x, z, limit)) {
                         continue;
                     }
                     if (!out.add(center.getX() + x, y, center.getZ() + z)) {
@@ -177,6 +176,22 @@ public final class ShapeGenerator {
                 }
             }
         }
+    }
+
+    /** Like {@link #interiorOfBall}: buildable rings check diagonals too, so the ring is edge-to-edge connected. */
+    private static boolean interiorOfDisc(int x, int z, double limit) {
+        boolean buildable = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0 || !buildable && dx != 0 && dz != 0) {
+                    continue;
+                }
+                if (!insideDisc(x + dx, z + dz, limit)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private static boolean insideDisc(int x, int z, double limit) {
@@ -193,9 +208,7 @@ public final class ShapeGenerator {
                     if (!insideBall(x, y, z, limit)) {
                         continue;
                     }
-                    if (hollow && insideBall(x + 1, y, z, limit) && insideBall(x - 1, y, z, limit)
-                            && insideBall(x, y + 1, z, limit) && insideBall(x, y - 1, z, limit)
-                            && insideBall(x, y, z + 1, limit) && insideBall(x, y, z - 1, limit)) {
+                    if (hollow && interiorOfBall(x, y, z, limit)) {
                         continue;
                     }
                     if (!out.add(center.getX() + x, center.getY() + y, center.getZ() + z)) {
@@ -280,6 +293,30 @@ public final class ShapeGenerator {
     private static boolean fillable(net.minecraft.block.BlockState s) {
         // Water, lava, grass and snow layers are all "replaceable".
         return s.isAir() || s.isReplaceable();
+    }
+
+    /**
+     * Inside the shell? Plain shells only look at the 6 face neighbours, which leaves the flat parts of
+     * a dome touching the layer below only along edges, so nothing can be placed against them.
+     * Buildable shells also look at the 12 edge neighbours: the outside looks identical, the inside
+     * is thicker where needed, and every block has a face to attach to.
+     */
+    private static boolean interiorOfBall(int x, int y, int z, double limit) {
+        boolean buildable = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    int n = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+                    if (n == 0 || n == 3 || n == 2 && !buildable) {
+                        continue;
+                    }
+                    if (!insideBall(x + dx, y + dy, z + dz, limit)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     private static boolean insideBall(int x, int y, int z, double limit) {

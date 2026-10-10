@@ -68,12 +68,35 @@ public final class NativeBuilder {
     private static final float[] YAWS = {0F, 90F, 180F, 270F};
     private static final float[] PITCHES = {0F, 75F, -75F};
 
-    private final Map<BlockPos, BlockState> order;
-    private final boolean clearing;
+    private Map<BlockPos, BlockState> order;
+    /** The order as given (the cleanup phase swaps {@link #order} for the scaffolding). */
+    private final Map<BlockPos, BlockState> originalOrder;
+    private boolean clearing;
     private final boolean strict;
     private final boolean layered;
     /** Order positions grouped by Y, in the order layers are worked on. */
     private final TreeMap<Integer, List<BlockPos>> layers = new TreeMap<>();
+    /** Block items the order itself uses; scaffolding prefers something else. */
+    private final Set<Item> orderItems = new HashSet<>();
+
+    // Scaffolding: temporary blocks that give an unsupported block something to attach to.
+    private final java.util.ArrayDeque<BlockPos> scaffoldPlan = new java.util.ArrayDeque<>();
+    @Nullable
+    private BlockPos scaffoldFor;
+    /** Every scaffold block we placed, removed again when the order is done. */
+    private final Set<BlockPos> scaffolds = new LinkedHashSet<>();
+    private int cleanupRounds;
+    private boolean cleaning;
+
+    // Pillaring: jump and place a block underneath, to reach blocks high above the ground.
+    @Nullable
+    private BlockPos pillarTarget;
+    @Nullable
+    private BlockPos pillarStep;
+    private int pillarPlaced;
+    private int pillarTicks;
+    /** The current route search is for a spot to pillar up from (the target itself was unreachable). */
+    private boolean seekingPillarSite;
     private final List<Integer> layerOrder = new ArrayList<>();
     private int layerIndex;
     /** Not-yet-done positions of the current layer (all positions when not layered). */
@@ -106,13 +129,34 @@ public final class NativeBuilder {
     private int walkFails;
     private String status = "starting";
 
-    public NativeBuilder(Map<BlockPos, BlockState> order, boolean strict, boolean layered) {
+    /** Scaffolding we placed that is still in the world (handed on if this builder is replaced). */
+    public Set<BlockPos> scaffolds() {
+        return this.scaffolds;
+    }
+
+    public NativeBuilder(Map<BlockPos, BlockState> order, boolean strict, boolean layered,
+                         java.util.Collection<BlockPos> inheritedScaffolds) {
         this.order = new LinkedHashMap<>(order);
         this.clearing = !order.isEmpty() && order.values().iterator().next().isAir();
         this.strict = strict;
         this.layered = layered;
+        this.originalOrder = this.order;
+        this.scaffolds.addAll(inheritedScaffolds);
+        for (BlockState st : this.order.values()) {
+            if (!st.isAir()) {
+                this.orderItems.add(st.getBlock().asItem());
+            }
+        }
+        buildLayers();
+    }
+
+    private void buildLayers() {
+        this.layers.clear();
+        this.layerOrder.clear();
+        this.layerIndex = 0;
+        this.todo.clear();
         for (BlockPos p : this.order.keySet()) {
-            this.layers.computeIfAbsent(layered ? p.getY() : 0, y -> new ArrayList<>()).add(p);
+            this.layers.computeIfAbsent(this.layered ? p.getY() : 0, y -> new ArrayList<>()).add(p);
         }
         this.layerOrder.addAll(this.clearing ? this.layers.descendingKeySet() : this.layers.keySet());
     }
@@ -172,75 +216,390 @@ public final class NativeBuilder {
             this.cooldown--;
             return true;
         }
+        if (this.pillarTarget != null) {
+            tickPillar(client);
+            return true;
+        }
+        if (!this.scaffoldPlan.isEmpty()) {
+            tickScaffold(client);
+            return true;
+        }
 
         if (!advanceLayer(world)) {
+            if (startCleanup(world)) {
+                return true;
+            }
             MovementInput.restore(client);
             int left = skippedCount();
             this.status = left == 0 ? "done" : "done, " + left + " skipped";
             return false;
         }
-        String layerInfo = this.layered && this.layerOrder.size() > 1
+        String layerInfo = (this.cleaning ? " scaffolding" : "") + (this.layered && this.layerOrder.size() > 1
                 ? " (layer " + (this.layerIndex + 1) + "/" + this.layerOrder.size() + ", " + this.todo.size() + " left)"
-                : " (" + this.todo.size() + " left)";
+                : " (" + this.todo.size() + " left)");
 
-        // 1) Work on something within reach.
+        // 1) Work on something within reach (this may also plan scaffolding).
         if (actInReach(client)) {
             this.walk = null;
             this.search = null;
+            this.seekingPillarSite = false;
             MovementInput.acquire(player).release();
-            this.status = (this.clearing ? "mining" : "placing") + layerInfo;
+            this.status = (this.cleaning ? "removing scaffolding" : this.clearing ? "mining" : "placing") + layerInfo;
             return true;
         }
 
-        // 2) A path search in progress: advance it a bit.
+        // 2) Keep heading for the current target, or pick the next one.
+        BlockPos target = this.walkTarget != null && this.todo.contains(this.walkTarget) && (this.walk != null || this.search != null)
+                ? this.walkTarget
+                : pickWalkTarget(world, player);
+        if (target != null) {
+            walkStep(client, target, layerInfo);
+        }
+        return true;
+    }
+
+    /**
+     * One step of getting within reach of {@code target}: plan a route (a little each tick), then
+     * follow it. If there's no route, look for a spot nearby to pillar up from instead.
+     */
+    private void walkStep(MinecraftClient client, BlockPos target, String info) {
+        ClientPlayerEntity player = client.player;
+        ClientWorld world = client.world;
+        if (!target.equals(this.walkTarget) || (this.walk == null && this.search == null)) {
+            this.walkTarget = target;
+            this.walk = null;
+            this.seekingPillarSite = false;
+            this.search = PathFinder.start(world, player.getBlockPos(), feet -> canWorkFrom(client, feet, target),
+                    Vec3d.ofCenter(target));
+        }
         if (this.search != null) {
-            this.status = "planning" + layerInfo;
+            this.status = (this.seekingPillarSite ? "finding a spot to climb" : "planning") + info;
             PathFinder.Search.State s = this.search.step(PathFinder.NODES_PER_TICK);
             if (s == PathFinder.Search.State.FOUND) {
-                this.walk = new PathFollower(this.search.result());
+                List<BlockPos> path = this.search.result();
                 this.search = null;
-                if (this.walk.path().isEmpty()) {
-                    // Already standing where we'd go and still can't act: try other blocks first.
-                    fail(this.walkTarget);
-                    this.walk = null;
+                if (path.isEmpty()) {
+                    // Already standing at the best spot.
+                    if (this.seekingPillarSite) {
+                        this.seekingPillarSite = false;
+                        startPillar(client, target);
+                    } else {
+                        // In position but still couldn't do it: try other blocks first.
+                        unreachable(target);
+                    }
+                    return;
                 }
+                this.walk = new PathFollower(path);
             } else if (s == PathFinder.Search.State.FAILED) {
                 this.search = null;
-                fail(this.walkTarget);
+                if (!this.seekingPillarSite && hasScaffoldItem(client)) {
+                    // Can't walk into reach: find ground below/near it and pillar up.
+                    this.seekingPillarSite = true;
+                    this.search = PathFinder.start(world, player.getBlockPos(), feet -> pillarSite(world, feet, target),
+                            Vec3d.ofCenter(target));
+                } else {
+                    unreachable(target);
+                }
             }
-            return true;
+            return;
         }
+        PathFollower.State s = this.walk.tick(client);
+        this.status = (this.seekingPillarSite ? "going to climb" : "walking") + info;
+        if (s == PathFollower.State.WALKING) {
+            return;
+        }
+        this.walk = null;
+        if (s == PathFollower.State.ARRIVED && this.seekingPillarSite) {
+            this.seekingPillarSite = false;
+            startPillar(client, target);
+            return;
+        }
+        if (s == PathFollower.State.STUCK && ++this.walkFails >= MAX_WALK_FAILS) {
+            this.walkFails = 0;
+            unreachable(target);
+        }
+    }
 
-        // 3) Walking toward a target.
-        if (this.walk != null && this.walkTarget != null && this.todo.contains(this.walkTarget)) {
-            PathFollower.State s = this.walk.tick(client);
-            this.status = "walking" + layerInfo;
-            if (s == PathFollower.State.WALKING) {
+    private void unreachable(BlockPos target) {
+        this.seekingPillarSite = false;
+        if (this.scaffoldPlan.contains(target)) {
+            abandonScaffold();
+        } else {
+            fail(target);
+        }
+    }
+
+    // ------------------------------------------------------------------ scaffolding
+
+    private boolean canScaffold(ClientWorld world, ClientPlayerEntity player, BlockPos c) {
+        if (!world.isChunkLoaded(c) || this.order.containsKey(c) || player.getBoundingBox().intersects(new Box(c))) {
+            return false;
+        }
+        BlockState s = world.getBlockState(c);
+        return (s.isAir() || s.isReplaceable()) && !s.getFluidState().isIn(net.minecraft.registry.tag.FluidTags.LAVA);
+    }
+
+    /**
+     * Find the fewest temporary blocks that connect {@code target} to something solid, so it can
+     * be placed. Tries a short search first (bridges corner/edge gaps), then a column down.
+     */
+    private boolean planScaffold(ClientWorld world, ClientPlayerEntity player, BlockPos target) {
+        Direction[] dirs = {Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP};
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        Map<BlockPos, BlockPos> parent = new java.util.HashMap<>();
+        Map<BlockPos, Integer> depth = new java.util.HashMap<>();
+        for (Direction d : dirs) {
+            BlockPos c = target.offset(d);
+            if (canScaffold(world, player, c)) {
+                parent.put(c, target);
+                depth.put(c, 1);
+                queue.add(c);
+            }
+        }
+        while (!queue.isEmpty() && parent.size() < 600) {
+            BlockPos c = queue.poll();
+            if (support(world, c) != null) {
+                List<BlockPos> chain = new ArrayList<>();
+                for (BlockPos x = c; !x.equals(target); x = parent.get(x)) {
+                    chain.add(x);
+                }
+                // Place from the solid end toward the target, each one resting on the previous.
+                this.scaffoldPlan.clear();
+                this.scaffoldPlan.addAll(chain);
+                this.scaffoldFor = target;
                 return true;
             }
-            this.walk = null;
-            if (s == PathFollower.State.STUCK && ++this.walkFails >= MAX_WALK_FAILS) {
-                fail(this.walkTarget);
-                this.walkFails = 0;
+            int dd = depth.get(c);
+            if (dd >= 6) {
+                continue;
             }
-            if (s == PathFollower.State.ARRIVED && Reach.inReach(client, this.walkTarget)
-                    && !this.clearing && !placeable(world, player, this.walkTarget)) {
-                // Got there but there's nothing to attach it to yet: its neighbours may fix that.
-                fail(this.walkTarget);
+            for (Direction d : dirs) {
+                BlockPos n = c.offset(d);
+                if (!parent.containsKey(n) && canScaffold(world, player, n)) {
+                    parent.put(n, c);
+                    depth.put(n, dd + 1);
+                    queue.add(n);
+                }
             }
+        }
+        // Fallback: a column straight down to the ground.
+        List<BlockPos> column = new ArrayList<>();
+        BlockPos c = target.down();
+        while (column.size() < 24 && canScaffold(world, player, c)) {
+            column.add(c);
+            if (support(world, c) != null && support(world, c) == Direction.DOWN) {
+                break;
+            }
+            c = c.down();
+        }
+        if (!column.isEmpty() && support(world, column.get(column.size() - 1)) != null) {
+            this.scaffoldPlan.clear();
+            for (int i = column.size() - 1; i >= 0; i--) {
+                this.scaffoldPlan.add(column.get(i));
+            }
+            this.scaffoldFor = target;
             return true;
         }
+        return false;
+    }
 
-        // 4) Pick the next block and start planning a route to it.
-        BlockPos target = pickWalkTarget(world, player);
-        if (target == null) {
-            return true;
+    private void abandonScaffold() {
+        if (this.scaffoldFor != null) {
+            fail(this.scaffoldFor);
         }
-        this.walkTarget = target;
-        this.search = PathFinder.start(world, player.getBlockPos(), feet -> canWorkFrom(client, feet, target),
-                Vec3d.ofCenter(target));
-        this.status = "planning" + layerInfo;
+        this.scaffoldPlan.clear();
+        this.scaffoldFor = null;
+    }
+
+    private void tickScaffold(MinecraftClient client) {
+        ClientPlayerEntity player = client.player;
+        ClientWorld world = client.world;
+        BlockPos c = this.scaffoldPlan.peekFirst();
+        BlockState now = world.getBlockState(c);
+        if (!now.isAir() && !now.isReplaceable()) {
+            this.scaffoldPlan.pollFirst();
+            return;
+        }
+        if (!Reach.inReach(client, c)) {
+            walkStep(client, c, " (scaffolding)");
+            return;
+        }
+        this.walk = null;
+        this.search = null;
+        MovementInput.acquire(player).release();
+        if (player.getBoundingBox().intersects(new Box(c)) || support(world, c) == null) {
+            abandonScaffold();
+            return;
+        }
+        Item item = scaffoldItem(client);
+        if (item == null || !Inventories.hold(client, item)) {
+            pauseForScaffolding();
+            return;
+        }
+        this.status = "placing scaffolding";
+        if (place(client, c, net.minecraft.block.Block.getBlockFromItem(item).getDefaultState())) {
+            this.scaffolds.add(c.toImmutable());
+            this.scaffoldPlan.pollFirst();
+            this.cooldown = PLACE_DELAY_TICKS;
+        } else {
+            abandonScaffold();
+        }
+    }
+
+    @Nullable
+    private Item scaffoldItem(MinecraftClient client) {
+        Item fallback = null;
+        for (String id : com.testrts.rtsclient.config.RtsConfig.get().scaffoldBlocks) {
+            net.minecraft.util.Identifier ident = net.minecraft.util.Identifier.tryParse(id);
+            if (ident == null || !net.minecraft.registry.Registries.ITEM.containsId(ident)) {
+                continue;
+            }
+            Item item = net.minecraft.registry.Registries.ITEM.get(ident);
+            if (Inventories.count(client, item) > 0) {
+                if (!this.orderItems.contains(item)) {
+                    return item;
+                }
+                if (fallback == null) {
+                    fallback = item;
+                }
+            }
+        }
+        return fallback;
+    }
+
+    private boolean hasScaffoldItem(MinecraftClient client) {
+        return scaffoldItem(client) != null;
+    }
+
+    /** Out of scaffolding blocks: pause and ask for some (the build task fetches it from storage). */
+    private void pauseForScaffolding() {
+        Item want = net.minecraft.item.Items.DIRT;
+        for (String id : com.testrts.rtsclient.config.RtsConfig.get().scaffoldBlocks) {
+            net.minecraft.util.Identifier ident = net.minecraft.util.Identifier.tryParse(id);
+            if (ident != null && net.minecraft.registry.Registries.ITEM.containsId(ident)) {
+                Item item = net.minecraft.registry.Registries.ITEM.get(ident);
+                if (com.testrts.rtsclient.storage.StorageManager.get().total(item) > 0) {
+                    want = item;
+                    break;
+                }
+            }
+        }
+        this.paused = true;
+        this.missingItem = want;
+        this.status = "need scaffolding blocks (" + want.getName().getString() + ")";
+    }
+
+    /** When everything is built, mine the scaffolding back out. */
+    private boolean startCleanup(ClientWorld world) {
+        if (this.scaffolds.isEmpty() || !com.testrts.rtsclient.config.RtsConfig.get().removeScaffolding
+                || this.cleanupRounds >= 3) {
+            return false;
+        }
+        Map<BlockPos, BlockState> cleanup = new LinkedHashMap<>();
+        BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
+        for (BlockPos p : this.scaffolds) {
+            BlockState s = world.getBlockState(p);
+            // Leave planned positions alone (a pillar block there was replaced by the real block),
+            // and don't pull out a block that sand or gravel is resting on.
+            if (!s.isAir() && !this.originalOrder.containsKey(p)
+                    && !(world.getBlockState(p.up()).getBlock() instanceof net.minecraft.block.FallingBlock)) {
+                cleanup.put(p, air);
+            }
+        }
+        this.scaffolds.clear();
+        if (cleanup.isEmpty()) {
+            return false;
+        }
+        this.cleanupRounds++;
+        this.cleaning = true;
+        this.order = cleanup;
+        this.clearing = true;
+        this.skipped.clear();
+        this.failures.clear();
+        this.sweeps = MAX_SWEEPS;
+        this.walk = null;
+        this.search = null;
+        buildLayers();
         return true;
+    }
+
+    // ------------------------------------------------------------------ pillaring
+
+    /** Ground near (below or beside) the target with a clear column above it to climb. */
+    private boolean pillarSite(ClientWorld world, BlockPos feet, BlockPos target) {
+        double dx = feet.getX() - target.getX();
+        double dz = feet.getZ() - target.getZ();
+        // From up to ~3.4 blocks away (horizontally) the target is still in reach once we're level with it.
+        if (dx * dx + dz * dz > 3.4 * 3.4 || feet.getY() > target.getY()) {
+            return false;
+        }
+        int climb = target.getY() - 1 - feet.getY();
+        if (climb > 24) {
+            return false;
+        }
+        for (int i = 0; i <= climb + 1; i++) {
+            BlockPos c = feet.up(i);
+            // Head room all the way up. Passing through not-yet-built planned spots is fine: the
+            // pillar block there gets swapped for the real one when that layer is built.
+            if (i > 0 && !Walkability.passable(world, c.up(1))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void startPillar(MinecraftClient client, BlockPos target) {
+        this.pillarTarget = target;
+        this.pillarStep = client.player.getBlockPos();
+        this.pillarPlaced = 0;
+        this.pillarTicks = 0;
+        this.status = "climbing";
+    }
+
+    private void tickPillar(MinecraftClient client) {
+        ClientPlayerEntity player = client.player;
+        ClientWorld world = client.world;
+        MovementInput input = MovementInput.acquire(player);
+        BlockPos target = this.pillarTarget;
+        if (player.isOnGround() && Reach.inReach(client, target)) {
+            input.release();
+            this.pillarTarget = null;
+            return;
+        }
+        if (++this.pillarTicks > 20 * 40 || this.pillarPlaced > 30 || !Walkability.passable(world, player.getBlockPos().up(2))) {
+            // Ceiling in the way or it's taking far too long.
+            input.release();
+            this.pillarTarget = null;
+            unreachable(target);
+            return;
+        }
+        Item item = scaffoldItem(client);
+        if (item == null) {
+            input.release();
+            this.pillarTarget = null;
+            pauseForScaffolding();
+            return;
+        }
+        Inventories.hold(client, item);
+        input.forward = false;
+        if (player.isOnGround()) {
+            this.pillarStep = player.getBlockPos();
+            input.jump = true;
+            Reach.face(player, player.getYaw(), 90.0F);
+            return;
+        }
+        input.jump = false;
+        BlockPos step = this.pillarStep;
+        // Near the top of the jump: put a block where our feet just were.
+        if (player.getY() >= step.getY() + 1.0 && world.getBlockState(step).isReplaceable()) {
+            BlockPos below = step.down();
+            BlockHitResult hit = new BlockHitResult(new Vec3d(step.getX() + 0.5, step.getY(), step.getZ() + 0.5), Direction.UP, below, false);
+            client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
+            player.swingHand(Hand.MAIN_HAND);
+            this.scaffolds.add(step.toImmutable());
+            this.pillarPlaced++;
+            this.status = "climbing (" + this.pillarPlaced + ")";
+        }
     }
 
     /**
@@ -285,6 +644,8 @@ public final class NativeBuilder {
         this.breaking = null;
         this.walk = null;
         this.search = null;
+        this.pillarTarget = null;
+        this.scaffoldPlan.clear();
         MovementInput.restore(client);
     }
 
@@ -367,6 +728,7 @@ public final class NativeBuilder {
             }
             return false;
         }
+        BlockPos unsupported = null;
         for (BlockPos p : inReach) {
             BlockState wanted = this.order.get(p);
             if (done(world, p, wanted)) {
@@ -374,6 +736,9 @@ public final class NativeBuilder {
                 continue;
             }
             if (!placeable(world, player, p)) {
+                if (unsupported == null && !player.getBoundingBox().intersects(new Box(p)) && !hasSupport(world, p)) {
+                    unsupported = p;
+                }
                 continue;
             }
             BlockState current = world.getBlockState(p);
@@ -405,6 +770,23 @@ public final class NativeBuilder {
             }
             if (place(client, p, wanted)) {
                 this.cooldown = PLACE_DELAY_TICKS;
+                return true;
+            }
+        }
+        // Nothing here can be attached to anything. If that's true of the whole layer, scaffold.
+        if (unsupported != null && !anySupported(world)) {
+            if (planScaffold(world, player, unsupported)) {
+                this.status = "planning scaffolding";
+                return true;
+            }
+            fail(unsupported);
+        }
+        return false;
+    }
+
+    private boolean anySupported(ClientWorld world) {
+        for (BlockPos p : this.todo) {
+            if (hasSupport(world, p)) {
                 return true;
             }
         }
