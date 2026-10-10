@@ -185,7 +185,7 @@ public final class RoofPlanner {
 
     private static BlockPos topOfWall(ClientLevel world, BlockPos p) {
         BlockPos.MutableBlockPos m = p.mutable();
-        for (int i = 0; i < 32 && isSolid(world, m.above()); i++) {
+        for (int i = 0; i < 32 && isSolid(world, ((BlockPos) m).above()); i++) {
             m.move(Direction.UP);
         }
         return m.immutable();
