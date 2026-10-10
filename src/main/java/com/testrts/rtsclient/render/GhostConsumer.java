@@ -2,9 +2,13 @@ package com.testrts.rtsclient.render;
 
 import net.minecraft.client.render.VertexConsumer;
 
-/** Passes vertices through, making them see-through and fully lit (ghosts shouldn't go dark underground). */
+/**
+ * Passes vertices through with the preview's opacity, keeping the world's lighting but never darker
+ * than {@link #MIN_LIGHT} so previews inside terrain or caves stay visible.
+ */
 final class GhostConsumer implements VertexConsumer {
-    private static final int FULL_BRIGHT = 240;
+    /** Light level 10 of 15, in lightmap units. */
+    private static final int MIN_LIGHT = 10 * 16;
 
     private final VertexConsumer delegate;
     private final float alpha;
@@ -40,7 +44,7 @@ final class GhostConsumer implements VertexConsumer {
 
     @Override
     public VertexConsumer light(int u, int v) {
-        this.delegate.light(FULL_BRIGHT, FULL_BRIGHT);
+        this.delegate.light(Math.max(u, MIN_LIGHT), Math.max(v, MIN_LIGHT));
         return this;
     }
 

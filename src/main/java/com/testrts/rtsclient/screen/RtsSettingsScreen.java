@@ -2,6 +2,7 @@ package com.testrts.rtsclient.screen;
 
 import com.testrts.rtsclient.config.RtsConfig;
 import com.testrts.rtsclient.exec.Engine;
+import com.testrts.rtsclient.render.WorldOverlay;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.tooltip.Tooltip;
@@ -27,9 +28,13 @@ public final class RtsSettingsScreen extends Screen {
     @Override
     protected void init() {
         RtsConfig c = RtsConfig.get();
-        int w = 220;
-        int x = this.width / 2 - w / 2;
-        int y = 40;
+        this.rowIndex = 0;
+        int rowsFit = Math.max(1, (this.height - 80) / ROW_H);
+        this.columns = TOTAL_ROWS > rowsFit && this.width >= 2 * 210 + 30 ? 2 : 1;
+        this.perColumn = (TOTAL_ROWS + this.columns - 1) / this.columns;
+        int w = this.columns == 2 ? 200 : 220;
+        int x = 0;
+        int y = 0;
         y = row(x, y, w, () -> "Engine: " + Engine.configured().label(),
                 "Auto = Baritone when installed, else built-in. Built-in walks, builds and mines without Baritone.",
                 Engine::cycle);
@@ -54,20 +59,45 @@ public final class RtsSettingsScreen extends Screen {
         y = row(x, y, w, () -> "Camera speed: " + (int) c.cameraSpeed,
                 "Blocks per second when flying the camera (hold Sprint for faster).",
                 () -> c.cameraSpeed = next(SPEEDS, c.cameraSpeed));
+        y = row(x, y, w, () -> "Preview opacity: " + Math.round(c.previewOpacity * 100) + "%",
+                "How solid previews look. 100% = like real blocks.",
+                () -> {
+                    c.previewOpacity = c.previewOpacity >= 0.99F ? 0.35F : c.previewOpacity >= 0.85F ? 1.0F
+                            : c.previewOpacity >= 0.55F ? 0.9F : 0.6F;
+                    WorldOverlay.invalidate();
+                });
         y = row(x, y, w, () -> "Real-block preview up to: " + String.format(Locale.ROOT, "%,d", c.ghostBlockLimit),
                 "Shapes up to this size are previewed as see-through blocks; bigger ones as a tinted surface.",
-                () -> c.ghostBlockLimit = next(GHOST_LIMITS, c.ghostBlockLimit));
+                () -> {
+                    c.ghostBlockLimit = next(GHOST_LIMITS, c.ghostBlockLimit);
+                    WorldOverlay.invalidate();
+                });
         y = row(x, y, w, () -> "Max shape size: " + String.format(Locale.ROOT, "%,d", c.maxShapeBlocks),
                 "The largest order one shape can make.",
                 () -> c.maxShapeBlocks = next(SHAPE_LIMITS, c.maxShapeBlocks));
         y = row(x, y, w, () -> "Let mod set Baritone options: " + onOff(c.manageBaritoneSettings),
                 "Turns on Baritone's allowPlace/allowBreak/allowInventory and layer building for RTS orders.",
                 () -> c.manageBaritoneSettings = !c.manageBaritoneSettings);
+        int doneY = Math.min(this.height - 26, 34 + this.perColumn * ROW_H + 6);
         addDrawableChild(ButtonWidget.builder(Text.literal("Done"), b -> close())
-                .dimensions(this.width / 2 - 50, y + 10, 100, 20).build());
+                .dimensions(this.width / 2 - 50, doneY, 100, 20).build());
     }
 
-    private int row(int x, int y, int w, Supplier<String> label, String tip, Runnable action) {
+    private static final int ROW_H = 22;
+    /** Keep in step with the number of row(...) calls in init(). */
+    private static final int TOTAL_ROWS = 12;
+    private int rowIndex;
+    private int columns = 1;
+    private int perColumn = TOTAL_ROWS;
+
+    /** Adds one setting button; rows flow into a second column on short screens. x/y are ignored. */
+    private int row(int ignoredX, int ignoredY, int w, Supplier<String> label, String tip, Runnable action) {
+        int col = this.rowIndex / this.perColumn;
+        int r = this.rowIndex % this.perColumn;
+        this.rowIndex++;
+        int total = this.columns * w + (this.columns - 1) * 10;
+        int x = this.width / 2 - total / 2 + col * (w + 10);
+        int y = 34 + r * ROW_H;
         addDrawableChild(ButtonWidget.builder(Text.literal(label.get()), b -> {
                     action.run();
                     RtsConfig.save();
@@ -76,7 +106,7 @@ public final class RtsSettingsScreen extends Screen {
                 .dimensions(x, y, w, 20)
                 .tooltip(Tooltip.of(Text.literal(tip)))
                 .build());
-        return y + 24;
+        return 0;
     }
 
     private static String onOff(boolean b) {

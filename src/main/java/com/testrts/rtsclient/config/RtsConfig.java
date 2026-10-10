@@ -30,6 +30,8 @@ public final class RtsConfig {
     public int maxShapeBlocks = 262_144;
     /** Shapes up to this many blocks are previewed as real (see-through) blocks; bigger ones as a tinted surface. */
     public int ghostBlockLimit = 24_000;
+    /** How solid previews look: 1.0 = like real blocks, lower = more see-through. */
+    public float previewOpacity = 0.9F;
     /** Build one Y layer at a time (bottom-up; clearing goes top-down). */
     public boolean buildInLayers = true;
     /** Cheap blocks the built-in engine may use as temporary scaffolding, in order of preference. */

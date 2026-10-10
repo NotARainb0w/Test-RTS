@@ -15,6 +15,8 @@ import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.client.render.LightmapTextureManager;
+import net.minecraft.client.render.OverlayTexture;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
@@ -135,8 +137,10 @@ public final class WorldOverlay {
             PASTE.clear();
         }
 
-        // ---- lines (immediate) ----
         VertexConsumerProvider.Immediate immediate = client.getBufferBuilders().getEntityVertexConsumers();
+        renderCursorBlock(client, session, hover, matrices, cam, immediate, controller.camera().yaw());
+
+        // ---- lines (immediate) ----
         VertexConsumer lines = immediate.getBuffer(RenderLayer.getLines());
         matrices.push();
         matrices.translate(-cam.x, -cam.y, -cam.z);
@@ -214,7 +218,49 @@ public final class WorldOverlay {
         }
 
         matrices.pop();
-        immediate.draw(RenderLayer.getLines());
+        immediate.draw();
+    }
+
+    /**
+     * The exact block the next click places, drawn under the cursor every frame (not baked), so
+     * rotating it, changing a property or turning the camera shows up immediately.
+     */
+    private static void renderCursorBlock(MinecraftClient client, BuildSession session, BlockHitResult hover, MatrixStack matrices,
+                                          Vec3d cam, VertexConsumerProvider.Immediate immediate, float yaw) {
+        if (session.tool != ToolMode.BUILD || hover == null || client.world == null) {
+            return;
+        }
+        if (session.anchorA != null && !session.shape.singleClick() || session.shape == com.testrts.rtsclient.build.BuildShape.VEIN) {
+            return; // the shape preview shows it
+        }
+        BlockState state = session.brushState(yaw);
+        if (state == null) {
+            return;
+        }
+        BlockPos pos = session.mode.targetsExisting() ? hover.getBlockPos() : targetFor(session, hover);
+        int light = WorldRenderer.getLightmapCoordinates(client.world, pos);
+        int block = Math.max(LightmapTextureManager.getBlockLightCoordinates(light), 10);
+        int sky = Math.max(LightmapTextureManager.getSkyLightCoordinates(light), 10);
+        matrices.push();
+        matrices.translate(pos.getX() - cam.x + 0.5, pos.getY() - cam.y + 0.5, pos.getZ() - cam.z + 0.5);
+        // A hair bigger than a block, so it shows over the block it would replace.
+        matrices.scale(1.002F, 1.002F, 1.002F);
+        matrices.translate(-0.5, -0.5, -0.5);
+        try {
+            client.getBlockRenderManager().renderBlockAsEntity(state, matrices, immediate,
+                    LightmapTextureManager.pack(block, sky), OverlayTexture.DEFAULT_UV);
+        } catch (RuntimeException ignored) {
+            // Some modded blocks can't be drawn outside the world; the outline still shows.
+        }
+        matrices.pop();
+    }
+
+    /** Forget all baked previews (after a setting that changes how they look). */
+    public static void invalidate() {
+        SHAPE_GHOST.clear();
+        SHAPE_CLEAR.clear();
+        PASTE.clear();
+        closeTaskMeshes(List.of());
     }
 
     private static void requestShapePreview(BuildSession s, BlockPos a, BlockPos b, float yaw) {

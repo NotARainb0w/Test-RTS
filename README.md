@@ -73,8 +73,10 @@ implementation; no code or assets are taken from it.
 While you draw a shape or paste, a label at the cursor shows its size (e.g. `5 x 5 x 1`), how many blocks it
 places or mines, and the materials it needs against what you carry and what's in storage (red when short).
 
-Previews show the real blocks, see-through, up to a size you can set; bigger shapes show as a tinted surface.
-Queued orders keep showing their ghost blocks until they're built.
+Previews show the real blocks, lit like the world around them and nearly solid (opacity is a setting), up to a
+size you can set; bigger shapes show as a tinted surface. With the Build tool the exact block you're about to
+place is drawn under the cursor every frame, so its rotation and state (R, the state buttons, turning the
+camera) update live. Queued orders keep showing their blocks until they're built.
 
 ### Building
 

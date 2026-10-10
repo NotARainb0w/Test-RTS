@@ -45,6 +45,16 @@ import java.util.function.Supplier;
  * and the last finished mesh stays on screen, so even huge shapes never stall a frame.
  */
 public final class PreviewMesh implements AutoCloseable {
+    /** Opacity from the config, clamped to something visible. */
+    static final class PreviewOpacity {
+        private PreviewOpacity() {
+        }
+
+        static float opacity() {
+            return Math.max(0.2F, Math.min(1.0F, RtsConfig.get().previewOpacity));
+        }
+    }
+
     public enum Style {
         /** Real blocks, see-through. Falls back to a cyan surface when too large. */
         GHOST(0x5533CCFF, 0xCC66DDFF),
@@ -73,8 +83,8 @@ public final class PreviewMesh implements AutoCloseable {
         }
     }
 
-    private static final float GHOST_ALPHA = 0.55F;
-    private static final float GHOST_SCALE = 0.96F;
+    /** Slightly smaller than a block, so the real block hides the preview once it's placed. */
+    private static final float GHOST_SCALE = 0.985F;
     private static final int MAX_EDGE_FACES = 120_000;
 
     // ------------------------------------------------------------------ shared worker
@@ -307,7 +317,8 @@ public final class PreviewMesh implements AutoCloseable {
         RenderSystem.enableBlend();
         RenderSystem.defaultBlendFunc();
         RenderSystem.enableDepthTest();
-        RenderSystem.depthMask(false);
+        // Nearly opaque previews behave like real blocks: they hide what's behind them.
+        RenderSystem.depthMask(this.hasGhost && PreviewOpacity.opacity() >= 0.85F);
 
         if (this.hasGhost) {
             MinecraftClient client = MinecraftClient.getInstance();
@@ -324,6 +335,7 @@ public final class PreviewMesh implements AutoCloseable {
                 client.gameRenderer.getLightmapTextureManager().disable();
             }
         }
+        RenderSystem.depthMask(false);
         RenderSystem.disableCull();
         if (this.hasFill) {
             this.fillBuffer.bind();
@@ -394,7 +406,7 @@ public final class PreviewMesh implements AutoCloseable {
         BlockRenderManager brm = MinecraftClient.getInstance().getBlockRenderManager();
         BufferBuilder bb = builder(0);
         bb.begin(VertexFormat.DrawMode.QUADS, VertexFormats.POSITION_COLOR_TEXTURE_LIGHT_NORMAL);
-        GhostConsumer consumer = new GhostConsumer(bb, GHOST_ALPHA);
+        GhostConsumer consumer = new GhostConsumer(bb, PreviewOpacity.opacity());
         MatrixStack matrices = new MatrixStack();
         Random random = Random.create();
         BlockPos o = parts.origin;
