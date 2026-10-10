@@ -130,6 +130,22 @@ public final class ShapeGenerator {
         return true;
     }
 
+    private static void floor(Collector out, BlockPos a, BlockPos b, boolean hollow) {
+        int x0 = Math.min(a.getX(), b.getX());
+        int x1 = Math.max(a.getX(), b.getX());
+        int z0 = Math.min(a.getZ(), b.getZ());
+        int z1 = Math.max(a.getZ(), b.getZ());
+        int y = a.getY();
+        for (int x = x0; x <= x1; x++) {
+            for (int z = z0; z <= z1; z++) {
+                boolean edge = x == x0 || x == x1 || z == z0 || z == z1;
+                if ((!hollow || edge) && !out.add(x, y, z)) {
+                    return;
+                }
+            }
+        }
+    }
+
     private static void wall(Collector out, BlockPos a, BlockPos b, int height, boolean hollow) {
         int dx = b.getX() - a.getX();
         int dz = b.getZ() - a.getZ();
