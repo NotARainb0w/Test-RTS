@@ -1,6 +1,7 @@
 package com.testrts.rtsclient.exec;
 
 import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
@@ -52,6 +53,47 @@ public final class Walkability {
     /** Feet at {@code feet}: body fits and there is ground (or water) under it. */
     public static boolean standable(ClientLevel world, BlockPos feet) {
         return passable(world, feet) && passable(world, feet.above()) && floor(world, feet.below());
+    }
+
+    /**
+     * Height (0..1) of the top of what a player stands on in {@code pos}: 0.5 for a bottom slab,
+     * 0.0625 for a carpet, 1 for a full block. Still water counts as 0.9 (swimming at the surface).
+     */
+    @SuppressWarnings("deprecation")
+    public static double floorTop(ClientLevel world, BlockPos pos) {
+        if (!world.hasChunkAt(pos)) {
+            return 1.0;
+        }
+        BlockState state = world.getBlockState(pos);
+        VoxelShape shape = state.getCollisionShape(world, pos);
+        if (shape.isEmpty()) {
+            return state.getFluidState().is(FluidTags.WATER) ? 0.9 : 0.0;
+        }
+        return Math.min(1.0, shape.max(Direction.Axis.Y));
+    }
+
+    /** The Y the player's feet are actually at when standing on the node {@code feet}. */
+    public static double standY(ClientLevel world, BlockPos feet) {
+        return feet.getY() - 1 + floorTop(world, feet.below());
+    }
+
+    /**
+     * The node the player is standing on. On a slab, carpet or other low block the player's block
+     * position is the low block itself; the node is the one above it.
+     */
+    public static BlockPos feetNode(ClientLevel world, LocalPlayer player) {
+        BlockPos pos = player.blockPosition();
+        if (standable(world, pos)) {
+            return pos;
+        }
+        if (standable(world, pos.above())) {
+            return pos.above();
+        }
+        // Mid-jump (e.g. re-planning during a recovery jump): the node is the one below.
+        if (standable(world, pos.below())) {
+            return pos.below();
+        }
+        return pos;
     }
 
     private static boolean dangerous(BlockState state) {

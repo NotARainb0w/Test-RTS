@@ -23,4 +23,12 @@ public interface RtsTask {
     /** Stop any work in progress (the queue also stops Baritone). */
     default void cancel(Minecraft client) {
     }
+
+    /**
+     * Another order is taking over (reordered or this one paused). The task stays queued and is
+     * ticked again later; it should stop what it's doing and be able to start over.
+     */
+    default void suspend(Minecraft client) {
+        cancel(client);
+    }
 }

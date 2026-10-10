@@ -63,6 +63,18 @@ public final class NativeBuilder {
     private static final int MAX_SWEEPS = 2;
     /** Placements in a row that didn't show up before we try a different block. */
     private static final int MAX_PLACE_ATTEMPTS = 4;
+    /**
+     * Times one block may be mined before it counts as a failure: a block the server keeps putting
+     * back (spawn protection, a claim) would otherwise be mined forever. Gravel falling into a
+     * cleared spot legitimately needs a few.
+     */
+    private static final int MAX_BREAK_ATTEMPTS = 8;
+    /** Ticks the pillar may go without gaining height before we give up on it. */
+    private static final int PILLAR_STALL_TICKS = 80;
+    /** Times we try to step out of the way of a block our own body is blocking. */
+    private static final int MAX_STEP_ASIDE = 2;
+    /** Minimum time between "can't get there" messages, so a big unreachable area doesn't spam. */
+    private static final long WARN_INTERVAL_MS = 5000L;
     private static final Direction[] SUPPORT_ORDER = {
             Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP};
     private static final float[] YAWS = {0F, 90F, 180F, 270F};
@@ -95,6 +107,8 @@ public final class NativeBuilder {
     private BlockPos pillarStep;
     private int pillarPlaced;
     private int pillarTicks;
+    private int pillarBestY;
+    private int pillarStall;
     /** The current route search is for a spot to pillar up from (the target itself was unreachable). */
     private boolean seekingPillarSite;
     private final List<Integer> layerOrder = new ArrayList<>();
@@ -107,6 +121,12 @@ public final class NativeBuilder {
     private final Set<BlockPos> impossible = new HashSet<>();
     private final Map<BlockPos, Integer> failures = new java.util.HashMap<>();
     private final Map<BlockPos, Integer> placeAttempts = new java.util.HashMap<>();
+    private final Map<BlockPos, Integer> breakAttempts = new java.util.HashMap<>();
+    /** Walks toward a target that ended stuck, per target. */
+    private final Map<BlockPos, Integer> walkStucks = new java.util.HashMap<>();
+    /** Times we stepped aside for a target our body was in the way of. */
+    private final Map<BlockPos, Integer> stepAsides = new java.util.HashMap<>();
+    private long lastWarn;
     private int sweeps;
     private int rescanIn;
 
@@ -126,7 +146,6 @@ public final class NativeBuilder {
     private PathFollower walk;
     @Nullable
     private BlockPos walkTarget;
-    private int walkFails;
     private String status = "starting";
 
     /** Scaffolding we placed that is still in the world (handed on if this builder is replaced). */
@@ -269,7 +288,7 @@ public final class NativeBuilder {
             this.walkTarget = target;
             this.walk = null;
             this.seekingPillarSite = false;
-            this.search = PathFinder.start(world, player.blockPosition(), feet -> canWorkFrom(client, feet, target),
+            this.search = PathFinder.start(world, Walkability.feetNode(world, player), feet -> canWorkFrom(client, feet, target),
                     Vec3.atCenterOf(target));
         }
         if (this.search != null) {
@@ -283,19 +302,19 @@ public final class NativeBuilder {
                     if (this.seekingPillarSite) {
                         this.seekingPillarSite = false;
                         startPillar(client, target);
-                    } else {
+                    } else if (!stepAside(client, target)) {
                         // In position but still couldn't do it: try other blocks first.
                         unreachable(target);
                     }
                     return;
                 }
-                this.walk = new PathFollower(path);
+                this.walk = new PathFollower(path, this::mayBreakInWay, false);
             } else if (s == PathFinder.Search.State.FAILED) {
                 this.search = null;
                 if (!this.seekingPillarSite && hasScaffoldItem(client)) {
                     // Can't walk into reach: find ground below/near it and pillar up.
                     this.seekingPillarSite = true;
-                    this.search = PathFinder.start(world, player.blockPosition(), feet -> pillarSite(world, feet, target),
+                    this.search = PathFinder.start(world, Walkability.feetNode(world, player), feet -> pillarSite(world, feet, target),
                             Vec3.atCenterOf(target));
                 } else {
                     unreachable(target);
@@ -303,7 +322,8 @@ public final class NativeBuilder {
             }
             return;
         }
-        PathFollower.State s = this.walk.tick(client);
+        PathFollower failed = this.walk;
+        PathFollower.State s = failed.tick(client);
         this.status = (this.seekingPillarSite ? "going to climb" : "walking") + info;
         if (s == PathFollower.State.WALKING) {
             return;
@@ -314,10 +334,79 @@ public final class NativeBuilder {
             startPillar(client, target);
             return;
         }
-        if (s == PathFollower.State.STUCK && ++this.walkFails >= MAX_WALK_FAILS) {
-            this.walkFails = 0;
-            unreachable(target);
+        if (s == PathFollower.State.STUCK) {
+            MovementInput.acquire(player).release();
+            if (!failed.offPath()) {
+                // Next search (next tick, from where we are now) goes around this step.
+                PathFinder.reportStuck(failed.failedFrom(), failed.failedTo());
+            }
+            if (this.walkStucks.merge(target, 1, Integer::sum) >= MAX_WALK_FAILS) {
+                this.walkStucks.remove(target);
+                warn("Can't get to " + target.toShortString() + " (stuck), doing other blocks first");
+                unreachable(target);
+            }
         }
+    }
+
+    /** Report a problem, at most every few seconds. */
+    private void warn(String message) {
+        long now = System.currentTimeMillis();
+        if (now - this.lastWarn >= WARN_INTERVAL_MS) {
+            this.lastWarn = now;
+            com.testrts.rtsclient.util.Messages.warn(message);
+        }
+    }
+
+    /**
+     * What the follower may mine to get unstuck: anything soft (it checks that) that isn't part of
+     * the build, or that the order wants gone anyway. Never our own scaffolding.
+     */
+    private boolean mayBreakInWay(BlockPos pos) {
+        BlockState wanted = this.originalOrder.get(pos);
+        if (wanted != null) {
+            return wanted.isAir();
+        }
+        return !this.scaffolds.contains(pos);
+    }
+
+    /**
+     * Our own body overlaps {@code avoid}, so it can't be placed. Walk to the middle of the cell we're
+     * on (or a free neighbour) from where it's still in reach.
+     *
+     * @return false if there's nowhere to go or we already tried a few times
+     */
+    private boolean stepAside(Minecraft client, BlockPos avoid) {
+        LocalPlayer player = client.player;
+        ClientLevel world = client.level;
+        if (!player.getBoundingBox().intersects(new AABB(avoid))
+                || this.stepAsides.merge(avoid, 1, Integer::sum) > MAX_STEP_ASIDE) {
+            return false;
+        }
+        BlockPos here = Walkability.feetNode(world, player);
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                BlockPos c = here.offset(dx, 0, dz);
+                // A player in the middle of c (0.6 wide, 1.8 tall) only covers c and the block above.
+                if (c.equals(avoid) || c.above().equals(avoid) || !Walkability.standable(world, c)
+                        || !canWorkFrom(client, c, avoid)) {
+                    continue;
+                }
+                double d = player.position().distanceToSqr(Vec3.atBottomCenterOf(c));
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = c;
+                }
+            }
+        }
+        if (best == null) {
+            return false;
+        }
+        this.walkTarget = avoid;
+        this.walk = new PathFollower(List.of(best), null, true);
+        this.status = "stepping aside";
+        return true;
     }
 
     private void unreachable(BlockPos target) {
@@ -420,6 +509,12 @@ public final class NativeBuilder {
             this.scaffoldPlan.pollFirst();
             return;
         }
+        if (this.walk != null && this.search == null && c.equals(this.walkTarget)
+                && player.getBoundingBox().intersects(new AABB(c))) {
+            // Still stepping out of the scaffold block's way.
+            walkStep(client, c, " (scaffolding)");
+            return;
+        }
         if (!Reach.inReach(client, c)) {
             walkStep(client, c, " (scaffolding)");
             return;
@@ -427,8 +522,15 @@ public final class NativeBuilder {
         this.walk = null;
         this.search = null;
         MovementInput.acquire(player).release();
-        if (player.getBoundingBox().intersects(new AABB(c)) || support(world, c) == null) {
+        if (support(world, c) == null) {
             abandonScaffold();
+            return;
+        }
+        if (player.getBoundingBox().intersects(new AABB(c))) {
+            // Standing where the scaffold goes: move off it, then try again.
+            if (!stepAside(client, c)) {
+                abandonScaffold();
+            }
             return;
         }
         Item item = scaffoldItem(client);
@@ -516,6 +618,9 @@ public final class NativeBuilder {
         this.clearing = true;
         this.skipped.clear();
         this.failures.clear();
+        this.walkStucks.clear();
+        this.stepAsides.clear();
+        this.breakAttempts.clear();
         this.sweeps = MAX_SWEEPS;
         this.walk = null;
         this.search = null;
@@ -553,6 +658,8 @@ public final class NativeBuilder {
         this.pillarStep = client.player.blockPosition();
         this.pillarPlaced = 0;
         this.pillarTicks = 0;
+        this.pillarBestY = this.pillarStep.getY();
+        this.pillarStall = 0;
         this.status = "climbing";
     }
 
@@ -566,21 +673,32 @@ public final class NativeBuilder {
             this.pillarTarget = null;
             return;
         }
-        if (++this.pillarTicks > 20 * 40 || this.pillarPlaced > 30 || !Walkability.passable(world, player.blockPosition().above(2))) {
-            // Ceiling in the way or it's taking far too long.
+        // Blocks that don't stick (rejected by the server, nothing to place against) mean jumping on
+        // the spot forever; give up when we haven't gained height for a while.
+        int y = player.blockPosition().getY();
+        if (y > this.pillarBestY) {
+            this.pillarBestY = y;
+            this.pillarStall = 0;
+        }
+        boolean stalled = ++this.pillarStall > PILLAR_STALL_TICKS;
+        if (++this.pillarTicks > 20 * 40 || this.pillarPlaced > 30 || stalled
+                || !Walkability.passable(world, player.blockPosition().above(2))) {
+            // Ceiling in the way, the blocks don't stay, or it's taking far too long.
             input.release();
             this.pillarTarget = null;
+            if (stalled) {
+                warn("Can't climb up to " + target.toShortString() + ", doing other blocks first");
+            }
             unreachable(target);
             return;
         }
         Item item = scaffoldItem(client);
-        if (item == null) {
+        if (item == null || !Inventories.hold(client, item)) {
             input.release();
             this.pillarTarget = null;
             pauseForScaffolding();
             return;
         }
-        Inventories.hold(client, item);
         input.forward = false;
         if (player.onGround()) {
             this.pillarStep = player.blockPosition();
@@ -629,6 +747,9 @@ public final class NativeBuilder {
                     this.sweeps++;
                     this.skipped.clear();
                     this.failures.clear();
+                    this.walkStucks.clear();
+                    this.stepAsides.clear();
+                    this.breakAttempts.clear();
                     this.layerIndex = 0;
                 }
             }
@@ -687,7 +808,8 @@ public final class NativeBuilder {
             return false;
         }
         double reach = Reach.reach(client) - 0.4;
-        Vec3 eye = new Vec3(feet.getX() + 0.5, feet.getY() + 1.62, feet.getZ() + 0.5);
+        // Eye height over the real floor (lower on slabs and carpets).
+        Vec3 eye = new Vec3(feet.getX() + 0.5, Walkability.standY(client.level, feet) + 1.62, feet.getZ() + 0.5);
         return eye.distanceToSqr(Vec3.atCenterOf(target)) <= reach * reach;
     }
 
@@ -723,6 +845,9 @@ public final class NativeBuilder {
                     impossible(p);
                     continue;
                 }
+                if (tooManyBreaks(p)) {
+                    continue;
+                }
                 startBreaking(client, p);
                 return true;
             }
@@ -748,6 +873,9 @@ public final class NativeBuilder {
                 // Something else is in the way: mine it first.
                 if (current.getDestroySpeed(world, p) < 0) {
                     impossible(p);
+                    continue;
+                }
+                if (tooManyBreaks(p)) {
                     continue;
                 }
                 startBreaking(client, p);
@@ -816,7 +944,7 @@ public final class NativeBuilder {
         if (player.getBoundingBox().intersects(new AABB(pos))) {
             return false;
         }
-        return hasSupport(world, pos);
+        return hasSupport(world, pos) || com.testrts.rtsclient.config.RtsConfig.get().airPlace;
     }
 
     /** The side of the target to click: a neighbour that is solid and won't open a GUI. */
@@ -852,17 +980,43 @@ public final class NativeBuilder {
         LocalPlayer player = client.player;
         ClientLevel world = client.level;
         Direction toSupport = support(world, pos);
-        if (toSupport == null) {
+        BlockHitResult hit;
+        Vec3 hitVec;
+        float[] rotation;
+        if (toSupport != null) {
+            BlockPos supportPos = pos.relative(toSupport);
+            Direction face = toSupport.getOpposite();
+            hitVec = Vec3.atCenterOf(pos).add(toSupport.getStepX() * 0.5, toSupport.getStepY() * 0.5, toSupport.getStepZ() * 0.5);
+            hit = new BlockHitResult(hitVec, face, supportPos, false);
+            // Vanilla decides the placed state from where the player looks. Try the four directions
+            // (and up/down) until the block would come out the way the order wants it.
+            rotation = rotationFor(player, wanted, hit);
+        } else if (com.testrts.rtsclient.config.RtsConfig.get().airPlace) {
+            // Nothing to attach to: click the empty cell itself. The server places a block in a
+            // replaceable cell that is clicked directly, so no neighbour (or scaffolding) is needed.
+            // Try each face of the cell, since the clicked face decides slab/stair halves.
+            hit = null;
+            hitVec = null;
+            rotation = null;
+            Vec3 eye = player.getEyePosition();
+            Direction toward = Direction.getNearest(eye.x - (pos.getX() + 0.5), eye.y - (pos.getY() + 0.5), eye.z - (pos.getZ() + 0.5));
+            Direction[] faces = {toward, Direction.UP, Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+            for (Direction f : faces) {
+                Vec3 v = Vec3.atCenterOf(pos).add(f.getStepX() * 0.5, f.getStepY() * 0.5, f.getStepZ() * 0.5);
+                BlockHitResult h = new BlockHitResult(v, f, pos, false);
+                float[] r = rotationFor(player, wanted, h);
+                if (hit == null || r != null) {
+                    hit = h;
+                    hitVec = v;
+                    rotation = r;
+                }
+                if (r != null) {
+                    break;
+                }
+            }
+        } else {
             return false;
         }
-        BlockPos supportPos = pos.relative(toSupport);
-        Direction face = toSupport.getOpposite();
-        Vec3 hitVec = Vec3.atCenterOf(pos).add(toSupport.getStepX() * 0.5, toSupport.getStepY() * 0.5, toSupport.getStepZ() * 0.5);
-        BlockHitResult hit = new BlockHitResult(hitVec, face, supportPos, false);
-
-        // Vanilla decides the placed state from where the player looks. Try the four directions
-        // (and up/down) until the block would come out the way the order wants it.
-        float[] rotation = rotationFor(player, wanted, hit);
         if (rotation == null) {
             if (this.strict && !wanted.getBlock().defaultBlockState().equals(wanted)) {
                 impossible(pos);
@@ -903,6 +1057,16 @@ public final class NativeBuilder {
     }
 
     // ------------------------------------------------------------------ mining
+
+    /** Count a mining attempt; a block that keeps coming back is set aside for later. */
+    private boolean tooManyBreaks(BlockPos p) {
+        if (this.breakAttempts.merge(p, 1, Integer::sum) > MAX_BREAK_ATTEMPTS) {
+            this.breakAttempts.remove(p);
+            fail(p);
+            return true;
+        }
+        return false;
+    }
 
     private void startBreaking(Minecraft client, BlockPos pos) {
         LocalPlayer player = client.player;

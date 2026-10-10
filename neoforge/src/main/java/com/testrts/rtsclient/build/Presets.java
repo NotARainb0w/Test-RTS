@@ -49,7 +49,23 @@ public final class Presets {
                 new Preset("Bridge", "3 wide, 10 long plank bridge with railings",
                         Items.OAK_PLANKS, Presets::bridge),
                 new Preset("Lamp post", "Cobblestone base, fence post and a lantern",
-                        Items.LANTERN, Presets::lampPost));
+                        Items.LANTERN, Presets::lampPost),
+                new Preset("Wheat farm", "9x9 dirt plot in a log frame with a water hole in the middle (hoe it and add water)",
+                        Items.WHEAT, Presets::wheatFarm),
+                new Preset("Sugar cane farm", "Rows of sand with trenches for water between them (fill the trenches with water)",
+                        Items.SUGAR_CANE, Presets::caneFarm),
+                new Preset("Iron farm frame", "Raised platform with a glass pen and a collection hole (add villagers, beds, a zombie, lava and a hopper)",
+                        Items.IRON_INGOT, Presets::ironFarm),
+                new Preset("Mob grinder shell", "Dark 9x9 spawning room with a drop hole in the middle (add water streams toward it)",
+                        Items.ROTTEN_FLESH, Presets::mobGrinder),
+                new Preset("Trading hall", "Five villager cells with workstations in front and a slab lid to keep them in",
+                        Items.EMERALD, Presets::tradingHall),
+                new Preset("Castle wall", "11 long, 3 thick stone-brick wall with a walkway and battlements",
+                        Items.STONE_BRICK_WALL, Presets::castleWall),
+                new Preset("Dock", "Plank pier on log posts with railings and lanterns",
+                        Items.OAK_BOAT, Presets::dock),
+                new Preset("Beacon pyramid", "Full 4-level iron pyramid with a beacon on top (164 iron blocks)",
+                        Items.BEACON, Presets::beaconPyramid));
     }
 
     // ------------------------------------------------------------------ designs
@@ -252,6 +268,130 @@ public final class Presets {
         b.set(0, 2, 0, state(Blocks.OAK_FENCE));
         b.set(0, 3, 0, state(Blocks.OAK_FENCE));
         b.set(0, 4, 0, state(Blocks.LANTERN));
+        return b.blueprint();
+    }
+
+    private static Blueprint wheatFarm() {
+        Shape b = new Shape("Wheat farm");
+        b.walls(0, 0, 0, 8, 0, 8, state(Blocks.OAK_LOG));
+        b.box(1, 0, 1, 7, 0, 7, state(Blocks.DIRT));
+        b.remove(4, 0, 4);
+        for (int[] c : new int[][]{{0, 0}, {8, 0}, {0, 8}, {8, 8}}) {
+            b.set(c[0], 1, c[1], state(Blocks.TORCH));
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint caneFarm() {
+        Shape b = new Shape("Sugar cane farm");
+        b.box(0, 0, 0, 8, 0, 8, state(Blocks.DIRT));
+        for (int x = 0; x <= 8; x++) {
+            for (int z = 0; z <= 8; z++) {
+                if (x % 3 != 1) {
+                    b.set(x, 1, z, state(Blocks.SAND));
+                }
+            }
+        }
+        // Cap both ends of each trench so the water stays in.
+        for (int x = 0; x <= 8; x++) {
+            if (x % 3 == 1) {
+                b.set(x, 1, 0, state(Blocks.SAND));
+                b.set(x, 1, 8, state(Blocks.SAND));
+            }
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint ironFarm() {
+        Shape b = new Shape("Iron farm frame");
+        BlockState bricks = state(Blocks.STONE_BRICKS);
+        b.box(0, 0, 0, 6, 0, 6, bricks);
+        b.remove(3, 0, 3);
+        b.walls(0, 1, 0, 6, 3, 6, state(Blocks.GLASS));
+        for (int y = 1; y <= 3; y++) {
+            b.set(0, y, 0, bricks);
+            b.set(6, y, 0, bricks);
+            b.set(0, y, 6, bricks);
+            b.set(6, y, 6, bricks);
+        }
+        b.walls(2, 1, 2, 4, 1, 4, state(Blocks.GLASS));
+        b.remove(3, 1, 2);
+        return b.blueprint();
+    }
+
+    private static Blueprint mobGrinder() {
+        Shape b = new Shape("Mob grinder shell");
+        BlockState cobble = state(Blocks.COBBLESTONE);
+        b.box(0, 0, 0, 8, 0, 8, cobble);
+        b.walls(0, 1, 0, 8, 3, 8, cobble);
+        b.box(0, 4, 0, 8, 4, 8, cobble);
+        b.remove(4, 0, 4);
+        return b.blueprint();
+    }
+
+    private static Blueprint tradingHall() {
+        Shape b = new Shape("Trading hall");
+        BlockState bricks = state(Blocks.STONE_BRICKS);
+        b.box(0, 0, 0, 10, 0, 2, bricks);
+        b.box(0, 1, 2, 10, 3, 2, bricks);
+        b.box(0, 3, 0, 10, 3, 2, bricks);
+        for (int x = 0; x <= 10; x += 2) {
+            b.set(x, 1, 0, bricks);
+            b.set(x, 2, 0, bricks);
+            b.set(x, 1, 1, bricks);
+            b.set(x, 2, 1, bricks);
+        }
+        Block[] stations = {Blocks.LECTERN, Blocks.COMPOSTER, Blocks.SMITHING_TABLE, Blocks.BLAST_FURNACE, Blocks.BREWING_STAND};
+        for (int i = 0; i < 5; i++) {
+            int x = 1 + 2 * i;
+            b.set(x, 1, 0, facing(stations[i], Direction.NORTH));
+            b.set(x, 2, 0, slab(Blocks.STONE_BRICK_SLAB, false));
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint castleWall() {
+        Shape b = new Shape("Castle wall");
+        b.box(0, 0, 0, 10, 5, 2, state(Blocks.STONE_BRICKS));
+        for (int x = 0; x <= 10; x++) {
+            b.set(x, 0, 0, state(Blocks.COBBLESTONE));
+            b.set(x, 0, 2, state(Blocks.COBBLESTONE));
+            if (x % 2 == 0) {
+                b.set(x, 6, 0, state(Blocks.STONE_BRICKS));
+                b.set(x, 6, 2, state(Blocks.STONE_BRICKS));
+            }
+        }
+        b.set(0, 6, 1, state(Blocks.TORCH));
+        b.set(10, 6, 1, state(Blocks.TORCH));
+        return b.blueprint();
+    }
+
+    private static Blueprint dock() {
+        Shape b = new Shape("Dock");
+        for (int[] p : new int[][]{{0, 0}, {2, 0}, {0, 5}, {2, 5}, {0, 11}, {2, 11}}) {
+            for (int y = 0; y <= 2; y++) {
+                b.set(p[0], y, p[1], state(Blocks.OAK_LOG));
+            }
+        }
+        b.box(0, 3, 0, 2, 3, 11, state(Blocks.OAK_PLANKS));
+        for (int z = 0; z <= 11; z++) {
+            if (z % 4 != 1) {
+                b.set(0, 4, z, state(Blocks.OAK_FENCE));
+                b.set(2, 4, z, state(Blocks.OAK_FENCE));
+            }
+        }
+        b.set(0, 5, 11, state(Blocks.LANTERN));
+        b.set(2, 5, 11, state(Blocks.LANTERN));
+        return b.blueprint();
+    }
+
+    private static Blueprint beaconPyramid() {
+        Shape b = new Shape("Beacon pyramid");
+        BlockState iron = state(Blocks.IRON_BLOCK);
+        for (int level = 0; level < 4; level++) {
+            b.box(level, level, level, 8 - level, level, 8 - level, iron);
+        }
+        b.set(4, 4, 4, state(Blocks.BEACON));
         return b.blueprint();
     }
 

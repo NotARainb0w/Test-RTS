@@ -131,9 +131,18 @@ public final class WorldOverlay {
             BlockPos origin = session.pasteAnchor != null ? session.pasteAnchor
                     : session.clipboard.originFor(targetFor(session, hover), session.pasteTurns);
             var bp = session.clipboard;
-            int turns = session.pasteTurns;
-            boolean mirror = session.pasteMirror;
-            PASTE.request(List.of(bp, origin, turns, mirror), () -> new PreviewMesh.Blocks(bp.placed(origin, turns, mirror), false), true);
+            List<Object> key = List.of(bp, origin, session.pasteTurns, session.pasteMirror, session.arrayX, session.arrayZ, session.arrayGap);
+            if (!PASTE.isRequested(key)) {
+                // Copy the settings now; the mesh is built on the worker thread.
+                com.testrts.rtsclient.build.BuildSession snap = new com.testrts.rtsclient.build.BuildSession();
+                snap.pasteTurns = session.pasteTurns;
+                snap.pasteMirror = session.pasteMirror;
+                snap.arrayX = session.arrayX;
+                snap.arrayZ = session.arrayZ;
+                snap.arrayGap = session.arrayGap;
+                PASTE.request(key, () -> new PreviewMesh.Blocks(
+                        com.testrts.rtsclient.screen.WorldActions.pasteBlocks(snap, bp, origin), false), true);
+            }
             PASTE.draw(matrices, projection, cam);
         } else {
             PASTE.clear();
@@ -157,11 +166,15 @@ public final class WorldOverlay {
                     return new PreviewMesh.Blocks(plan.fill(), plan.truncated());
                 }, true);
                 TERRAIN_CLEAR.draw(matrices, projection, cam);
-            } else {
+            } else if (session.terrainMode == com.testrts.rtsclient.build.TerrainMode.LIGHT_UP) {
                 TERRAIN_CLEAR.clear();
                 TERRAIN_FILL.request(List.of("light", a, b), () -> PreviewMesh.Blocks.of(
                         com.testrts.rtsclient.build.TerrainPlanner.lightUp(world, a, b),
                         net.minecraft.world.level.block.Blocks.TORCH.defaultBlockState(), false), true);
+            } else {
+                // Quarry, tree felling and harvesting only show the area box.
+                TERRAIN_CLEAR.clear();
+                TERRAIN_FILL.clear();
             }
             TERRAIN_FILL.draw(matrices, projection, cam);
         } else {
@@ -238,6 +251,12 @@ public final class WorldOverlay {
             LevelRenderer.renderLineBox(matrices, lines, sel, c[0], c[1], c[2], 1.0F);
             LevelRenderer.renderLineBox(matrices, lines, new AABB(a).inflate(0.06), 1.0F, 1.0F, 0.2F, 1.0F);
         }
+        if (session.moving()) {
+            // The building being moved: it comes down once the copy is placed.
+            AABB from = new AABB(session.moveFrom).minmax(new AABB(session.moveTo)).inflate(0.04);
+            float movePulse = (float) (0.5 - 0.5 * Math.cos((System.currentTimeMillis() % 1000) / 1000.0 * Math.PI * 2.0));
+            LevelRenderer.renderLineBox(matrices, lines, from, 1.0F, 0.35F, 0.3F, 0.5F + 0.5F * movePulse);
+        }
         if (session.tool == ToolMode.BLUEPRINT && session.clipboard != null && PASTE.bounds() != null) {
             LevelRenderer.renderLineBox(matrices, lines, PASTE.bounds().inflate(0.03), 1.0F, 0.84F, 0.3F,
                     session.pasteAnchor != null ? 1.0F : 0.5F);
@@ -261,6 +280,31 @@ public final class WorldOverlay {
 
         if (session.airPlace && hover != null) {
             drawAirLayer(client, matrices, lines, targetFor(session, hover), session.airY);
+        }
+
+        // With the Link tool, label each linked container with what it mostly holds (drawn last:
+        // text uses other buffers than the lines above).
+        if (session.tool == ToolMode.LINK) {
+            for (StorageManager.LinkedContainer c : StorageManager.get().linked()) {
+                BlockPos p = c.pos();
+                if (p.distToLowCornerSqr(cam.x, cam.y, cam.z) > 32 * 32) {
+                    continue;
+                }
+                net.minecraft.world.item.Item item = StorageManager.get().labelFor(p);
+                if (item == null) {
+                    continue;
+                }
+                String text = item.getDescription().getString();
+                matrices.pushPose();
+                matrices.translate(p.getX() + 0.5, p.getY() + 1.3, p.getZ() + 0.5);
+                matrices.mulPose(context.camera().rotation());
+                // 1.21's camera rotation already includes the 180 degree turn, so x isn't flipped (like vanilla name tags).
+                matrices.scale(0.025F, -0.025F, 0.025F);
+                float x = -client.font.width(text) / 2.0F;
+                client.font.drawInBatch(text, x, 0, 0xFFFFE08A, false, matrices.last().pose(), immediate,
+                        net.minecraft.client.gui.Font.DisplayMode.SEE_THROUGH, 0x80101820, LightTexture.FULL_BRIGHT);
+                matrices.popPose();
+            }
         }
 
         matrices.popPose();

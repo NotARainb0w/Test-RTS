@@ -17,13 +17,74 @@ import java.util.function.Predicate;
 /**
  * A* over standing positions (feet blocks). Moves: walk, diagonal walk, step up one block,
  * and drop down up to three. No bridging or pillaring; that's what Baritone is for.
+ * Steps are checked against the real floor heights (slabs, carpets, soul sand...), so a path
+ * never asks for a jump higher than the player can make.
  */
 public final class PathFinder {
     private static final int MAX_NODES = 40_000;
     private static final int MAX_DROP = 3;
+    /** Rise the player walks up without jumping (vanilla step height). */
+    private static final double STEP_HEIGHT = 0.6;
+    /** Highest rise a jump clears (a jump reaches about 1.25). */
+    private static final double MAX_RISE = 1.2;
+    /** How long a step the player got stuck on stays more expensive. */
+    private static final long STRIKE_MS = 60_000L;
+    /** Strikes after which a step is left out of searches altogether (until it expires). */
+    private static final int STRIKE_BLOCK = 3;
+    private static final double STRIKE_EDGE_COST = 30.0;
+    private static final double STRIKE_NODE_COST = 4.0;
     private static final Direction[] HORIZONTAL = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
 
+    /** A step from one node to another; {@code from == Long.MIN_VALUE} stands for "any step into {@code to}". */
+    private record Edge(long from, long to) {
+    }
+
+    private static final class Strike {
+        int count;
+        long until;
+    }
+
+    /** Steps the player got stuck on recently. Client thread only. */
+    private static final Map<Edge, Strike> STRIKES = new HashMap<>();
+
     private PathFinder() {
+    }
+
+    /**
+     * Remember that the player couldn't get from {@code from} to {@code to}, so the next searches
+     * go around it for a while (a mob in the way, a block the rules got wrong...).
+     */
+    public static void reportStuck(@Nullable BlockPos from, @Nullable BlockPos to) {
+        if (from == null || to == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        STRIKES.values().removeIf(s -> s.until < now);
+        strike(new Edge(from.asLong(), to.asLong()), now);
+        strike(new Edge(Long.MIN_VALUE, to.asLong()), now);
+    }
+
+    private static void strike(Edge edge, long now) {
+        Strike s = STRIKES.computeIfAbsent(edge, e -> new Strike());
+        s.count++;
+        s.until = now + STRIKE_MS;
+    }
+
+    /** Extra cost of a step the player got stuck on; infinite when it should be avoided entirely. */
+    private static double strikeCost(BlockPos from, BlockPos to, long now) {
+        double cost = 0.0;
+        Strike edge = STRIKES.get(new Edge(from.asLong(), to.asLong()));
+        if (edge != null && edge.until >= now) {
+            if (edge.count >= STRIKE_BLOCK) {
+                return Double.POSITIVE_INFINITY;
+            }
+            cost += STRIKE_EDGE_COST * edge.count;
+        }
+        Strike node = STRIKES.get(new Edge(Long.MIN_VALUE, to.asLong()));
+        if (node != null && node.until >= now) {
+            cost += STRIKE_NODE_COST * node.count;
+        }
+        return cost;
     }
 
     private static final class Node implements Comparable<Node> {
@@ -60,6 +121,8 @@ public final class PathFinder {
         private final Vec3 toward;
         private final PriorityQueue<Node> open = new PriorityQueue<>();
         private final Map<Long, Double> best = new HashMap<>();
+        private final long now = System.currentTimeMillis();
+        private final boolean strikes = !STRIKES.isEmpty();
         private int expanded;
         private State state = State.RUNNING;
         private List<BlockPos> result;
@@ -105,7 +168,11 @@ public final class PathFinder {
                     break;
                 }
                 for (Move m : moves(this.world, cur.pos)) {
-                    double g = cur.g + m.cost;
+                    double extra = this.strikes ? strikeCost(cur.pos, m.to, this.now) : 0.0;
+                    if (extra == Double.POSITIVE_INFINITY) {
+                        continue;
+                    }
+                    double g = cur.g + m.cost + extra;
                     long key = m.to.asLong();
                     if (g < this.best.getOrDefault(key, Double.MAX_VALUE)) {
                         this.best.put(key, g);
@@ -127,15 +194,24 @@ public final class PathFinder {
     private static List<Move> moves(ClientLevel world, BlockPos from) {
         List<Move> out = new ArrayList<>(12);
         boolean headroom = Walkability.passable(world, from.above(2));
+        double fromY = Walkability.standY(world, from);
         for (Direction d : HORIZONTAL) {
             BlockPos n = from.relative(d);
             if (Walkability.standable(world, n)) {
-                out.add(new Move(n, 1.0));
+                // Same node level, but e.g. carpet -> full block still needs a jump (and room for it).
+                double rise = Walkability.standY(world, n) - fromY;
+                if (rise <= STEP_HEIGHT) {
+                    out.add(new Move(n, 1.0));
+                } else if (rise <= MAX_RISE && headroom && Walkability.passable(world, n.above(2))) {
+                    out.add(new Move(n, 1.5));
+                }
                 continue;
             }
-            // Step up onto a block: needs room to jump from here.
+            // Step up onto a block: needs room to jump from here, and the jump must be high enough
+            // (a full block from a slab is 1.5 up, which nobody can jump).
             BlockPos up = n.above();
-            if (headroom && Walkability.passable(world, n.above(2)) && Walkability.standable(world, up)) {
+            if (headroom && Walkability.passable(world, n.above(2)) && Walkability.standable(world, up)
+                    && Walkability.standY(world, up) - fromY <= MAX_RISE) {
                 out.add(new Move(up, 2.0));
                 continue;
             }
@@ -160,8 +236,10 @@ public final class PathFinder {
                 Direction a = HORIZONTAL[i];
                 Direction b = HORIZONTAL[j];
                 BlockPos diag = from.relative(a).relative(b);
+                // No jumping on diagonals: the corner would catch the player.
                 if (Walkability.standable(world, diag)
-                        && clear(world, from.relative(a)) && clear(world, from.relative(b))) {
+                        && clear(world, from.relative(a)) && clear(world, from.relative(b))
+                        && Walkability.standY(world, diag) - fromY <= STEP_HEIGHT) {
                     out.add(new Move(diag, 1.414));
                 }
             }

@@ -11,26 +11,36 @@ import net.minecraft.client.player.LocalPlayer;
  */
 public final class MovementInput extends Input {
     public boolean forward;
+    /** Back and sideways are only used to get unstuck. */
+    public boolean back;
+    // These hide Input.left/right (Mojang names); vanilla's fields are set via super below.
+    public boolean left;
+    public boolean right;
     public boolean jump;
     public boolean sneak;
 
     @Override
     public void tick(boolean slowDown, float slowDownFactor) {
         this.up = this.forward;
-        this.down = false;
-        this.left = false;
-        this.right = false;
-        this.forwardImpulse = this.forward ? 1.0F : 0.0F;
-        this.leftImpulse = 0.0F;
+        this.down = this.back;
+        super.left = this.left;
+        super.right = this.right;
+        this.forwardImpulse = (this.forward ? 1.0F : 0.0F) - (this.back ? 1.0F : 0.0F);
+        // Same sign as vanilla's keyboard input: left is positive.
+        this.leftImpulse = (this.left ? 1.0F : 0.0F) - (this.right ? 1.0F : 0.0F);
         this.jumping = this.jump;
         this.shiftKeyDown = this.sneak;
         if (slowDown) {
             this.forwardImpulse *= slowDownFactor;
+            this.leftImpulse *= slowDownFactor;
         }
     }
 
     public void release() {
         this.forward = false;
+        this.back = false;
+        this.left = false;
+        this.right = false;
         this.jump = false;
         this.sneak = false;
     }

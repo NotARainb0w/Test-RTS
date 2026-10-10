@@ -110,6 +110,12 @@ public final class Blueprint {
         return new Blueprint(name, x1 - x0 + 1, y1 - y0 + 1, z1 - z0 + 1, out);
     }
 
+    /** Width (x) and length (z) on the ground after {@code quarterTurns} turns. */
+    public int[] footprint(int quarterTurns) {
+        boolean swapped = Math.floorMod(quarterTurns, 2) == 1;
+        return new int[]{swapped ? this.sizeZ : this.sizeX, swapped ? this.sizeX : this.sizeZ};
+    }
+
     /** Where the minimum corner goes so the blueprint is centred on {@code cursor} (bottom on its level). */
     public BlockPos originFor(BlockPos cursor, int quarterTurns) {
         boolean swapped = Math.floorMod(quarterTurns, 2) == 1;

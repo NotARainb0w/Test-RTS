@@ -37,7 +37,8 @@ public final class ShapeGenerator {
             case BOX -> box(out, a, b, height, hollow);
             case CIRCLE -> cylinder(out, a, b, 1, hollow);
             case CYLINDER -> cylinder(out, a, b, height, hollow);
-            case SPHERE -> sphere(out, a, b, hollow);
+            case SPHERE -> sphere(out, a, b, hollow, false);
+            case DOME -> sphere(out, a, b, hollow, true);
             case VEIN -> vein(out, a);
             case HOLE -> hole(out, a);
         }
@@ -248,11 +249,12 @@ public final class ShapeGenerator {
         return x * x + z * z <= limit;
     }
 
-    private static void sphere(Collector out, BlockPos center, BlockPos edge, boolean hollow) {
+    /** @param upperHalf a dome: only the top half, standing on the centre's level */
+    private static void sphere(Collector out, BlockPos center, BlockPos edge, boolean hollow, boolean upperHalf) {
         double radius = Math.sqrt(center.distSqr(edge));
         double limit = (radius + 0.5) * (radius + 0.5);
         int r = (int) Math.ceil(radius);
-        for (int y = -r; y <= r; y++) {
+        for (int y = upperHalf ? 0 : -r; y <= r; y++) {
             for (int x = -r; x <= r; x++) {
                 for (int z = -r; z <= r; z++) {
                     if (!insideBall(x, y, z, limit)) {

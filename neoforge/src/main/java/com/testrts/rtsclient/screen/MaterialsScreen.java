@@ -1,0 +1,172 @@
+package com.testrts.rtsclient.screen;
+
+import com.testrts.rtsclient.screen.ui.RtsButton;
+import com.testrts.rtsclient.screen.ui.Theme;
+import com.testrts.rtsclient.storage.StorageManager;
+import com.testrts.rtsclient.task.BuildTask;
+import com.testrts.rtsclient.task.FetchTask;
+import com.testrts.rtsclient.task.MaterialPlanner;
+import com.testrts.rtsclient.task.RtsTask;
+import com.testrts.rtsclient.task.TaskQueue;
+import com.testrts.rtsclient.util.Messages;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The shopping list: every block the queued build orders still need, against what the player
+ * carries and what linked storage holds, with one button to fetch everything in a single trip.
+ */
+public final class MaterialsScreen extends Screen {
+    private static final int ROW_H = 18;
+    private static final int PAD = 8;
+
+    private record Line(Item item, int need, int have, int stored) {
+        int shortBy() {
+            return Math.max(0, this.need - this.have);
+        }
+    }
+
+    private final Screen parent;
+    private final List<Line> lines = new ArrayList<>();
+    private int scroll;
+    private int panelX0;
+    private int panelY0;
+    private int panelX1;
+    private int panelY1;
+    private int listY0;
+    private int listY1;
+
+    public MaterialsScreen(Screen parent) {
+        super(Component.literal("Materials"));
+        this.parent = parent;
+    }
+
+    private void compute() {
+        this.lines.clear();
+        if (this.minecraft == null || this.minecraft.level == null || this.minecraft.player == null) {
+            return;
+        }
+        Map<Item, Integer> need = new LinkedHashMap<>();
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                MaterialPlanner.required(this.minecraft.level, build.blocks()).forEach((item, n) -> need.merge(item, n, Integer::sum));
+            }
+        }
+        need.forEach((item, n) -> this.lines.add(new Line(item, n, this.minecraft.player.getInventory().countItem(item),
+                StorageManager.get().total(item))));
+        // Short items first, then the biggest amounts.
+        this.lines.sort((a, b) -> a.shortBy() > 0 != b.shortBy() > 0 ? (a.shortBy() > 0 ? -1 : 1) : Integer.compare(b.need(), a.need()));
+    }
+
+    /** What can be fetched from storage to cover the shortfall. */
+    private Map<Item, Integer> fetchable() {
+        Map<Item, Integer> out = new LinkedHashMap<>();
+        for (Line l : this.lines) {
+            int n = Math.min(l.shortBy(), l.stored());
+            if (n > 0) {
+                out.put(l.item(), n);
+            }
+        }
+        return out;
+    }
+
+    @Override
+    protected void init() {
+        compute();
+        int w = Math.min(320, this.width - 24);
+        int h = Math.min(this.height - 16, 280);
+        this.panelX0 = this.width / 2 - w / 2;
+        this.panelX1 = this.panelX0 + w;
+        this.panelY0 = this.height / 2 - h / 2;
+        this.panelY1 = this.panelY0 + h;
+        this.listY0 = this.panelY0 + Theme.HEADER_H + 18;
+        this.listY1 = this.panelY1 - PAD - 22;
+        int by = this.panelY1 - PAD - 16;
+        Map<Item, Integer> fetch = fetchable();
+        RtsButton fetchAll = new RtsButton(this.panelX0 + PAD, by, 110, 16, "Fetch all", () -> {
+            Map<Item, Integer> f = fetchable();
+            if (f.isEmpty()) {
+                return;
+            }
+            TaskQueue.get().pushFront(new FetchTask(f));
+            Messages.info("Fetching " + MaterialPlanner.describe(f, 3));
+            onClose();
+        }).tip("Walk to storage once and take everything you're short of (as far as storage has it)").selected(() -> true);
+        fetchAll.active = !fetch.isEmpty();
+        addRenderableWidget(fetchAll);
+        addRenderableWidget(new RtsButton(this.panelX1 - PAD - 60, by, 60, 16, "Back", this::onClose));
+    }
+
+    private int visibleRows() {
+        return Math.max(1, (this.listY1 - this.listY0) / ROW_H);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        this.scroll = Math.max(0, Math.min(Math.max(0, this.lines.size() - visibleRows()), this.scroll - (int) Math.signum(scrollY) * 2));
+        return true;
+    }
+
+    @Override
+    public void renderBackground(GuiGraphics ctx, int mouseX, int mouseY, float delta) {
+        // A plain dim instead of 1.21's blur, then the panel and the list; widgets are drawn on top by render().
+        ctx.fill(0, 0, this.width, this.height, 0x88000000);
+        Theme.panel(ctx, this.font, this.panelX0, this.panelY0, this.panelX1, this.panelY1, "MATERIALS FOR QUEUED ORDERS");
+        int x0 = this.panelX0 + PAD;
+        int x1 = this.panelX1 - PAD;
+        int hy = this.panelY0 + Theme.HEADER_H + 5;
+        int cNeed = x1 - 110;
+        int cHave = x1 - 72;
+        int cStore = x1 - 34;
+        ctx.drawString(this.font, "ITEM", x0 + 20, hy, Theme.TEXT_FAINT, false);
+        ctx.drawString(this.font, "NEED", cNeed, hy, Theme.TEXT_FAINT, false);
+        ctx.drawString(this.font, "HAVE", cHave, hy, Theme.TEXT_FAINT, false);
+        ctx.drawString(this.font, "STORED", cStore, hy, Theme.TEXT_FAINT, false);
+        if (this.lines.isEmpty()) {
+            ctx.drawCenteredString(this.font, "No build orders queued", this.width / 2, this.listY0 + 12, Theme.TEXT_DIM);
+        }
+        int rows = visibleRows();
+        int missingTotal = 0;
+        for (Line l : this.lines) {
+            missingTotal += Math.max(0, l.shortBy() - l.stored());
+        }
+        for (int r = 0; r < rows && this.scroll + r < this.lines.size(); r++) {
+            Line l = this.lines.get(this.scroll + r);
+            int y = this.listY0 + r * ROW_H;
+            if (r % 2 == 0) {
+                ctx.fill(x0, y, x1, y + ROW_H, 0x20FFFFFF);
+            }
+            ctx.renderItem(new ItemStack(l.item()), x0 + 1, y + 1);
+            int nameRoom = cNeed - (x0 + 20) - 4;
+            ctx.drawString(this.font, this.font.plainSubstrByWidth(l.item().getDescription().getString(), nameRoom), x0 + 20, y + 5, Theme.TEXT, false);
+            boolean shortItem = l.shortBy() > 0;
+            boolean coverable = l.shortBy() <= l.stored();
+            ctx.drawString(this.font, Integer.toString(l.need()), cNeed, y + 5, Theme.TEXT, false);
+            ctx.drawString(this.font, Integer.toString(l.have()), cHave, y + 5, shortItem ? Theme.GOLD : Theme.GOOD, false);
+            ctx.drawString(this.font, Integer.toString(l.stored()), cStore, y + 5,
+                    !shortItem ? Theme.TEXT_DIM : coverable ? Theme.GOOD : Theme.BAD, false);
+        }
+        String summary = this.lines.isEmpty() ? "" : missingTotal == 0
+                ? "Inventory + storage cover everything"
+                : missingTotal + " block(s) not available anywhere";
+        ctx.drawString(this.font, summary, x0 + 116, this.panelY1 - PAD - 12, missingTotal == 0 ? Theme.GOOD : Theme.BAD, false);
+    }
+
+    @Override
+    public void onClose() {
+        this.minecraft.setScreen(this.parent);
+    }
+
+    @Override
+    public boolean isPauseScreen() {
+        return false;
+    }
+}

@@ -1,7 +1,9 @@
 package com.testrts.rtsclient.exec;
 
 import com.testrts.rtsclient.task.Reach;
+import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.state.BlockState;
@@ -15,6 +17,10 @@ import java.util.function.Predicate;
 /** The built-in engine: our own pathfinding, placing and mining. Ticked every client tick. */
 public final class NativeEngine {
     private static final NativeEngine INSTANCE = new NativeEngine();
+    /** Times a walk re-plans around a step it got stuck on before giving up. */
+    private static final int MAX_STUCK_REPATHS = 3;
+    /** Times a walk re-plans after being knocked or falling off the route. */
+    private static final int MAX_OFF_PATH_REPATHS = 5;
 
     @Nullable
     private PathFinder.Search search;
@@ -24,6 +30,16 @@ public final class NativeEngine {
     private NativeBuilder builder;
     private final java.util.Set<BlockPos> orphanScaffolds = new java.util.LinkedHashSet<>();
     private String status = "Idle";
+
+    // The current walk request, kept so it can be planned again from wherever the player ends up.
+    @Nullable
+    private Predicate<BlockPos> goal;
+    @Nullable
+    private Vec3 toward;
+    @Nullable
+    private BlockPos destination;
+    private int stuckRepaths;
+    private int offPathRepaths;
 
     public static NativeEngine get() {
         return INSTANCE;
@@ -44,7 +60,12 @@ public final class NativeEngine {
             } else if (s == PathFinder.Search.State.FAILED) {
                 this.search = null;
                 this.status = "No path";
-                com.testrts.rtsclient.util.Messages.warn("No walkable path there (the built-in engine can't bridge or pillar)");
+                MovementInput.restore(client);
+                if (this.stuckRepaths + this.offPathRepaths > 0) {
+                    Messages.warn("Stuck on the way to " + describe(this.destination) + " and found no other way round");
+                } else {
+                    Messages.warn("No walkable path there (the built-in engine can't bridge or pillar)");
+                }
             } else {
                 this.status = "Planning";
             }
@@ -62,14 +83,50 @@ public final class NativeEngine {
         }
         if (this.walk != null) {
             PathFollower.State s = this.walk.tick(client);
-            if (s != PathFollower.State.WALKING) {
-                this.status = s == PathFollower.State.ARRIVED ? "Arrived" : "Stuck";
-                this.walk = null;
-                MovementInput.restore(client);
-            } else {
+            if (s == PathFollower.State.WALKING) {
                 this.status = "Walking";
+                return;
+            }
+            PathFollower failed = this.walk;
+            this.walk = null;
+            if (s == PathFollower.State.STUCK && replan(client, failed)) {
+                return;
+            }
+            this.status = s == PathFollower.State.ARRIVED ? "Arrived" : "Stuck";
+            MovementInput.restore(client);
+            if (s == PathFollower.State.STUCK) {
+                Messages.warn("Stuck on the way to " + describe(this.destination) + ", gave up");
             }
         }
+    }
+
+    /**
+     * The follower couldn't go on: plan again from where the player is now, steering around the
+     * step that failed. Gives up (returns false) after a few tries so callers can move on.
+     */
+    private boolean replan(Minecraft client, PathFollower failed) {
+        LocalPlayer player = client.player;
+        if (this.goal == null || player == null || client.level == null) {
+            return false;
+        }
+        if (failed.offPath()) {
+            if (++this.offPathRepaths > MAX_OFF_PATH_REPATHS) {
+                return false;
+            }
+        } else {
+            if (++this.stuckRepaths > MAX_STUCK_REPATHS) {
+                return false;
+            }
+            PathFinder.reportStuck(failed.failedFrom(), failed.failedTo());
+        }
+        MovementInput.acquire(player).release();
+        this.search = PathFinder.start(client.level, Walkability.feetNode(client.level, player), this.goal, this.toward);
+        this.status = "Re-planning";
+        return true;
+    }
+
+    private static String describe(@Nullable BlockPos pos) {
+        return pos != null ? pos.toShortString() : "the target";
     }
 
     /** @return false if no path exists. */
@@ -80,22 +137,30 @@ public final class NativeEngine {
             if (feet.equals(pos) || feet.above().equals(pos)) {
                 return false;
             }
-            Vec3 eye = new Vec3(feet.getX() + 0.5, feet.getY() + 1.62, feet.getZ() + 0.5);
+            // Eye height over the real floor: on a slab or carpet the eyes are lower than the node suggests.
+            ClientLevel world = client.level;
+            double eyeY = (world != null ? Walkability.standY(world, feet) : feet.getY()) + 1.62;
+            Vec3 eye = new Vec3(feet.getX() + 0.5, eyeY, feet.getZ() + 0.5);
             return eye.distanceToSqr(center) <= reach * reach;
-        }, center);
+        }, center, pos);
     }
 
     public boolean goTo(Minecraft client, BlockPos feet) {
-        return startWalk(client, p -> p.distSqr(feet) <= 1.0, Vec3.atBottomCenterOf(feet));
+        return startWalk(client, p -> p.distSqr(feet) <= 1.0, Vec3.atBottomCenterOf(feet), feet);
     }
 
-    private boolean startWalk(Minecraft client, Predicate<BlockPos> goal, Vec3 toward) {
+    private boolean startWalk(Minecraft client, Predicate<BlockPos> goal, Vec3 toward, BlockPos destination) {
         stop(client);
         LocalPlayer player = client.player;
         if (player == null || client.level == null) {
             return false;
         }
-        this.search = PathFinder.start(client.level, player.blockPosition(), goal, toward);
+        this.goal = goal;
+        this.toward = toward;
+        this.destination = destination.immutable();
+        this.stuckRepaths = 0;
+        this.offPathRepaths = 0;
+        this.search = PathFinder.start(client.level, Walkability.feetNode(client.level, player), goal, toward);
         this.status = "Planning";
         return true;
     }
@@ -145,6 +210,7 @@ public final class NativeEngine {
         this.builder = null;
         this.walk = null;
         this.search = null;
+        this.goal = null;
         MovementInput.restore(client);
     }
 

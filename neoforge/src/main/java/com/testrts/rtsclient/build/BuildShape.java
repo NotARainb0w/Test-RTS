@@ -10,6 +10,7 @@ public enum BuildShape {
     CIRCLE("Circle", "Disc centred on A through B", true, false),
     CYLINDER("Cylinder", "Disc centred on A, Height tall", true, true),
     SPHERE("Sphere", "Ball centred on A through B", true, false),
+    DOME("Dome", "Half sphere standing on A's level, radius to B", true, false),
     VEIN("Vein", "Every touching block of the clicked type (mine a vein, or replace it with the brush)", false, false),
     HOLE("Hole", "Every empty or water block in the enclosed hole you click, up to that level (fills pits, ponds)", false, false);
 

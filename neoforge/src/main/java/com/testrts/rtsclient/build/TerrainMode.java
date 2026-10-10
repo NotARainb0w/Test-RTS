@@ -3,7 +3,10 @@ package com.testrts.rtsclient.build;
 /** What the Terrain tool does with the area you select. */
 public enum TerrainMode {
     FLATTEN("Flatten", "Level the area to the height of your first click: mine everything above, fill holes below"),
-    LIGHT_UP("Light up", "Place torches wherever the area is dark enough for mobs to spawn");
+    LIGHT_UP("Light up", "Place torches wherever the area is dark enough for mobs to spawn"),
+    QUARRY("Quarry", "Dig the area out layer by layer, down to the depth you set; storage trips when the inventory is full"),
+    FELL_TREES("Fell trees", "Chop every tree in the area, pick up the wood and replant saplings"),
+    HARVEST("Harvest", "Harvest ripe crops in the area, replant them and store the produce");
 
     private final String label;
     private final String description;
