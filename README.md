@@ -25,34 +25,52 @@ implementation; no code or assets are taken from it.
 | Input | Action |
 |---|---|
 | **G** | Enter / leave RTS mode (Esc also leaves) |
-| WASD, Space / Shift, Ctrl | Fly the camera (your movement keys), Ctrl = faster |
+| WASD, Space / Shift, Ctrl | Fly the camera (your movement keys), Ctrl = faster. It flies through walls. |
 | Scroll | Zoom toward the cursor direction |
-| Right-drag / Q, E | Rotate the camera |
+| Right-drag / Q | Rotate the camera |
 | Middle-drag | Pan the camera |
 | **Left click** | Act with the current tool (below) |
 | Right click | Walk your character to that spot |
 | Middle click | Pick that block as the brush |
-| 1-4 | Tools: Build, Destroy, Interact, Link storage |
+| 1-5 | Tools: Build, Destroy, Interact, Link storage, Blueprint |
 | `[` `]` | Previous / next shape |
-| R / H | Rotate directional blocks / toggle hollow |
+| M | Build mode (Fill / Replace / Replace type / Cover) |
+| R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
 | Ctrl+scroll | Shape height (negative digs down) |
+| Arrow keys, Shift+Up/Down | Nudge the shape one block (camera-relative) / up and down |
 | Enter / X | Confirm / cancel a shape |
+| V, PageUp/PageDown | Cut view: hide everything above a Y level to see inside builds; move the cut |
 | Ctrl+Z | Undo the last order (queues orders that put the old blocks back) |
 | F | Search items |
 | E, T, / | Inventory, chat, command (RTS resumes when you close them) |
 
 ### Tools
 
-- **Build**: pick a block from the item bar, click to place. With a shape selected (Line, Floor, Wall, Box,
-  Circle, Cylinder, Sphere) click point A, then point B, then click again or press Enter. The hint line shows
-  how many blocks the shape needs and how many you have (in inventory and in storage).
-- **Destroy**: same shapes, but clears blocks.
-- **Connected** shape: one click selects every touching block of the clicked type: mine a whole ore vein or
-  tree with Destroy, or replace it with your brush block with Build.
+- **Build**: pick a block from the item bar, then click. Shapes: Block, Line, Floor, Wall, Box, Circle,
+  Cylinder, Sphere, Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
+  level you click). Two-point shapes: click A, click B, then click again or press Enter.
+  - **Modes**: *Fill* only fills empty space; *Replace* turns everything in the shape into the brush;
+    *Replace type* swaps only the block type you click first; *Cover* only fills empty spaces resting on
+    solid ground (carpets, paths over terrain).
+  - **Block state**: buttons under the shape list set properties like slab half or stair shape (auto =
+    decided by where it's placed).
+- **Destroy**: the same shapes, but mines the blocks. Afterwards the character picks up the drops.
 - **Interact**: click any block (chest, door, lever, crafting table...). Your character walks over and uses it.
 - **Link storage**: click containers to add them to your storage network.
+- **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`), then click to
+  paste it, R to rotate. Saved blueprints are listed on the left (Shift+click deletes).
 
-Chat (including Baritone's messages) is mirrored above the item bar, since RTS mode hides the normal HUD.
+While you draw a shape or paste, a label at the cursor shows its size (e.g. `5 x 5 x 1`), how many blocks it
+places or mines, and the materials it needs against what you carry and what's in storage (red when short).
+
+Previews show the real blocks, see-through, up to a size you can set; bigger shapes show as a tinted surface.
+Queued orders keep showing their ghost blocks until they're built.
+
+### Building
+
+Orders are built **one layer at a time**, bottom-up (clearing goes top-down), so every block has something to
+attach to. Blocks that can't be done yet are retried later, and when an order finishes with blocks missing it
+goes back for them (twice).
 
 ## Storage
 
@@ -71,9 +89,11 @@ Storage links and contents are saved per world/server and dimension in `config/r
 
 ## Settings
 
-`config/rtsclient/config.json`: camera speed, max camera distance, max shape size, scan radius,
-`strictOrientation` (force exact stair/log directions), and `manageBaritoneSettings` (lets the mod turn on
-Baritone's `allowPlace`, `allowBreak`, `allowInventory`).
+The **Settings** button (top right in RTS mode) covers the engine, layered building, exact rotation, drop
+pickup, camera collision and speed, the real-block preview limit and the max shape size. Everything is saved in
+`config/rtsclient/config.json` (which also has the scan radius and max camera distance).
+
+Cut view works with the vanilla renderer and with Sodium 0.5.
 
 ## Building from source
 
