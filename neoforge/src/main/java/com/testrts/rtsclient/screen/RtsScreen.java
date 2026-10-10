@@ -327,6 +327,12 @@ public final class RtsScreen extends Screen {
                 button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, full, ROW - 1,
                         () -> s.hollow = !s.hollow).selected(() -> s.hollow).dynamic(() -> s.hollow ? "Hollow: on" : "Hollow: off").left();
                 y += ROW;
+                button("-", "Move the air layer down [Alt+scroll]", x, y, 16, ROW - 1, () -> s.airY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("Air", "Air placement: point at empty space on a flat layer to build in mid-air [B]",
+                        x + 18, y, full - 36, ROW - 1, this::toggleAir)
+                        .selected(() -> s.airPlace).dynamic(() -> s.airPlace ? "Air: Y " + s.airY : "Air: off");
+                button("+", "Move the air layer up [Alt+scroll]", x + full - 16, y, 16, ROW - 1, () -> s.airY++).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                y += ROW;
                 button("-", "Lower", x, y, 16, ROW - 1, () -> s.adjustHeight(-1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
                 button("+", "Height for walls, boxes and cylinders. Negative digs down. [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
                         () -> s.adjustHeight(1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
@@ -548,9 +554,44 @@ public final class RtsScreen extends Screen {
         }
     }
 
+    /**
+     * The block under the cursor. With air placement on (or while drawing a shape when the cursor
+     * points at nothing), the cursor can also target empty cells on a flat layer in mid-air.
+     */
     @Nullable
     private BlockHitResult pick(double mx, double my) {
-        return MouseRay.pick(this.controller.camera(), mx, my, this.width, this.height, false);
+        var cam = this.controller.camera();
+        BlockHitResult hit = MouseRay.pick(cam, mx, my, this.width, this.height, false);
+        BuildSession s = this.session;
+        Integer layer = s.airPlace ? Integer.valueOf(s.airY)
+                : hit == null && s.anchorA != null ? Integer.valueOf(s.anchorA.getY()) : null;
+        if (layer == null) {
+            return hit;
+        }
+        BlockHitResult air = MouseRay.pickLayer(cam, mx, my, this.width, this.height, layer);
+        if (air == null) {
+            return hit;
+        }
+        if (hit != null && hit.getLocation().distanceToSqr(cam.position()) < air.getLocation().distanceToSqr(cam.position())) {
+            return hit; // terrain in front of the layer
+        }
+        return air;
+    }
+
+    private void toggleAir() {
+        BuildSession s = this.session;
+        s.airPlace = !s.airPlace;
+        if (s.airPlace) {
+            BlockHitResult h = this.controller.hover();
+            if (h != null) {
+                s.airY = WorldOverlay.targetFor(s, h).getY();
+            } else if (this.minecraft.player != null) {
+                s.airY = this.minecraft.player.getBlockY();
+            }
+            Messages.info("Air placement on at Y " + s.airY + " - Alt+scroll or the -/+ buttons move the layer, B turns it off");
+        } else {
+            Messages.info("Air placement off");
+        }
     }
 
     // ------------------------------------------------------------------ palette
@@ -738,6 +779,10 @@ public final class RtsScreen extends Screen {
             this.taskScroll = Math.max(0, this.taskScroll - (int) Math.signum(scrollY));
             return true;
         }
+        if (hasAltDown() && this.session.airPlace) {
+            this.session.airY += scrollY > 0 ? 1 : -1;
+            return true;
+        }
         if (hasControlDown()) {
             if (this.session.tool == ToolMode.TERRAIN) {
                 this.session.terrainClearHeight = Mth.clamp(this.session.terrainClearHeight + (scrollY > 0 ? 1 : -1), 1, 64);
@@ -826,6 +871,7 @@ public final class RtsScreen extends Screen {
                 }
             }
             case GLFW.GLFW_KEY_H -> s.hollow = !s.hollow;
+            case GLFW.GLFW_KEY_B -> toggleAir();
             case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> this.actions.confirm();
             case GLFW.GLFW_KEY_Z -> {
                 if (hasControlDown() && this.minecraft.level != null) {
@@ -1205,6 +1251,9 @@ public final class RtsScreen extends Screen {
             }
             case TERRAIN -> chips.add(s.terrainMode.label() + ": click two corners");
             case MEASURE -> chips.add("Click two points");
+        }
+        if (s.airPlace) {
+            chips.add("air Y " + s.airY);
         }
         for (String c : chips) {
             int w = this.font.width(c) + 6;

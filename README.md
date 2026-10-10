@@ -1,4 +1,4 @@
-# RTS Client Builder (Fabric 1.20.1, client-side)
+# RTS Client Builder (Fabric 1.20.1 / NeoForge 1.21.1, client-side)
 
 Build from above like an RTS. Press **G** and the camera detaches into a top-down view with a mouse cursor;
 your character stays in the world and does the work:
@@ -13,9 +13,19 @@ It is client-side only and works on vanilla servers. Inspired by the gameplay of
 [RTSbuilding](https://github.com/Hcrab/RTSbuilding) (NeoForge/Forge, server-side). This is an independent
 implementation; no code or assets are taken from it.
 
+## Versions
+
+| Loader | Minecraft | Source | Jar (CI artifact) |
+|---|---|---|---|
+| Fabric | 1.20.1 | repository root | `rts-client-builder-fabric-1.20.1` |
+| NeoForge | 1.21.1 | `neoforge/` | `rts-client-builder-neoforge-1.21.1` |
+
+Both have the same features and controls.
+
 ## Requirements
 
-- Minecraft 1.20.1, Fabric Loader 0.14.21+, Fabric API
+- Fabric: Minecraft 1.20.1, Fabric Loader 0.14.21+, Fabric API
+- NeoForge: Minecraft 1.21.1, NeoForge 21.1+ (Baritone's NeoForge build for 1.21 is optional, as on Fabric)
 - Optional: [Baritone](https://github.com/cabaletta/baritone) for 1.20.1 (the Fabric build). It is better at
   long or awkward paths (it can bridge and pillar); without it the built-in engine is used, which walks,
   climbs single steps and drops, but doesn't build its own bridges.
@@ -153,4 +163,7 @@ then run:
 ./gradlew build
 ```
 
-CI downloads the jar automatically; the built mod is uploaded as a workflow artifact.
+For NeoForge, put `baritone-api-neoforge-<version>.jar` (1.11.x, MC 1.21) in `neoforge/libs/` and run
+`./gradlew build` inside `neoforge/` (Java 21).
+
+CI downloads the jars automatically and uploads both mods as workflow artifacts.
