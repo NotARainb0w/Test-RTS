@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.testrts.rtsclient.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "ClientPlayerEntityMixin",
+    "GameRendererMixin",
+    "MinecraftClientMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "rtsclient",
+  "version": "${version}",
+  "name": "RTS Client Builder",
+  "description": "Client-side RTS-style top-down building. Baritone does the walking, placing and mining; the mod handles chests and other block interactions.",
+  "authors": ["Test-RTS contributors"],
+  "license": "MIT",
+  "icon": "assets/rtsclient/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.testrts.rtsclient.RtsClientMod"]
+  },
+  "mixins": ["rtsclient.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.14.21",
+    "fabric-api": "*",
+    "minecraft": "~1.20.1",
+    "java": ">=17"
+  },
+  "recommends": {
+    "baritone": "*"
+  }
+}
