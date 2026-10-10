@@ -20,4 +20,15 @@ public abstract class CameraMixin {
             cir.setReturnValue(FogType.NONE);
         }
     }
+
+    /**
+     * RTS mode reports third person (so mods that draw the player's body in first person don't add
+     * a second copy at the camera), but the view must stay exactly where the RTS camera is.
+     */
+    @Inject(method = "getMaxZoom", at = @At("HEAD"), cancellable = true)
+    private void rtsclient$noThirdPersonOffset(float maxZoom, CallbackInfoReturnable<Float> cir) {
+        if (RtsController.get().isActive()) {
+            cir.setReturnValue(0.0F);
+        }
+    }
 }

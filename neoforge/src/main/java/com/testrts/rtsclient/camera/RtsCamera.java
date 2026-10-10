@@ -62,7 +62,9 @@ public final class RtsCamera {
         apply();
 
         client.setCameraEntity(this.entity);
-        options.setCameraType(CameraType.FIRST_PERSON);
+        // Third person (with no camera offset, see CameraMixin): nothing should treat this as the
+        // player's own eyes and draw their body or hand at the camera.
+        options.setCameraType(CameraType.THIRD_PERSON_BACK);
         options.hideGui = true;
         client.gameRenderer.setRenderHand(false);
     }
