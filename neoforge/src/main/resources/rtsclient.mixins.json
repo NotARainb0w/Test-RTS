@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.testrts.rtsclient.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "CameraMixin",
+    "ChatComponentMixin",
+    "FogRendererMixin",
+    "GameRendererMixin",
+    "LocalPlayerMixin",
+    "MinecraftMixin",
+    "RenderChunkMixin",
+    "SodiumLevelSliceMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

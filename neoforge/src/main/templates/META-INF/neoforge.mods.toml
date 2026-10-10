@@ -1,0 +1,38 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+displayTest="IGNORE_ALL_VERSION"
+authors="${mod_authors}"
+logoFile="assets/rtsclient/icon.png"
+description='''
+Client-side RTS-style top-down building. Baritone (or the built-in engine) does the walking, placing and mining; the mod handles the camera, the UI, shapes, chests and other block interactions.
+'''
+
+[[mixins]]
+config="${mod_id}.mixins.json"
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="${neo_version_range}"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="baritone"
+    type="optional"
+    versionRange="*"
+    ordering="NONE"
+    side="CLIENT"

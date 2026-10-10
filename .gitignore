@@ -7,3 +7,7 @@
 *.iml
 .vscode/
 libs/*.jar
+/neoforge/build/
+/neoforge/.gradle/
+/neoforge/run/
+neoforge/libs/*.jar

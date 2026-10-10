@@ -1,0 +1,260 @@
+package com.testrts.rtsclient.build;
+
+import net.minecraft.commands.arguments.blocks.BlockStateParser;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtAccounter;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.Tag;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
+
+/**
+ * Reads schematic files into a {@link Blueprint}:
+ * <ul>
+ *   <li>{@code .litematic} (Litematica, all regions merged)</li>
+ *   <li>{@code .schem} (Sponge v2/v3, WorldEdit and FAWE)</li>
+ *   <li>{@code .nbt} (vanilla structure block files)</li>
+ * </ul>
+ * Block entity contents (chest items, sign text) are not imported; only the blocks.
+ */
+public final class SchematicLoader {
+    public static final String[] EXTENSIONS = {".litematic", ".schem", ".nbt"};
+
+    private SchematicLoader() {
+    }
+
+    public static boolean supported(Path file) {
+        String name = file.getFileName().toString().toLowerCase(Locale.ROOT);
+        for (String ext : EXTENSIONS) {
+            if (name.endsWith(ext)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** @throws IOException for unreadable or unsupported files, or ones over {@code limit} blocks */
+    public static Blueprint load(Path file, int limit) throws IOException {
+        String fileName = file.getFileName().toString();
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        CompoundTag root;
+        try (InputStream in = Files.newInputStream(file)) {
+            root = NbtIo.readCompressed(in, NbtAccounter.unlimitedHeap());
+        }
+        String name = fileName.substring(0, fileName.lastIndexOf('.'));
+        Map<BlockPos, BlockState> blocks = new LinkedHashMap<>();
+        if (lower.endsWith(".litematic")) {
+            litematic(root, blocks, limit);
+        } else if (lower.endsWith(".schem")) {
+            sponge(root.contains("Schematic", Tag.TAG_COMPOUND) ? root.getCompound("Schematic") : root, blocks, limit);
+        } else if (lower.endsWith(".nbt")) {
+            structure(root, blocks, limit);
+        } else {
+            throw new IOException("Unsupported file type: " + fileName);
+        }
+        if (blocks.isEmpty()) {
+            throw new IOException("No blocks in " + fileName);
+        }
+        return normalize(name, blocks);
+    }
+
+    /** Shift everything so the minimum corner is 0,0,0, and work out the size. */
+    private static Blueprint normalize(String name, Map<BlockPos, BlockState> blocks) {
+        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+        for (BlockPos p : blocks.keySet()) {
+            minX = Math.min(minX, p.getX());
+            minY = Math.min(minY, p.getY());
+            minZ = Math.min(minZ, p.getZ());
+            maxX = Math.max(maxX, p.getX());
+            maxY = Math.max(maxY, p.getY());
+            maxZ = Math.max(maxZ, p.getZ());
+        }
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>(blocks.size() * 2);
+        for (Map.Entry<BlockPos, BlockState> e : blocks.entrySet()) {
+            BlockPos p = e.getKey();
+            out.put(new BlockPos(p.getX() - minX, p.getY() - minY, p.getZ() - minZ), e.getValue());
+        }
+        return new Blueprint(name, maxX - minX + 1, maxY - minY + 1, maxZ - minZ + 1, out);
+    }
+
+    private static void put(Map<BlockPos, BlockState> blocks, int x, int y, int z, BlockState state, int limit) throws IOException {
+        if (state.isAir()) {
+            return;
+        }
+        blocks.put(new BlockPos(x, y, z), state);
+        if (blocks.size() > limit) {
+            throw new IOException("Schematic has more than " + limit + " blocks (raise Max shape size in Settings)");
+        }
+    }
+
+    private static BlockState paletteState(CompoundTag entry) {
+        try {
+            return NbtUtils.readBlockState(BuiltInRegistries.BLOCK.asLookup(), entry);
+        } catch (RuntimeException e) {
+            return Blocks.AIR.defaultBlockState();
+        }
+    }
+
+    // ------------------------------------------------------------------ Litematica
+
+    private static void litematic(CompoundTag root, Map<BlockPos, BlockState> blocks, int limit) throws IOException {
+        CompoundTag regions = root.getCompound("Regions");
+        for (String key : regions.getAllKeys()) {
+            CompoundTag region = regions.getCompound(key);
+            CompoundTag pos = region.getCompound("Position");
+            CompoundTag size = region.getCompound("Size");
+            int sx = size.getInt("x");
+            int sy = size.getInt("y");
+            int sz = size.getInt("z");
+            int ax = Math.abs(sx);
+            int ay = Math.abs(sy);
+            int az = Math.abs(sz);
+            if (ax == 0 || ay == 0 || az == 0) {
+                continue;
+            }
+            // Negative sizes mean the region extends the other way from its position.
+            int minX = pos.getInt("x") + (sx < 0 ? sx + 1 : 0);
+            int minY = pos.getInt("y") + (sy < 0 ? sy + 1 : 0);
+            int minZ = pos.getInt("z") + (sz < 0 ? sz + 1 : 0);
+
+            ListTag paletteNbt = region.getList("BlockStatePalette", Tag.TAG_COMPOUND);
+            BlockState[] palette = new BlockState[paletteNbt.size()];
+            for (int i = 0; i < palette.length; i++) {
+                palette[i] = paletteState(paletteNbt.getCompound(i));
+            }
+            if (palette.length == 0) {
+                continue;
+            }
+            long[] data = region.getLongArray("BlockStates");
+            int bits = Math.max(2, Integer.SIZE - Integer.numberOfLeadingZeros(palette.length - 1));
+            long mask = (1L << bits) - 1L;
+            long volume = (long) ax * ay * az;
+            long layer = (long) ax * az;
+            for (long index = 0; index < volume; index++) {
+                int value = (int) packedAt(data, index, bits, mask);
+                if (value < 0 || value >= palette.length) {
+                    continue;
+                }
+                int y = (int) (index / layer);
+                int rem = (int) (index % layer);
+                int z = rem / ax;
+                int x = rem % ax;
+                put(blocks, minX + x, minY + y, minZ + z, palette[value], limit);
+            }
+        }
+    }
+
+    /** Litematica packs entries back to back, so one entry may span two longs. */
+    private static long packedAt(long[] data, long index, int bits, long mask) {
+        long startOffset = index * bits;
+        int startArr = (int) (startOffset >> 6);
+        int endArr = (int) (((index + 1) * bits - 1) >> 6);
+        int startBit = (int) (startOffset & 63);
+        if (startArr >= data.length || endArr >= data.length) {
+            return 0;
+        }
+        if (startArr == endArr) {
+            return data[startArr] >>> startBit & mask;
+        }
+        int endOffset = 64 - startBit;
+        return (data[startArr] >>> startBit | data[endArr] << endOffset) & mask;
+    }
+
+    // ------------------------------------------------------------------ Sponge (.schem)
+
+    private static void sponge(CompoundTag root, Map<BlockPos, BlockState> blocks, int limit) throws IOException {
+        int width = root.getShort("Width") & 0xFFFF;
+        int height = root.getShort("Height") & 0xFFFF;
+        int length = root.getShort("Length") & 0xFFFF;
+        CompoundTag paletteNbt;
+        byte[] data;
+        if (root.contains("Blocks", Tag.TAG_COMPOUND)) {
+            // Version 3
+            CompoundTag container = root.getCompound("Blocks");
+            paletteNbt = container.getCompound("Palette");
+            data = container.getByteArray("Data");
+        } else {
+            paletteNbt = root.getCompound("Palette");
+            data = root.getByteArray("BlockData");
+        }
+        Map<Integer, BlockState> palette = new java.util.HashMap<>();
+        for (String key : paletteNbt.getAllKeys()) {
+            palette.put(paletteNbt.getInt(key), parseState(key));
+        }
+        int index = 0;
+        int i = 0;
+        while (i < data.length) {
+            int value = 0;
+            int shift = 0;
+            byte b;
+            do {
+                b = data[i++];
+                value |= (b & 0x7F) << shift;
+                shift += 7;
+            } while ((b & 0x80) != 0 && i < data.length);
+            int y = index / (width * length);
+            int rem = index % (width * length);
+            int z = rem / width;
+            int x = rem % width;
+            if (y < height) {
+                BlockState state = palette.get(value);
+                if (state != null) {
+                    put(blocks, x, y, z, state, limit);
+                }
+            }
+            index++;
+        }
+    }
+
+    private static BlockState parseState(String text) {
+        try {
+            return BlockStateParser.parseForBlock(BuiltInRegistries.BLOCK.asLookup(), text, false).blockState();
+        } catch (Exception e) {
+            return Blocks.AIR.defaultBlockState();
+        }
+    }
+
+    // ------------------------------------------------------------------ vanilla structure (.nbt)
+
+    private static void structure(CompoundTag root, Map<BlockPos, BlockState> blocks, int limit) throws IOException {
+        ListTag paletteNbt;
+        if (root.contains("palette", Tag.TAG_LIST)) {
+            paletteNbt = root.getList("palette", Tag.TAG_COMPOUND);
+        } else {
+            ListTag palettes = root.getList("palettes", Tag.TAG_LIST);
+            paletteNbt = palettes.isEmpty() ? new ListTag() : palettes.getList(0);
+        }
+        BlockState[] palette = new BlockState[paletteNbt.size()];
+        for (int i = 0; i < palette.length; i++) {
+            palette[i] = paletteState(paletteNbt.getCompound(i));
+        }
+        ListTag list = root.getList("blocks", Tag.TAG_COMPOUND);
+        for (int i = 0; i < list.size(); i++) {
+            CompoundTag entry = list.getCompound(i);
+            int state = entry.getInt("state");
+            ListTag pos = entry.getList("pos", Tag.TAG_INT);
+            if (state < 0 || state >= palette.length || pos.size() < 3) {
+                continue;
+            }
+            BlockState s = palette[state];
+            // Structure voids mean "leave whatever is there".
+            if (s.is(Blocks.STRUCTURE_VOID)) {
+                continue;
+            }
+            put(blocks, pos.getInt(0), pos.getInt(1), pos.getInt(2), s, limit);
+        }
+    }
+}

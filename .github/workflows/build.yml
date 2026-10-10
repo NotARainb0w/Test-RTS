@@ -6,7 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  fabric:
+    name: Fabric 1.20.1
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,5 +37,42 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rts-client-builder
+          name: rts-client-builder-fabric-1.20.1
           path: build/libs/*.jar
+
+  neoforge:
+    name: NeoForge 1.21.1
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: neoforge
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - name: Download Baritone API (compile-only)
+        run: |
+          set -e
+          for v in $(grep '^baritone_version=' gradle.properties | cut -d= -f2) 1.11.2 1.11.1; do
+            url="https://github.com/cabaletta/baritone/releases/download/v$v/baritone-api-neoforge-$v.jar"
+            if curl -fsSL -o "libs/baritone-api-neoforge-$v.jar" "$url"; then
+              echo "Downloaded $url"
+              break
+            fi
+            rm -f "libs/baritone-api-neoforge-$v.jar"
+          done
+          ls -la libs
+
+      - name: Build
+        run: ./gradlew build --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rts-client-builder-neoforge-1.21.1
+          path: neoforge/build/libs/*.jar
