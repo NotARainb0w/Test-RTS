@@ -25,7 +25,7 @@ public final class MaterialPlanner {
             if (wanted.isAir()) {
                 continue;
             }
-            if (world.hasChunkAt(e.getKey()) && world.getBlockState(e.getKey()).getBlock() == wanted.getBlock()) {
+            if (world.hasChunkAt(e.getKey()) && matches(world.getBlockState(e.getKey()), wanted)) {
                 continue;
             }
             Item item = wanted.getBlock().asItem();
@@ -62,14 +62,28 @@ public final class MaterialPlanner {
             BlockState current = world.getBlockState(e.getKey());
             BlockState wanted = e.getValue();
             // Baritone doesn't mine fluids, so a cleared block that filled with water counts as done.
-            boolean ok = wanted.isAir()
-                    ? current.isAir() || current.getBlock() instanceof LiquidBlock
-                    : current.getBlock() == wanted.getBlock();
+            boolean ok = matches(current, wanted);
             if (!ok) {
                 left++;
             }
         }
         return left;
+    }
+
+    /**
+     * Whether {@code current} counts as the block an order wants. Same item counts too: a torch placed
+     * on a wall is a wall torch, a sign on a wall a wall sign, and so on. Treating those as wrong made
+     * the builder mine and re-place them forever.
+     */
+    public static boolean matches(BlockState current, BlockState wanted) {
+        if (wanted.isAir()) {
+            return current.isAir() || current.getBlock() instanceof LiquidBlock;
+        }
+        if (current.getBlock() == wanted.getBlock()) {
+            return true;
+        }
+        Item item = wanted.getBlock().asItem();
+        return item != Items.AIR && current.getBlock().asItem() == item;
     }
 
     public static String describe(Map<Item, Integer> items, int max) {

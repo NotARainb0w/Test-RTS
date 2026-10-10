@@ -14,6 +14,7 @@ import com.testrts.rtsclient.config.RtsConfig;
 import com.testrts.rtsclient.render.WorldOverlay;
 import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.task.BuildTask;
+import com.testrts.rtsclient.task.MaterialPlanner;
 import com.testrts.rtsclient.task.FetchTask;
 import com.testrts.rtsclient.task.IndexStorageTask;
 import com.testrts.rtsclient.task.InteractTask;
@@ -258,7 +259,7 @@ public final class WorldActions {
         Map<BlockPos, BlockState> placed = pasteBlocks(s, bp, s.pasteAnchor);
         Map<BlockPos, BlockState> build = new LinkedHashMap<>();
         for (Map.Entry<BlockPos, BlockState> e : placed.entrySet()) {
-            if (world.getBlockState(e.getKey()).getBlock() != e.getValue().getBlock()) {
+            if (!MaterialPlanner.matches(world.getBlockState(e.getKey()), e.getValue())) {
                 build.put(e.getKey(), e.getValue());
             }
         }

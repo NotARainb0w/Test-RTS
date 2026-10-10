@@ -107,7 +107,7 @@ public final class OrderPlanner {
         for (BlockPos p : shape.positions()) {
             BlockState want = pick(r, p);
             BlockState current = world.getBlockState(p);
-            if (current.getBlock() == want.getBlock()) {
+            if (com.testrts.rtsclient.task.MaterialPlanner.matches(current, want)) {
                 continue;
             }
             boolean empty = current.isAir() || current.isReplaceable();

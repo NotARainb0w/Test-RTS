@@ -122,6 +122,8 @@ public final class NativeBuilder {
     private final Map<BlockPos, Integer> failures = new java.util.HashMap<>();
     private final Map<BlockPos, Integer> placeAttempts = new java.util.HashMap<>();
     private final Map<BlockPos, Integer> breakAttempts = new java.util.HashMap<>();
+    /** Spots this order has placed a block in; never mined again even if the block changed afterwards. */
+    private final Set<BlockPos> placedHere = new HashSet<>();
     /** Walks toward a target that ended stuck, per target. */
     private final Map<BlockPos, Integer> walkStucks = new java.util.HashMap<>();
     /** Times we stepped aside for a target our body was in the way of. */
@@ -776,11 +778,7 @@ public final class NativeBuilder {
         if (!world.hasChunkAt(pos)) {
             return false;
         }
-        BlockState current = world.getBlockState(pos);
-        if (wanted.isAir()) {
-            return current.isAir() || current.getBlock() instanceof LiquidBlock;
-        }
-        return current.getBlock() == wanted.getBlock();
+        return com.testrts.rtsclient.task.MaterialPlanner.matches(world.getBlockState(pos), wanted);
     }
 
     @Nullable
@@ -870,6 +868,12 @@ public final class NativeBuilder {
             supportedInReach = true;
             BlockState current = world.getBlockState(p);
             if (!current.isAir() && !current.canBeReplaced()) {
+                if (this.placedHere.contains(p)) {
+                    // We put a block here and it turned into something else by itself (grass to dirt,
+                    // a torch that became a wall torch...). Leave it rather than mine and re-place forever.
+                    this.todo.remove(p);
+                    continue;
+                }
                 // Something else is in the way: mine it first.
                 if (current.getDestroySpeed(world, p) < 0) {
                     impossible(p);
@@ -899,6 +903,7 @@ public final class NativeBuilder {
                 continue;
             }
             if (place(client, p, wanted)) {
+                this.placedHere.add(p.immutable());
                 this.cooldown = PLACE_DELAY_TICKS;
                 return true;
             }
@@ -1060,7 +1065,9 @@ public final class NativeBuilder {
 
     /** Count a mining attempt; a block that keeps coming back is set aside for later. */
     private boolean tooManyBreaks(BlockPos p) {
-        if (this.breakAttempts.merge(p, 1, Integer::sum) > MAX_BREAK_ATTEMPTS) {
+        // Build orders give up on a spot quickly: something keeps putting a block back there.
+        int cap = this.clearing ? MAX_BREAK_ATTEMPTS : 2;
+        if (this.breakAttempts.merge(p, 1, Integer::sum) > cap) {
             this.breakAttempts.remove(p);
             fail(p);
             return true;

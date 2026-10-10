@@ -121,8 +121,7 @@ public final class BuildTask implements RtsTask {
                 Map<BlockPos, BlockState> leftover = new LinkedHashMap<>();
                 for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
                     BlockState now = client.level.getBlockState(e.getKey());
-                    boolean ok = e.getValue().isAir() ? now.isAir() || now.getBlock() instanceof net.minecraft.world.level.block.LiquidBlock
-                            : now.getBlock() == e.getValue().getBlock();
+                    boolean ok = MaterialPlanner.matches(now, e.getValue());
                     if (!ok) {
                         leftover.put(e.getKey(), e.getValue());
                     }

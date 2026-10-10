@@ -61,7 +61,7 @@ public final class CompletedBuilds {
                     continue;
                 }
                 loaded++;
-                if (world.getBlockState(b.getKey()).getBlock() != b.getValue().getBlock()) {
+                if (!MaterialPlanner.matches(world.getBlockState(b.getKey()), b.getValue())) {
                     gaps.put(b.getKey(), b.getValue());
                 }
             }
