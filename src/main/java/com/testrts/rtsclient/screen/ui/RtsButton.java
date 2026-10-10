@@ -25,6 +25,8 @@ public class RtsButton extends PressableWidget {
     private Supplier<String> label;
     private boolean iconOnly;
     private boolean centered = true;
+    private float hoverAnim;
+    private float selectAnim;
 
     public RtsButton(int x, int y, int width, int height, String text, Runnable action) {
         super(x, y, width, height, Text.literal(text));
@@ -84,11 +86,26 @@ public class RtsButton extends PressableWidget {
         int h = getHeight();
         boolean sel = this.selected.getAsBoolean();
         boolean hover = this.active && isHovered();
-        int bg = !this.active ? Theme.BTN_DISABLED : sel ? Theme.BTN_SELECTED : hover ? Theme.BTN_HOVER : Theme.BTN;
-        Theme.round(ctx, x, y, w, h, bg);
-        Theme.outline(ctx, x, y, w, h, sel ? Theme.withAlpha(Theme.ACCENT, 0.7F) : hover ? 0xFF3C4A5C : 0xFF2A3441);
-        if (sel) {
-            ctx.fill(x + 2, y + h - 2, x + w - 2, y + h - 1, Theme.ACCENT);
+        // Ease hover and selection in and out instead of snapping.
+        this.hoverAnim += ((hover ? 1F : 0F) - this.hoverAnim) * 0.3F;
+        this.selectAnim += ((sel ? 1F : 0F) - this.selectAnim) * 0.25F;
+        float hv = this.hoverAnim;
+        float sv = this.selectAnim;
+        int base = !this.active ? Theme.BTN_DISABLED : Theme.mix(Theme.mix(Theme.BTN, Theme.BTN_HOVER, hv), Theme.BTN_SELECTED, sv);
+        Theme.round(ctx, x, y, w, h, base);
+        if (this.active && h > 4) {
+            ctx.fillGradient(x + 1, y + 1, x + w - 1, y + h / 2, Theme.mix(base, 0xFFFFFFFF, 0.07F + 0.05F * hv), base);
+        }
+        int edge = Theme.mix(Theme.mix(0xFF2A3441, 0xFF4A5C70, hv), Theme.withAlpha(Theme.ACCENT, 0.85F), sv);
+        Theme.outline(ctx, x, y, w, h, edge);
+        if (sv > 0.02F) {
+            int lw = Math.round((w - 4) * sv);
+            int lx = x + (w - lw) / 2;
+            ctx.fill(lx, y + h - 2, lx + lw, y + h - 1, Theme.ACCENT);
+            ctx.fill(lx, y + h - 3, lx + lw, y + h - 2, Theme.withAlpha(Theme.ACCENT, 0.3F));
+        }
+        if (hv > 0.02F && !sel) {
+            ctx.fill(x + 1, y + 2, x + 2, y + h - 2, Theme.withAlpha(Theme.ACCENT, 0.8F * hv));
         }
 
         int contentX = x + 4;

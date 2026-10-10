@@ -968,6 +968,7 @@ public final class RtsScreen extends Screen {
         super.render(ctx, mouseX, mouseY, delta);
 
         drawStatus(ctx);
+        drawCompass(ctx);
         if (hasLeftPanel()) {
             drawLeftPanel(ctx);
         }
@@ -1014,8 +1015,78 @@ public final class RtsScreen extends Screen {
             x += Theme.chip(ctx, this.textRenderer, "CUT Y" + cut, x, 7, 0xFF3A2E10, Theme.GOLD) + 4;
         }
         String engine = Engine.activeName() + ": " + Engine.status();
-        if (x + this.textRenderer.getWidth(engine) < limit) {
-            ctx.drawText(this.textRenderer, engine, x, 8, Theme.TEXT_DIM, false);
+        if (x + 8 + this.textRenderer.getWidth(engine) < limit) {
+            boolean busy = !TaskQueue.get().isEmpty();
+            Theme.light(ctx, x + 3, 12, busy ? Theme.GOOD : Theme.TEXT_FAINT, busy);
+            ctx.drawText(this.textRenderer, engine, x + 9, 8, busy ? Theme.TEXT : Theme.TEXT_DIM, false);
+        }
+    }
+
+    /** A compass strip under the top bar (follows the camera), with the cursor's block position below it. */
+    private void drawCompass(DrawContext ctx) {
+        int left = hasLeftPanel() ? PAD + LEFT_W : 0;
+        int right = rightX();
+        int w = Math.min(150, right - left - 20);
+        if (w < 80) {
+            return;
+        }
+        int cx = (left + right) / 2;
+        int x0 = cx - w / 2;
+        int y0 = TOP_H + 3;
+        int h = 13;
+        Theme.round(ctx, x0, y0, w, h, 0xB80E141B);
+        Theme.outline(ctx, x0, y0, w, h, Theme.BORDER);
+        float yaw = MathHelper.wrapDegrees(this.controller.camera().yaw());
+        float span = 70.0F;
+        float ppd = (w - 8) / (2.0F * span);
+        ctx.enableScissor(x0 + 1, y0, x0 + w - 1, y0 + h);
+        int start = (int) Math.floor((yaw - span) / 15.0F) * 15;
+        for (int a = start; a <= yaw + span; a += 15) {
+            int px = Math.round(cx + (a - yaw) * ppd);
+            int deg = Math.floorMod(a, 360);
+            String label = switch (deg) {
+                case 0 -> "S";
+                case 90 -> "W";
+                case 180 -> "N";
+                case 270 -> "E";
+                case 45 -> "SW";
+                case 135 -> "NW";
+                case 225 -> "NE";
+                case 315 -> "SE";
+                default -> null;
+            };
+            float fade = 1.0F - Math.min(1.0F, Math.abs(a - yaw) / span);
+            if (label != null) {
+                boolean cardinal = deg % 90 == 0;
+                int color = deg == 180 ? Theme.BAD : cardinal ? Theme.TEXT : Theme.TEXT_DIM;
+                int tw = this.textRenderer.getWidth(label);
+                ctx.drawText(this.textRenderer, label, px - tw / 2, y0 + 3, Theme.withAlpha(color, 0.25F + 0.75F * fade), false);
+            } else {
+                ctx.fill(px, y0 + 4, px + 1, y0 + h - 4, Theme.withAlpha(Theme.TEXT_FAINT, 0.3F + 0.7F * fade));
+            }
+        }
+        ctx.disableScissor();
+        // Heading marker.
+        ctx.fill(cx - 2, y0 - 1, cx + 3, y0, Theme.ACCENT);
+        ctx.fill(cx - 1, y0, cx + 2, y0 + 1, Theme.ACCENT);
+        ctx.fill(cx, y0 + 1, cx + 1, y0 + 2, Theme.ACCENT);
+
+        BlockHitResult hover = this.controller.hover();
+        if (hover != null && this.client.player != null) {
+            BlockPos t = WorldOverlay.targetFor(this.session, hover);
+            double dist = Math.sqrt(t.getSquaredDistance(this.client.player.getX(), this.client.player.getY(), this.client.player.getZ()));
+            String coords = t.getX() + "  " + t.getY() + "  " + t.getZ();
+            String d = String.format(Locale.ROOT, "%.0fm", dist);
+            int cw = this.textRenderer.getWidth(coords) + this.textRenderer.getWidth(d) + 34;
+            int bx = cx - cw / 2;
+            int by = y0 + h + 2;
+            Theme.round(ctx, bx, by, cw, 11, 0xA00E141B);
+            int tx = bx + 4;
+            ctx.drawText(this.textRenderer, "XYZ", tx, by + 2, Theme.ACCENT, false);
+            tx += this.textRenderer.getWidth("XYZ") + 5;
+            ctx.drawText(this.textRenderer, coords, tx, by + 2, Theme.TEXT, false);
+            tx += this.textRenderer.getWidth(coords) + 6;
+            ctx.drawText(this.textRenderer, d, tx, by + 2, Theme.TEXT_DIM, false);
         }
     }
 
@@ -1068,15 +1139,19 @@ public final class RtsScreen extends Screen {
         for (int i = this.taskScroll; i < tasks.size() && i < this.taskScroll + visible; i++) {
             RtsTask task = tasks.get(i);
             boolean running = i == 0;
-            Theme.round(ctx, x0, y, x1 - x0, CARD_H, running ? 0xFF16283A : 0xFF19212B);
-            Theme.outline(ctx, x0, y, x1 - x0, CARD_H, running ? Theme.withAlpha(Theme.ACCENT, 0.5F) : Theme.BORDER);
+            boolean cardHover = mx >= x0 && mx < x1 && my >= y && my < y + CARD_H;
+            int cardBg = running ? 0xFF16283A : cardHover ? 0xFF1F2834 : 0xFF19212B;
+            Theme.round(ctx, x0, y, x1 - x0, CARD_H, cardBg);
+            ctx.fillGradient(x0 + 1, y + 1, x1 - 1, y + CARD_H / 2, Theme.mix(cardBg, 0xFFFFFFFF, 0.05F), cardBg);
+            Theme.outline(ctx, x0, y, x1 - x0, CARD_H, running
+                    ? Theme.withAlpha(Theme.ACCENT, 0.35F + 0.4F * Theme.pulse(1600)) : Theme.BORDER);
             if (running) {
                 ctx.fill(x0, y + 2, x0 + 2, y + CARD_H - 2, Theme.ACCENT);
             }
             ctx.drawText(this.textRenderer, trim(task.label(), x1 - x0 - 18), x0 + 5, y + 3, running ? Theme.TEXT : 0xFFC9D3DD, false);
             ctx.drawText(this.textRenderer, trim(task.detail(), x1 - x0 - 10), x0 + 5, y + 13, Theme.TEXT_DIM, false);
             if (task instanceof BuildTask build && build.progress() >= 0) {
-                Theme.bar(ctx, x0 + 4, y + CARD_H - 4, x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD);
+                Theme.bar(ctx, x0 + 4, y + CARD_H - 4, x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD, running);
             }
             int bx = x1 - 11;
             boolean hot = mx >= bx && mx < bx + 9 && my >= y + 2 && my < y + 11;
@@ -1263,11 +1338,18 @@ public final class RtsScreen extends Screen {
                 case CHAT -> Theme.TEXT_FAINT;
                 default -> Theme.ACCENT;
             };
-            int w = Math.min(rightX() - left - 6, this.textRenderer.getWidth(e.text()) + 12);
-            Theme.round(ctx, left, y, w, 12, Theme.withAlpha(0xE0101820, alpha));
-            ctx.fill(left, y + 1, left + 2, y + 11, Theme.withAlpha(stripe, alpha));
-            ctx.enableScissor(left, y, left + w - 2, y + 12);
-            ctx.drawText(this.textRenderer, e.text(), left + 6, y + 2, Theme.withAlpha(0xFFFFFFFF, alpha), false);
+            // Slide in from the left with an ease-out over the first 220 ms.
+            float in = Math.min(1.0F, (System.currentTimeMillis() - e.createdAt()) / 220.0F);
+            float ease = 1.0F - (1.0F - in) * (1.0F - in) * (1.0F - in);
+            int lx = left - Math.round((1.0F - ease) * 24.0F);
+            alpha *= ease;
+            int w = Math.min(rightX() - left - 6, this.textRenderer.getWidth(e.text()) + 14);
+            Theme.round(ctx, lx, y, w, 12, Theme.withAlpha(0xE0101820, alpha));
+            ctx.fillGradient(lx + 1, y + 1, lx + w - 1, y + 6, Theme.withAlpha(0x20FFFFFF, alpha), Theme.withAlpha(0x00FFFFFF, alpha));
+            ctx.fill(lx, y + 1, lx + 2, y + 11, Theme.withAlpha(stripe, alpha));
+            ctx.fill(lx + 2, y + 1, lx + 4, y + 11, Theme.withAlpha(stripe, alpha * 0.25F));
+            ctx.enableScissor(lx, y, lx + w - 2, y + 12);
+            ctx.drawText(this.textRenderer, e.text(), lx + 8, y + 2, Theme.withAlpha(0xFFFFFFFF, alpha), false);
             ctx.disableScissor();
             y += 14;
         }

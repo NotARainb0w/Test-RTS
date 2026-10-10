@@ -253,7 +253,10 @@ public final class WorldOverlay {
                 case TERRAIN -> new float[]{0.55F, 0.85F, 0.35F};
                 case MEASURE -> new float[]{0.85F, 0.55F, 1.0F};
             };
-            LevelRenderer.renderLineBox(matrices, lines, new AABB(target).inflate(0.01), c[0], c[1], c[2], 1.0F);
+            // Pulsing outline with a faint outer glow, so the cursor reads at a glance.
+            float pulse = (float) (0.5 - 0.5 * Math.cos((System.currentTimeMillis() % 1200) / 1200.0 * Math.PI * 2.0));
+            LevelRenderer.renderLineBox(matrices, lines, new AABB(target).inflate(0.01), c[0], c[1], c[2], 0.65F + 0.35F * pulse);
+            LevelRenderer.renderLineBox(matrices, lines, new AABB(target).inflate(0.04 + 0.03 * pulse), c[0], c[1], c[2], 0.25F * (1.0F - pulse));
         }
 
         if (session.airPlace && hover != null) {
