@@ -1,7 +1,7 @@
 package com.testrts.rtsclient.task;
 
 import com.testrts.rtsclient.RtsClientMod;
-import com.testrts.rtsclient.baritone.BaritoneBridge;
+import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.MinecraftClient;
 
@@ -46,7 +46,7 @@ public final class TaskQueue {
             task.cancel(client);
         }
         this.tasks.clear();
-        BaritoneBridge.stop();
+        Engine.stop();
         if (client.player != null && client.player.currentScreenHandler != client.player.playerScreenHandler) {
             client.player.closeHandledScreen();
         }
@@ -58,7 +58,7 @@ public final class TaskQueue {
         if (this.tasks.remove(task)) {
             task.cancel(client);
             if (wasHead) {
-                BaritoneBridge.stop();
+                Engine.stop();
             }
         }
     }

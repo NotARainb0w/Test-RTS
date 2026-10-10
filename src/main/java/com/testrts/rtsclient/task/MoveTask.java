@@ -1,6 +1,6 @@
 package com.testrts.rtsclient.task;
 
-import com.testrts.rtsclient.baritone.BaritoneBridge;
+import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
@@ -31,15 +31,15 @@ public final class MoveTask implements RtsTask {
     @Override
     public Status tick(MinecraftClient client, TaskQueue queue) {
         if (this.ticks < 0) {
-            if (!BaritoneBridge.goTo(this.feet)) {
-                Messages.error("Baritone isn't installed, can't move");
+            if (!Engine.goTo(this.feet)) {
+                Messages.warn("No walkable path to " + this.feet.toShortString());
                 return Status.FAILED;
             }
             this.ticks = 0;
             return Status.RUNNING;
         }
         this.ticks++;
-        if (this.ticks < 6 || BaritoneBridge.isMoving()) {
+        if (this.ticks < 6 || Engine.isMoving()) {
             return Status.RUNNING;
         }
         return Status.DONE;

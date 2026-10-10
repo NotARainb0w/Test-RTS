@@ -1,6 +1,6 @@
 package com.testrts.rtsclient.task;
 
-import com.testrts.rtsclient.baritone.BaritoneBridge;
+import com.testrts.rtsclient.exec.Engine;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.math.BlockPos;
 
@@ -25,8 +25,8 @@ final class WalkPhase {
 
     Result tick(MinecraftClient client) {
         if (Reach.inReach(client, this.target)) {
-            if (this.ticksSinceRequest >= 0 && BaritoneBridge.isMoving()) {
-                BaritoneBridge.stop();
+            if (this.ticksSinceRequest >= 0 && Engine.isMoving()) {
+                Engine.stop();
             }
             this.ticksSinceRequest = -1;
             return Result.IN_REACH;
@@ -34,11 +34,11 @@ final class WalkPhase {
         if (this.ticksSinceRequest >= 0) {
             this.ticksSinceRequest++;
             // Baritone takes a few ticks to start pathing; don't mistake that for "arrived".
-            if (this.ticksSinceRequest < START_GRACE_TICKS || BaritoneBridge.isMoving()) {
+            if (this.ticksSinceRequest < START_GRACE_TICKS || Engine.isMoving()) {
                 return Result.WALKING;
             }
         }
-        if (this.attempts >= MAX_ATTEMPTS || !BaritoneBridge.goNextTo(this.target)) {
+        if (this.attempts >= MAX_ATTEMPTS || !Engine.goNextTo(this.target)) {
             return Result.UNREACHABLE;
         }
         this.attempts++;

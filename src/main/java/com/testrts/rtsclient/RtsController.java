@@ -72,7 +72,7 @@ public final class RtsController {
         this.player = client.player;
         this.camera.enable(client);
         if (!BaritoneBridge.isAvailable()) {
-            Messages.warn("Baritone not found: you can look around and link storage, but not build or move");
+            Messages.info("Baritone not found - using the built-in engine for walking, building and mining");
         } else if (RtsConfig.get().manageBaritoneSettings) {
             BaritoneBridge.applySettings(RtsConfig.get().strictOrientation);
         }

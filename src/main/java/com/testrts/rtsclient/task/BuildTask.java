@@ -1,6 +1,6 @@
 package com.testrts.rtsclient.task;
 
-import com.testrts.rtsclient.baritone.BaritoneBridge;
+import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.config.RtsConfig;
 import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.util.Messages;
@@ -61,10 +61,6 @@ public final class BuildTask implements RtsTask {
         if (client.world == null) {
             return Status.FAILED;
         }
-        if (!BaritoneBridge.isAvailable()) {
-            Messages.error("Baritone isn't installed, can't " + (this.clearing ? "mine" : "build"));
-            return Status.FAILED;
-        }
         if (!this.started) {
             if (!this.clearing && tryFetch(client, queue)) {
                 return Status.RUNNING;
@@ -72,10 +68,8 @@ public final class BuildTask implements RtsTask {
             if (MaterialPlanner.remaining(client.world, this.blocks) == 0) {
                 return Status.DONE;
             }
-            if (RtsConfig.get().manageBaritoneSettings) {
-                BaritoneBridge.applySettings(RtsConfig.get().strictOrientation);
-            }
-            BaritoneBridge.build("rts-" + (this.clearing ? "clear" : "build"), this.blocks, RtsConfig.get().strictOrientation);
+            Engine.build("rts-" + (this.clearing ? "clear" : "build"), this.blocks,
+                    RtsConfig.get().strictOrientation, RtsConfig.get().manageBaritoneSettings);
             this.started = true;
             this.grace = START_GRACE_TICKS;
             this.stallReported = false;
@@ -87,7 +81,7 @@ public final class BuildTask implements RtsTask {
             return Status.RUNNING;
         }
         int left = MaterialPlanner.remaining(client.world, this.blocks);
-        if (!BaritoneBridge.isBuilding()) {
+        if (!Engine.isBuilding()) {
             if (left > 0) {
                 Messages.warn(this.label + ": " + left + " block(s) left that Baritone couldn't do");
             } else {
@@ -96,12 +90,12 @@ public final class BuildTask implements RtsTask {
             return Status.DONE;
         }
         this.detail = left + " / " + this.blocks.size() + " left";
-        if (BaritoneBridge.isBuilderPaused()) {
+        if (Engine.isBuilderPaused()) {
             this.pausedTicks++;
             Map<Item, Integer> missing = this.clearing ? Map.of() : MaterialPlanner.missing(client, this.blocks);
             if (!missing.isEmpty() && canFetch(missing)) {
                 // Builder can't continue without blocks: stop it, fetch, then this task restarts it.
-                BaritoneBridge.stop();
+                Engine.stop();
                 this.started = false;
                 queueFetch(missing, queue);
                 return Status.RUNNING;
@@ -113,7 +107,7 @@ public final class BuildTask implements RtsTask {
             this.detail = missing.isEmpty() ? "stuck" : "missing " + MaterialPlanner.describe(missing, 2);
             // Every few seconds, nudge the builder in case the player sorted things out by hand.
             if (this.pausedTicks % 100 == 0) {
-                BaritoneBridge.resumeBuilder();
+                Engine.resumeBuilder();
             }
         } else {
             this.pausedTicks = 0;
@@ -158,7 +152,7 @@ public final class BuildTask implements RtsTask {
     @Override
     public void cancel(MinecraftClient client) {
         if (this.started) {
-            BaritoneBridge.stop();
+            Engine.stop();
         }
     }
 }

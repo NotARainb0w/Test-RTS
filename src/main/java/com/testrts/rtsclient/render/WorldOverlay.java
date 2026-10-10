@@ -83,6 +83,15 @@ public final class WorldOverlay {
             }
         }
 
+        // Built-in engine path.
+        java.util.List<BlockPos> path = com.testrts.rtsclient.exec.NativeEngine.get().currentPath();
+        if (path != null) {
+            for (BlockPos p : path) {
+                WorldRenderer.drawBox(matrices, lines, new Box(p.getX() + 0.35, p.getY(), p.getZ() + 0.35,
+                        p.getX() + 0.65, p.getY() + 0.08, p.getZ() + 0.65), 0.4F, 0.8F, 1.0F, 0.9F);
+            }
+        }
+
         // The player's body, so it's easy to find from above.
         WorldRenderer.drawBox(matrices, lines, client.player.getBoundingBox().expand(0.05), 0.35F, 0.75F, 1.0F, 0.9F);
 

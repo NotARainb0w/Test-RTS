@@ -4,6 +4,7 @@
   "package": "com.testrts.rtsclient.mixin",
   "compatibilityLevel": "JAVA_17",
   "client": [
+    "ChatHudMixin",
     "ClientPlayerEntityMixin",
     "GameRendererMixin",
     "MinecraftClientMixin"

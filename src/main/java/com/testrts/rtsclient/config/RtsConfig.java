@@ -34,6 +34,8 @@ public final class RtsConfig {
     public boolean strictOrientation = false;
     /** Let the mod flip the Baritone settings it relies on (allowInventory, allowPlace, allowBreak). */
     public boolean manageBaritoneSettings = true;
+    /** Who walks, places and mines: "auto" (Baritone if installed), "builtin" or "baritone". */
+    public String engine = "auto";
     /** Item ids pinned to the quick bar. */
     public List<String> pinned = new ArrayList<>();
 

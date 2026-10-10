@@ -1,7 +1,12 @@
 package com.testrts.rtsclient.build;
 
+import net.minecraft.block.Block;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.math.BlockPos;
 
+import java.util.ArrayDeque;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
@@ -33,6 +38,7 @@ public final class ShapeGenerator {
             case CIRCLE -> cylinder(out, a, b, 1, hollow);
             case CYLINDER -> cylinder(out, a, b, height, hollow);
             case SPHERE -> sphere(out, a, b, hollow);
+            case VEIN -> vein(out, a);
         }
         return new Result(out.positions, out.truncated);
     }
@@ -193,6 +199,39 @@ public final class ShapeGenerator {
                     }
                     if (!out.add(center.getX() + x, center.getY() + y, center.getZ() + z)) {
                         return;
+                    }
+                }
+            }
+        }
+    }
+
+    /** Flood fill through blocks of the same type as {@code start} (26-connected, like ore veins). */
+    private static void vein(Collector out, BlockPos start) {
+        ClientWorld world = MinecraftClient.getInstance().world;
+        if (world == null) {
+            return;
+        }
+        Block block = world.getBlockState(start).getBlock();
+        if (world.getBlockState(start).isAir()) {
+            out.add(start.getX(), start.getY(), start.getZ());
+            return;
+        }
+        ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        Set<BlockPos> seen = new HashSet<>();
+        queue.add(start);
+        seen.add(start);
+        while (!queue.isEmpty()) {
+            BlockPos p = queue.poll();
+            if (!out.add(p.getX(), p.getY(), p.getZ())) {
+                return;
+            }
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        BlockPos n = p.add(dx, dy, dz);
+                        if (seen.add(n) && world.isChunkLoaded(n) && world.getBlockState(n).getBlock() == block) {
+                            queue.add(n);
+                        }
                     }
                 }
             }

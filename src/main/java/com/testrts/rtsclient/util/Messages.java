@@ -37,6 +37,16 @@ public final class Messages {
         push(Text.literal(message).formatted(Formatting.RED));
     }
 
+    /** A chat line, shown in the RTS screen only (it's already in chat). */
+    public static void chat(Text text) {
+        synchronized (ENTRIES) {
+            ENTRIES.addLast(new Entry(text, System.currentTimeMillis()));
+            while (ENTRIES.size() > MAX) {
+                ENTRIES.removeFirst();
+            }
+        }
+    }
+
     private static void push(Text text) {
         synchronized (ENTRIES) {
             ENTRIES.addLast(new Entry(text, System.currentTimeMillis()));

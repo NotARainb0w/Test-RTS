@@ -9,7 +9,8 @@ public enum BuildShape {
     BOX("Box", "Cuboid between A and B (at least Height tall)", true, true),
     CIRCLE("Circle", "Disc centred on A through B", true, false),
     CYLINDER("Cylinder", "Disc centred on A, Height tall", true, true),
-    SPHERE("Sphere", "Ball centred on A through B", true, false);
+    SPHERE("Sphere", "Ball centred on A through B", true, false),
+    VEIN("Connected", "Every touching block of the clicked type (mine a vein, or replace it with the brush)", false, false);
 
     private final String label;
     private final String description;
@@ -37,6 +38,11 @@ public enum BuildShape {
 
     public boolean usesHeight() {
         return this.usesHeight;
+    }
+
+    /** Shapes placed with one click instead of two. */
+    public boolean singleClick() {
+        return this == BLOCK || this == VEIN;
     }
 
     public BuildShape next() {

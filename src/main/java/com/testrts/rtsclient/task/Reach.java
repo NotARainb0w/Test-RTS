@@ -59,6 +59,14 @@ public final class Reach {
         player.swingHand(Hand.MAIN_HAND);
     }
 
+    /** Set an exact rotation and tell the server about it right away. */
+    public static void face(ClientPlayerEntity player, float yaw, float pitch) {
+        player.setYaw(yaw);
+        player.setPitch(pitch);
+        player.setHeadYaw(yaw);
+        player.networkHandler.sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, player.isOnGround()));
+    }
+
     public static void lookAt(ClientPlayerEntity player, Vec3d target) {
         Vec3d eye = player.getEyePos();
         double dx = target.x - eye.x;
@@ -67,9 +75,6 @@ public final class Reach {
         double horizontal = Math.sqrt(dx * dx + dz * dz);
         float yaw = (float) (MathHelper.atan2(dz, dx) * MathHelper.DEGREES_PER_RADIAN) - 90.0F;
         float pitch = (float) -(MathHelper.atan2(dy, horizontal) * MathHelper.DEGREES_PER_RADIAN);
-        player.setYaw(yaw);
-        player.setPitch(pitch);
-        player.setHeadYaw(yaw);
-        player.networkHandler.sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(yaw, pitch, player.isOnGround()));
+        face(player, yaw, pitch);
     }
 }

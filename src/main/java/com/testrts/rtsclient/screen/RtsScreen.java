@@ -3,10 +3,12 @@ package com.testrts.rtsclient.screen;
 import com.testrts.rtsclient.RtsClientMod;
 import com.testrts.rtsclient.RtsController;
 import com.testrts.rtsclient.baritone.BaritoneBridge;
+import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.build.BuildSession;
 import com.testrts.rtsclient.build.BuildShape;
 import com.testrts.rtsclient.build.ShapeGenerator;
 import com.testrts.rtsclient.build.ToolMode;
+import com.testrts.rtsclient.build.UndoHistory;
 import com.testrts.rtsclient.config.RtsConfig;
 import com.testrts.rtsclient.render.WorldOverlay;
 import com.testrts.rtsclient.storage.StorageManager;
@@ -157,7 +159,7 @@ public final class RtsScreen extends Screen {
     }
 
     private int rightPanelH() {
-        return Math.min(bottomY() - TOP_H - PAD, 12 + 6 * 22 + 70);
+        return Math.min(bottomY() - TOP_H - PAD, 54 + 5 * 22 + 70);
     }
 
     // ------------------------------------------------------------------ widgets
@@ -177,16 +179,37 @@ public final class RtsScreen extends Screen {
         }
 
         int rx = rightX();
-        addDrawableChild(ButtonWidget.builder(Text.literal("Stop"), b -> {
+        // Command buttons sit at the top of the right panel so the top bar never overflows.
+        int bx = rx + PAD;
+        int bw = RIGHT_W - 2 * PAD;
+        int half0 = (bw - 2) / 2;
+        addDrawableChild(ButtonWidget.builder(engineLabel(), b -> {
+                    Engine.cycle();
+                    b.setMessage(engineLabel());
+                    Messages.info("Engine: " + Engine.configured().label() + " (using " + Engine.activeName() + ")");
+                })
+                .dimensions(bx, TOP_H + 4, bw - 40, 16)
+                .tooltip(Tooltip.of(Text.literal("Who walks, builds and mines. Auto = Baritone when installed, otherwise the built-in engine. "
+                        + "Switch to Built-in if Baritone misbehaves.")))
+                .build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Undo"), b -> {
+                    if (this.client.world != null) {
+                        UndoHistory.undoLast(this.client.world);
+                    }
+                })
+                .dimensions(bx + bw - 38, TOP_H + 4, 38, 16)
+                .tooltip(Tooltip.of(Text.literal("Put back what your last order changed [Ctrl+Z]")))
+                .build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Store inv"), b -> queue(new DepositTask()))
+                .dimensions(bx, TOP_H + 22, half0, 16)
+                .tooltip(Tooltip.of(Text.literal("Walk to linked storage and put away everything outside your hotbar (pinned items stay)")))
+                .build());
+        addDrawableChild(ButtonWidget.builder(Text.literal("Stop all"), b -> {
                     TaskQueue.get().clear(this.client);
                     Messages.info("All orders cancelled");
                 })
-                .dimensions(this.width - PAD - 40, 2, 40, 18)
-                .tooltip(Tooltip.of(Text.literal("Cancel every order and stop Baritone")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Store inv"), b -> queue(new DepositTask()))
-                .dimensions(this.width - PAD - 40 - 2 - 58, 2, 58, 18)
-                .tooltip(Tooltip.of(Text.literal("Walk to linked storage and put away everything outside your hotbar (pinned items stay)")))
+                .dimensions(bx + half0 + 2, TOP_H + 22, half0, 16)
+                .tooltip(Tooltip.of(Text.literal("Cancel every order and stop walking/building")))
                 .build());
 
         if (this.session.tool.usesShapes()) {
@@ -275,6 +298,10 @@ public final class RtsScreen extends Screen {
         refreshPalette();
     }
 
+    private static Text engineLabel() {
+        return Text.literal("Engine: " + Engine.configured().label());
+    }
+
     @Override
     public boolean shouldPause() {
         return false;
@@ -316,10 +343,6 @@ public final class RtsScreen extends Screen {
             return;
         }
         Messages.info("Linked " + added + " container(s), reading " + unread + "...");
-        if (!BaritoneBridge.isAvailable()) {
-            Messages.warn("Baritone is needed to walk to them - open them by hand to read their contents");
-            return;
-        }
         boolean alreadyQueued = TaskQueue.get().snapshot().stream().anyMatch(t -> t instanceof IndexStorageTask);
         if (!alreadyQueued) {
             queue(new IndexStorageTask(this.client.player.getBlockPos(), true));
@@ -353,7 +376,7 @@ public final class RtsScreen extends Screen {
                     Messages.warn("Pick a block from the bar below first (or middle-click a block in the world)");
                     return;
                 }
-                shapeClick(WorldOverlay.targetFor(this.session, hit));
+                shapeClick(this.session.shape == BuildShape.VEIN ? hit.getBlockPos() : WorldOverlay.targetFor(this.session, hit));
             }
             case DESTROY -> shapeClick(hit.getBlockPos());
             case INTERACT -> {
@@ -372,7 +395,7 @@ public final class RtsScreen extends Screen {
     }
 
     private void shapeClick(BlockPos target) {
-        if (this.session.shape == BuildShape.BLOCK) {
+        if (this.session.shape.singleClick()) {
             this.session.anchorA = target;
             this.session.anchorB = target;
             confirmOrder();
@@ -427,6 +450,11 @@ public final class RtsScreen extends Screen {
             Messages.info("Nothing to do there");
             return;
         }
+        Map<BlockPos, BlockState> before = new LinkedHashMap<>();
+        for (BlockPos p : order.keySet()) {
+            before.put(p, this.client.world.getBlockState(p));
+        }
+        UndoHistory.push(label, before);
         queue(new BuildTask(label, order, clearing));
     }
 
@@ -711,6 +739,12 @@ public final class RtsScreen extends Screen {
                 confirmOrder();
                 return true;
             }
+            case GLFW.GLFW_KEY_Z -> {
+                if (hasControlDown() && this.client.world != null) {
+                    UndoHistory.undoLast(this.client.world);
+                }
+                return true;
+            }
             case GLFW.GLFW_KEY_X, GLFW.GLFW_KEY_BACKSPACE -> {
                 this.session.clearSelection();
                 return true;
@@ -835,11 +869,10 @@ public final class RtsScreen extends Screen {
         ctx.drawTextWithShadow(this.textRenderer, vitals, x, 7, hp <= 6 ? 0xFFFF5555 : TEXT);
         x += this.textRenderer.getWidth(vitals) + 10;
 
-        String bar = "Baritone: " + BaritoneBridge.status();
-        int limit = this.width - PAD - 40 - 2 - 58 - 6;
+        String bar = Engine.activeName() + ": " + Engine.status();
+        int limit = this.width - PAD;
         if (x + this.textRenderer.getWidth(bar) < limit) {
-            ctx.drawTextWithShadow(this.textRenderer, bar, x, 7,
-                    BaritoneBridge.isAvailable() ? TEXT_DIM : 0xFFFF5555);
+            ctx.drawTextWithShadow(this.textRenderer, bar, x, 7, TEXT_DIM);
         }
     }
 
@@ -862,7 +895,7 @@ public final class RtsScreen extends Screen {
     }
 
     private int taskRowsTop() {
-        return TOP_H + 14;
+        return TOP_H + 54;
     }
 
     private int taskRowsVisible() {
@@ -873,7 +906,7 @@ public final class RtsScreen extends Screen {
     private void drawRightPanel(DrawContext ctx, int mx, int my) {
         int x = rightX() + PAD;
         List<RtsTask> tasks = TaskQueue.get().snapshot();
-        ctx.drawTextWithShadow(this.textRenderer, "Orders (" + tasks.size() + ")", x, TOP_H + 3, ACCENT);
+        ctx.drawTextWithShadow(this.textRenderer, "Orders (" + tasks.size() + ")", x, TOP_H + 43, ACCENT);
         int visible = taskRowsVisible();
         this.taskScroll = MathHelper.clamp(this.taskScroll, 0, Math.max(0, tasks.size() - visible));
         int y = taskRowsTop();
@@ -1004,6 +1037,7 @@ public final class RtsScreen extends Screen {
                 line = "Build: " + brush + orient + " | " + this.session.shape.label()
                         + (this.session.hollow && this.session.shape.supportsHollow() ? " hollow" : "")
                         + (this.session.shape.usesHeight() ? " h" + this.session.height : "");
+                line += materialSummary();
             }
             case DESTROY -> line = "Destroy | " + this.session.shape.label()
                     + (this.session.hollow && this.session.shape.supportsHollow() ? " hollow" : "")
@@ -1020,6 +1054,38 @@ public final class RtsScreen extends Screen {
         }
     }
 
+    private Object summaryKey;
+    private String summary = "";
+
+    /** " | needs 120, have 64 (+300 stored)" for the shape being drawn. */
+    private String materialSummary() {
+        BuildSession s = this.session;
+        if (s.anchorA == null || !(s.brush.getItem() instanceof BlockItem bi) || this.client.world == null) {
+            return "";
+        }
+        BlockHitResult hover = this.controller.hover();
+        BlockPos b = s.anchorB != null ? s.anchorB : hover != null ? WorldOverlay.targetFor(s, hover) : s.anchorA;
+        Object key = java.util.Objects.hash(s.shape, s.anchorA, b, s.height, s.hollow, bi);
+        if (!key.equals(this.summaryKey)) {
+            this.summaryKey = key;
+            ShapeGenerator.Result r = ShapeGenerator.generate(s.shape, s.anchorA, b, s.height, s.hollow, RtsConfig.get().maxShapeBlocks + 1);
+            if (r.truncated()) {
+                this.summary = " | too big";
+            } else {
+                int need = 0;
+                for (BlockPos p : r.positions()) {
+                    if (this.client.world.getBlockState(p).getBlock() != bi.getBlock()) {
+                        need++;
+                    }
+                }
+                int have = this.client.player == null ? 0 : this.client.player.getInventory().count(bi);
+                int stored = StorageManager.get().total(bi);
+                this.summary = " | needs " + need + ", have " + have + (stored > 0 ? " (+" + stored + " stored)" : "");
+            }
+        }
+        return this.summary;
+    }
+
     private void drawMessages(DrawContext ctx) {
         List<Messages.Entry> lines = Messages.visible();
         int left = this.session.tool.usesShapes() ? LEFT_W + PAD * 3 : PAD * 2;
@@ -1030,10 +1096,6 @@ public final class RtsScreen extends Screen {
                 ctx.drawTextWithShadow(this.textRenderer, e.text(), left, y, 0x00FFFFFF | alpha);
             }
             y += 10;
-        }
-        if (!BaritoneBridge.isAvailable()) {
-            String warn = "Baritone is not installed - building, mining and walking are disabled";
-            ctx.drawCenteredTextWithShadow(this.textRenderer, warn, this.width / 2, TOP_H + 6, 0xFFFF5555);
         }
     }
 

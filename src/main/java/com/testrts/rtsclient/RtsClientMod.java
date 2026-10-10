@@ -1,6 +1,8 @@
 package com.testrts.rtsclient;
 
 import com.testrts.rtsclient.config.RtsConfig;
+import com.testrts.rtsclient.exec.Engine;
+import com.testrts.rtsclient.exec.NativeEngine;
 import com.testrts.rtsclient.render.WorldOverlay;
 import com.testrts.rtsclient.storage.ContainerTracker;
 import com.testrts.rtsclient.storage.StorageManager;
@@ -69,5 +71,7 @@ public final class RtsClientMod implements ClientModInitializer {
         ContainerTracker.get().tick(client);
         RtsController.get().tick(client);
         TaskQueue.get().tick(client);
+        Engine.tick(client);
+        NativeEngine.get().tick(client);
     }
 }
