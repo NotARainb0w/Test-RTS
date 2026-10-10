@@ -11,26 +11,35 @@ import net.minecraft.client.network.ClientPlayerEntity;
  */
 public final class MovementInput extends Input {
     public boolean forward;
+    /** Back and sideways are only used to get unstuck. */
+    public boolean back;
+    public boolean left;
+    public boolean right;
     public boolean jump;
     public boolean sneak;
 
     @Override
     public void tick(boolean slowDown, float slowDownFactor) {
         this.pressingForward = this.forward;
-        this.pressingBack = false;
-        this.pressingLeft = false;
-        this.pressingRight = false;
-        this.movementForward = this.forward ? 1.0F : 0.0F;
-        this.movementSideways = 0.0F;
+        this.pressingBack = this.back;
+        this.pressingLeft = this.left;
+        this.pressingRight = this.right;
+        this.movementForward = (this.forward ? 1.0F : 0.0F) - (this.back ? 1.0F : 0.0F);
+        // Same sign as vanilla's keyboard input: left is positive.
+        this.movementSideways = (this.left ? 1.0F : 0.0F) - (this.right ? 1.0F : 0.0F);
         this.jumping = this.jump;
         this.sneaking = this.sneak;
         if (slowDown) {
             this.movementForward *= slowDownFactor;
+            this.movementSideways *= slowDownFactor;
         }
     }
 
     public void release() {
         this.forward = false;
+        this.back = false;
+        this.left = false;
+        this.right = false;
         this.jump = false;
         this.sneak = false;
     }

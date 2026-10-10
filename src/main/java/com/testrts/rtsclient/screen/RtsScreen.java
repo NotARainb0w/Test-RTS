@@ -19,6 +19,7 @@ import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.task.BuildTask;
 import com.testrts.rtsclient.task.DepositTask;
 import com.testrts.rtsclient.task.RtsTask;
+import com.testrts.rtsclient.task.CompletedBuilds;
 import com.testrts.rtsclient.task.TaskQueue;
 import com.testrts.rtsclient.util.Messages;
 import com.testrts.rtsclient.util.MouseRay;
@@ -72,6 +73,11 @@ public final class RtsScreen extends Screen {
     private static final int ROW = 15;
     private static final int CARD_H = 26;
     private static final int DRAG_THRESHOLD = 3;
+    /** Order card being dragged to a new place in the queue. */
+    @Nullable
+    private RtsTask dragTask;
+    private double dragFromY;
+    private boolean dragMoved;
 
     private enum Tab { ALL, INVENTORY, STORAGE }
 
@@ -201,6 +207,7 @@ public final class RtsScreen extends Screen {
             case CIRCLE -> Glyphs.CIRCLE;
             case CYLINDER -> Glyphs.CYLINDER;
             case SPHERE -> Glyphs.SPHERE;
+            case DOME -> Glyphs.DOME;
             case VEIN -> Glyphs.VEIN;
             case HOLE -> Glyphs.HOLE;
         };
@@ -259,11 +266,16 @@ public final class RtsScreen extends Screen {
             TaskQueue.get().clear(this.client);
             Messages.info("All orders cancelled");
         }).glyph(Glyphs.STOP, Theme.BAD);
+        y += 18;
+        button("Materials", "Everything your queued orders still need, what you carry and what's in storage. Fetch it all in one trip.",
+                rx, y, half, 16, () -> this.client.setScreen(new MaterialsScreen(this))).glyph(Glyphs.LIST, Theme.GOLD);
+        button("Repair", "Check finished builds for missing or broken blocks and queue orders to fill them in",
+                rx + half + 2, y, half, 16, () -> CompletedBuilds.queueRepairs(this.client.world, false)).glyph(Glyphs.WRENCH, Theme.ACCENT);
         y += 20;
         this.ordersTop = y + 11;
 
         int bottom = rightBottom();
-        int sy = bottom - PAD - 2 * 18;
+        int sy = bottom - PAD - 3 * 18;
         this.storageTop = sy - 24;
         this.ordersBottom = this.storageTop - 4;
         button("Scan nearby", "Link every chest, barrel and shulker box within " + RtsConfig.get().scanRadius
@@ -272,6 +284,12 @@ public final class RtsScreen extends Screen {
                 () -> this.actions.indexStorage(true));
         button("Re-index", "Visit every linked container again to refresh counts", rx, sy + 18, half, 16,
                 () -> this.actions.indexStorage(false));
+        button("Sort", "Reorganise linked chests so each item type has its own chest (labels show over them)",
+                rx, sy + 36, half, 16, () -> WorldActions.queue(new com.testrts.rtsclient.task.SortStorageTask()))
+                .glyph(Glyphs.LIST, Theme.GOLD);
+        button("Smelt", "Collect finished smelting from nearby furnaces, then load them with ores/food from storage and fuel",
+                rx + half + 2, sy + 36, half, 16, () -> WorldActions.queue(new com.testrts.rtsclient.task.SmeltTask()))
+                .icon(new ItemStack(Items.FURNACE));
         button("Unlink all", "Forget every storage link", rx + half + 2, sy + 18, half, 16, () -> {
             StorageManager.get().unlinkAll();
             Messages.info("Storage links cleared");
@@ -332,6 +350,27 @@ public final class RtsScreen extends Screen {
                 if (s.tool == ToolMode.BUILD) {
                     button("Rotate", "Turn directional blocks (stairs, logs, furnaces) [R]", x, y, full, ROW - 1, s.orientation::cycle)
                             .glyph(Glyphs.ROTATE, Theme.TEXT).left();
+                    y += ROW;
+                    // Pattern brush: a weighted random mix of blocks.
+                    button("+ Mix", "Add the selected block to the mix (click again to add more of it)", x, y, col, ROW - 1, () -> {
+                        if (s.brush.getItem() instanceof BlockItem) {
+                            s.mix.merge(s.brush.getItem(), 1, Integer::sum);
+                            Messages.info("Mix: " + s.mixDescription());
+                        } else {
+                            Messages.warn("Pick a block first, then add it to the mix");
+                        }
+                    }).selected(() -> !s.mix.isEmpty());
+                    button("Clear mix", "Build with a single block again", x + col + 2, y, col, ROW - 1, s.mix::clear);
+                    y += ROW;
+                    button("Roof", "Smart roof: click the top of a room's wall and get a roof sized to the room "
+                            + "(use stairs as the block for a sloped roof)", x, y, col, ROW - 1, () -> {
+                        s.roofPick = !s.roofPick;
+                        if (s.roofPick) {
+                            Messages.info("Roof: click the top of a wall of the room");
+                        }
+                    }).selected(() -> s.roofPick).icon(new ItemStack(Items.OAK_STAIRS));
+                    button("Style", "Gable: two slopes and closed ends. Hip: slopes on all four sides.", x + col + 2, y, col, ROW - 1,
+                            () -> s.roofStyle = s.roofStyle.next()).dynamic(() -> s.roofStyle.label());
                     y += ROW + 3;
                     y = initStatePicker(x, y, full);
                 }
@@ -347,7 +386,8 @@ public final class RtsScreen extends Screen {
                     s.pasteAnchor = null;
                     s.clearSelection();
                 }).selected(() -> s.clipboard == null && !s.cutOnCopy);
-                button("Cut", "Copy a region and mine the original: move a build", x + col + 2, y, col, ROW - 1, () -> {
+                button("Move", "Pick up a building: select it with two clicks, place it somewhere else; the original is "
+                        + "taken down and rebuilt there", x + col + 2, y, col, ROW - 1, () -> {
                     s.cutOnCopy = true;
                     s.clipboard = null;
                     s.pasteAnchor = null;
@@ -362,6 +402,42 @@ public final class RtsScreen extends Screen {
                 button("Air", "clear: also mine whatever is in the blueprint's empty spaces, for an exact copy. keep: only add blocks.",
                         x, y, full, ROW - 1, () -> s.pasteClearsAir = !s.pasteClearsAir)
                         .dynamic(() -> s.pasteClearsAir ? "Air: clear" : "Air: keep").left();
+                y += ROW;
+                // Repeat: a row or grid of copies.
+                int third = (full - 4) / 3;
+                button("-", "Fewer copies along X", x, y, 12, ROW - 1, () -> s.arrayX = Math.max(1, s.arrayX - 1))
+                        .glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("X", "Copies along X (click to reset)", x + 13, y, third - 26, ROW - 1, () -> s.arrayX = 1)
+                        .dynamic(() -> "X" + s.arrayX).selected(() -> s.arrayX > 1);
+                button("+", "More copies along X", x + third - 12, y, 12, ROW - 1, () -> s.arrayX = Math.min(32, s.arrayX + 1))
+                        .glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                int zx = x + third + 2;
+                button("-", "Fewer copies along Z", zx, y, 12, ROW - 1, () -> s.arrayZ = Math.max(1, s.arrayZ - 1))
+                        .glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("Z", "Copies along Z (click to reset)", zx + 13, y, third - 26, ROW - 1, () -> s.arrayZ = 1)
+                        .dynamic(() -> "Z" + s.arrayZ).selected(() -> s.arrayZ > 1);
+                button("+", "More copies along Z", zx + third - 12, y, 12, ROW - 1, () -> s.arrayZ = Math.min(32, s.arrayZ + 1))
+                        .glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                int gx = x + 2 * third + 4;
+                int gw = x + full - gx;
+                button("Gap", "Space between copies: click to cycle 0-8", gx, y, gw, ROW - 1, () -> s.arrayGap = (s.arrayGap + 1) % 9)
+                        .dynamic(() -> "gap " + s.arrayGap);
+                y += ROW;
+                RtsButton save = button("Save...", "Keep this blueprint (copies, presets, schematics and roofs) in the saved list, with a name",
+                        x, y, full, ROW - 1, () -> {
+                            if (s.clipboard == null) {
+                                return;
+                            }
+                            this.client.setScreen(new NameScreen(this, "Save blueprint", s.clipboard.name(), name -> {
+                                var bp = s.clipboard.renamed(name);
+                                bp.save();
+                                s.clipboard = bp;
+                                this.blueprintsLoaded = false;
+                                Messages.success("Saved \"" + name + "\"");
+                                clearAndInit();
+                            }));
+                        }).glyph(Glyphs.FOLDER, Theme.GOOD).left();
+                save.active = s.clipboard != null;
                 y += ROW;
                 button("Presets...", "Ready-made buildings: house, smelter room, storage, enchanting room and more [P]",
                         x, y, full, ROW - 1, () -> this.client.setScreen(new PresetScreen(this))).glyph(Glyphs.BOX, Theme.ACCENT).left();
@@ -404,16 +480,22 @@ public final class RtsScreen extends Screen {
             case TERRAIN -> {
                 for (TerrainMode mode : TerrainMode.values()) {
                     int i = mode.ordinal();
-                    button(mode.label(), mode.description() + " [M]", x + (i % 2) * (col + 2), y, col, ROW + 3, () -> {
+                    button(mode.label(), mode.description() + " [M]", x + (i % 2) * (col + 2), y + (i / 2) * (ROW + 5), col, ROW + 3, () -> {
                         s.terrainMode = mode;
                         s.clearSelection();
                         clearAndInit();
                     }).selected(() -> s.terrainMode == mode)
-                            .icon(new ItemStack(mode == TerrainMode.FLATTEN ? Items.IRON_SHOVEL : Items.TORCH));
+                            .icon(new ItemStack(switch (mode) {
+                                case FLATTEN -> Items.IRON_SHOVEL;
+                                case LIGHT_UP -> Items.TORCH;
+                                case QUARRY -> Items.IRON_PICKAXE;
+                                case FELL_TREES -> Items.IRON_AXE;
+                                case HARVEST -> Items.WHEAT;
+                            }));
                 }
-                y += ROW + 7;
-                if (s.terrainMode == TerrainMode.FLATTEN) {
-                    section(y, "MINE ABOVE");
+                y += ((TerrainMode.values().length + 1) / 2) * (ROW + 5) + 2;
+                if (s.terrainMode == TerrainMode.FLATTEN || s.terrainMode == TerrainMode.QUARRY) {
+                    section(y, s.terrainMode == TerrainMode.QUARRY ? "DIG DEPTH" : "MINE ABOVE");
                     y += 11;
                     button("-", "Clear less above the level", x, y, 16, ROW - 1,
                             () -> s.terrainClearHeight = Math.max(1, s.terrainClearHeight - 4)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
@@ -714,7 +796,10 @@ public final class RtsScreen extends Screen {
         this.dragging = false;
         if (button == 0) {
             BlockHitResult hit = pick(mx, my);
-            if (hit != null) {
+            if (hit != null && hasShiftDown() && this.session.tool == ToolMode.BUILD && this.session.anchorA == null) {
+                // Shift+click while building: mine that block without switching tools.
+                this.actions.destroyAt(hit.getBlockPos());
+            } else if (hit != null) {
                 this.actions.primary(hit);
             }
         }
@@ -723,6 +808,12 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
+        if (this.dragTask != null && button == 0) {
+            if (Math.abs(my - this.dragFromY) > DRAG_THRESHOLD) {
+                this.dragMoved = true;
+            }
+            return true;
+        }
         if (button == this.pressedButton && (button == 1 || button == 2)) {
             if (!this.dragging && Math.abs(mx - this.pressX) + Math.abs(my - this.pressY) > DRAG_THRESHOLD) {
                 this.dragging = true;
@@ -741,6 +832,21 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseReleased(double mx, double my, int button) {
+        if (this.dragTask != null && button == 0) {
+            if (this.dragMoved) {
+                int row = Math.max(0, (int) ((my - this.ordersTop + (CARD_H + 2) / 2.0) / (CARD_H + 2)));
+                List<RtsTask> tasks = TaskQueue.get().snapshot();
+                int from = tasks.indexOf(this.dragTask);
+                int to = this.taskScroll + row;
+                if (from >= 0 && to > from) {
+                    to--; // the card leaves its old slot first
+                }
+                TaskQueue.get().move(this.dragTask, to);
+            }
+            this.dragTask = null;
+            this.dragMoved = false;
+            return true;
+        }
         if (button == this.pressedButton) {
             this.pressedButton = -1;
             if (!this.dragging) {
@@ -1110,14 +1216,18 @@ public final class RtsScreen extends Screen {
         if (this.clipboardInfoY >= 0) {
             if (s.tool == ToolMode.BLUEPRINT) {
                 Blueprint bp = s.clipboard;
-                String line1 = bp == null ? (s.cutOnCopy ? "Cut: click two corners" : "Copy: click two corners") : bp.name();
+                String line1 = bp == null ? (s.cutOnCopy ? "Move: select the building" : "Copy: click two corners") : bp.name();
                 String line2 = bp == null ? "of the region" : bp.size(s.pasteTurns) + ", " + bp.blockCount() + " blocks";
                 ctx.drawText(this.textRenderer, trim(line1, x1 - x0), x0, this.clipboardInfoY, bp == null ? Theme.TEXT_DIM : Theme.GOLD, false);
                 ctx.drawText(this.textRenderer, trim(line2, x1 - x0), x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
             } else if (s.tool == ToolMode.TERRAIN) {
-                String fill = s.terrainMode == TerrainMode.FLATTEN
-                        ? "Fill: " + WorldActions.flattenFill(s).getBlock().getName().getString()
-                        : "Uses torches";
+                String fill = switch (s.terrainMode) {
+                    case FLATTEN -> "Fill: " + WorldActions.flattenFill(s).getBlock().getName().getString();
+                    case LIGHT_UP -> "Uses torches";
+                    case QUARRY -> "Dig " + s.terrainClearHeight + " deep from the top";
+                    case FELL_TREES -> "Replants saplings";
+                    case HARVEST -> "Replants, stores produce";
+                };
                 ctx.drawText(this.textRenderer, trim(fill, x1 - x0), x0, this.clipboardInfoY, Theme.TEXT_DIM, false);
                 ctx.drawText(this.textRenderer, "Click two corners", x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
             }
@@ -1140,9 +1250,24 @@ public final class RtsScreen extends Screen {
             ctx.drawText(this.textRenderer, "Nothing queued", x0 + 2, y + 2, Theme.TEXT_FAINT, false);
             ctx.drawText(this.textRenderer, "Left-click the world to start", x0 + 2, y + 12, Theme.TEXT_FAINT, false);
         }
+        TaskQueue queue = TaskQueue.get();
+        RtsTask active = null;
+        for (RtsTask t : tasks) {
+            if (!queue.isPaused(t)) {
+                active = t;
+                break;
+            }
+        }
         for (int i = this.taskScroll; i < tasks.size() && i < this.taskScroll + visible; i++) {
             RtsTask task = tasks.get(i);
-            boolean running = i == 0;
+            boolean running = task == active;
+            boolean paused = queue.isPaused(task);
+            if (task == this.dragTask && this.dragMoved) {
+                // Leave a slot where the card was; the card itself follows the mouse.
+                Theme.outline(ctx, x0, y, x1 - x0, CARD_H, Theme.withAlpha(Theme.ACCENT, 0.4F));
+                y += CARD_H + 2;
+                continue;
+            }
             boolean cardHover = mx >= x0 && mx < x1 && my >= y && my < y + CARD_H;
             int cardBg = running ? 0xFF16283A : cardHover ? 0xFF1F2834 : 0xFF19212B;
             Theme.round(ctx, x0, y, x1 - x0, CARD_H, cardBg);
@@ -1152,15 +1277,34 @@ public final class RtsScreen extends Screen {
             if (running) {
                 ctx.fill(x0, y + 2, x0 + 2, y + CARD_H - 2, Theme.ACCENT);
             }
-            ctx.drawText(this.textRenderer, trim(task.label(), x1 - x0 - 18), x0 + 5, y + 3, running ? Theme.TEXT : 0xFFC9D3DD, false);
-            ctx.drawText(this.textRenderer, trim(task.detail(), x1 - x0 - 10), x0 + 5, y + 13, Theme.TEXT_DIM, false);
+            ctx.drawText(this.textRenderer, trim(task.label(), x1 - x0 - 40), x0 + 5, y + 3,
+                    paused ? Theme.TEXT_FAINT : running ? Theme.TEXT : 0xFFC9D3DD, false);
+            ctx.drawText(this.textRenderer, trim(paused ? "paused" : task.detail(), x1 - x0 - 10), x0 + 5, y + 13,
+                    paused ? Theme.GOLD : Theme.TEXT_DIM, false);
             if (task instanceof BuildTask build && build.progress() >= 0) {
                 Theme.bar(ctx, x0 + 4, y + CARD_H - 4, x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD, running);
             }
             int bx = x1 - 11;
             boolean hot = mx >= bx && mx < bx + 9 && my >= y + 2 && my < y + 11;
             Glyphs.CROSS.draw(ctx, bx + 1, y + 3, hot ? Theme.BAD : Theme.TEXT_FAINT);
+            int px = x1 - 22;
+            boolean hotPause = mx >= px && mx < px + 9 && my >= y + 2 && my < y + 11;
+            (paused ? Glyphs.PLAY : Glyphs.PAUSE).draw(ctx, px + 1, y + 3, hotPause ? Theme.TEXT : paused ? Theme.GOLD : Theme.TEXT_FAINT);
+            if (i > 0) {
+                int tx = x1 - 33;
+                boolean hotTop = mx >= tx && mx < tx + 9 && my >= y + 2 && my < y + 11;
+                Glyphs.TOP.draw(ctx, tx + 1, y + 3, hotTop ? Theme.ACCENT : Theme.TEXT_FAINT);
+            }
             y += CARD_H + 2;
+        }
+        if (this.dragTask != null && this.dragMoved && tasks.contains(this.dragTask)) {
+            int row = MathHelper.clamp((int) ((my - this.ordersTop + (CARD_H + 2) / 2) / (CARD_H + 2)), 0, visible);
+            int ly = this.ordersTop + row * (CARD_H + 2) - 2;
+            ctx.fill(x0, ly, x1, ly + 1, Theme.ACCENT);
+            int gy = my - CARD_H / 2;
+            Theme.round(ctx, x0 + 3, gy, x1 - x0, CARD_H, 0xE0243246);
+            Theme.outline(ctx, x0 + 3, gy, x1 - x0, CARD_H, Theme.ACCENT);
+            ctx.drawText(this.textRenderer, trim(this.dragTask.label(), x1 - x0 - 10), x0 + 8, gy + 8, Theme.TEXT, false);
         }
         if (tasks.size() > visible) {
             String more = (this.taskScroll + 1) + "-" + Math.min(tasks.size(), this.taskScroll + visible) + " of " + tasks.size();
@@ -1179,13 +1323,32 @@ public final class RtsScreen extends Screen {
             return false;
         }
         int x1 = this.width - 2 * PAD;
-        int bx = x1 - 11;
         double cardY = this.ordersTop + row * (CARD_H + 2);
-        if (mx >= bx && mx < bx + 9 && my >= cardY + 2 && my < cardY + 11) {
-            TaskQueue.get().remove(this.client, tasks.get(idx));
+        if (my >= cardY + CARD_H) {
+            return false;
+        }
+        RtsTask task = tasks.get(idx);
+        boolean iconRow = my >= cardY + 2 && my < cardY + 11;
+        if (iconRow && mx >= x1 - 11 && mx < x1 - 2) {
+            TaskQueue.get().remove(this.client, task);
             return true;
         }
-        return false;
+        if (iconRow && mx >= x1 - 22 && mx < x1 - 13) {
+            TaskQueue.get().togglePause(task);
+            Messages.info((TaskQueue.get().isPaused(task) ? "Paused " : "Resumed ") + task.label());
+            return true;
+        }
+        if (iconRow && idx > 0 && mx >= x1 - 33 && mx < x1 - 24) {
+            TaskQueue.get().runFirst(task);
+            this.taskScroll = 0;
+            Messages.info("Running next: " + task.label());
+            return true;
+        }
+        // Grab the card: dragging it up or down reorders the queue.
+        this.dragTask = task;
+        this.dragFromY = my;
+        this.dragMoved = false;
+        return true;
     }
 
     private void drawStorage(DrawContext ctx) {
@@ -1301,17 +1464,29 @@ public final class RtsScreen extends Screen {
             case LINK -> chips.add("Click containers to link / unlink");
             case BLUEPRINT -> {
                 if (s.clipboard == null) {
-                    chips.add((s.cutOnCopy ? "Cut" : "Copy") + ": click two corners");
+                    chips.add((s.cutOnCopy ? "Move" : "Copy") + ": click two corners");
                 } else {
                     chips.add(s.clipboard.name());
                     chips.add(s.pasteAnchor == null ? "click to place" : "arrows nudge, click/Enter builds");
                     if (s.pasteMirror) {
                         chips.add("mirrored");
                     }
+                    if (s.arrayX > 1 || s.arrayZ > 1) {
+                        chips.add(s.arrayX + " x " + s.arrayZ + " copies");
+                    }
+                    if (s.moving()) {
+                        chips.add("moving");
+                    }
                 }
             }
             case TERRAIN -> chips.add(s.terrainMode.label() + ": click two corners");
             case MEASURE -> chips.add("Click two points");
+        }
+        if (s.roofPick) {
+            chips.add("click a wall top for the " + s.roofStyle.label().toLowerCase(Locale.ROOT) + " roof");
+        }
+        if (!s.mix.isEmpty() && s.tool == ToolMode.BUILD) {
+            chips.add("mix: " + s.mixDescription());
         }
         if (s.airPlace) {
             chips.add("air Y " + s.airY);
@@ -1394,21 +1569,29 @@ public final class RtsScreen extends Screen {
             }
             lines.add(Text.literal(WorldActions.describeMeasure(s.anchorA, b)).formatted(Formatting.LIGHT_PURPLE));
         } else if (s.tool == ToolMode.BLUEPRINT && s.clipboard != null) {
-            lines.add(Text.literal(s.clipboard.name() + "  " + s.clipboard.size(s.pasteTurns) + "  |  "
-                    + String.format(Locale.ROOT, "%,d", s.clipboard.blockCount()) + " blocks").formatted(Formatting.GOLD));
-            materials = s.clipboard.materials();
+            int copies = Math.max(1, s.arrayX) * Math.max(1, s.arrayZ);
+            lines.add(Text.literal(s.clipboard.name() + "  " + s.clipboard.size(s.pasteTurns)
+                    + (copies > 1 ? "  x" + copies : "") + "  |  "
+                    + String.format(Locale.ROOT, "%,d", s.clipboard.blockCount() * copies) + " blocks").formatted(Formatting.GOLD));
+            materials = new java.util.LinkedHashMap<>();
+            for (var e : s.clipboard.materials().entrySet()) {
+                materials.put(e.getKey(), e.getValue() * copies);
+            }
         } else if (s.tool == ToolMode.TERRAIN && s.anchorA != null && (s.anchorB != null || hover != null)) {
             BlockPos b = s.anchorB != null ? s.anchorB : hover.getBlockPos();
             int w = Math.abs(s.anchorA.getX() - b.getX()) + 1;
             int l = Math.abs(s.anchorA.getZ() - b.getZ()) + 1;
             int[] counts = WorldOverlay.terrainCounts();
-            String what = s.terrainMode == TerrainMode.FLATTEN
-                    ? (counts[0] < 0 ? "planning..." : "mine " + counts[0] + ", fill " + counts[1] + " at Y" + s.anchorA.getY())
-                    : (counts[1] < 0 ? "planning..." : counts[1] + " torches");
+            String what = switch (s.terrainMode) {
+                case FLATTEN -> counts[0] < 0 ? "planning..." : "mine " + counts[0] + ", fill " + counts[1] + " at Y" + s.anchorA.getY();
+                case LIGHT_UP -> counts[1] < 0 ? "planning..." : counts[1] + " torches";
+                case QUARRY -> s.terrainClearHeight + " deep, " + (w * l * s.terrainClearHeight) + " blocks at most";
+                default -> w * l + " columns";
+            };
             lines.add(Text.literal(s.terrainMode.label() + " " + w + " x " + l + "  |  " + what).formatted(Formatting.GREEN));
             if (s.terrainMode == TerrainMode.LIGHT_UP && counts[1] > 0) {
                 materials = Map.of(Items.TORCH, counts[1]);
-            } else if (counts[1] > 0) {
+            } else if (s.terrainMode == TerrainMode.FLATTEN && counts[1] > 0) {
                 materials = Map.of(WorldActions.flattenFill(s).getBlock().asItem(), counts[1]);
             }
         } else if (s.tool.usesShapes() && s.anchorA != null) {

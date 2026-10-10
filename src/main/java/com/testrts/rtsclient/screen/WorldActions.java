@@ -74,9 +74,14 @@ public final class WorldActions {
             return;
         }
         BuildSession s = this.session;
+        if (s.roofPick) {
+            s.roofPick = false;
+            makeRoof(hit);
+            return;
+        }
         switch (s.tool) {
             case BUILD -> {
-                if (!(s.brush.getItem() instanceof BlockItem)) {
+                if (!(s.brush.getItem() instanceof BlockItem) && s.mix.isEmpty()) {
                     Messages.warn("Pick a block from the bar below first (or middle-click a block in the world)");
                     return;
                 }
@@ -204,7 +209,7 @@ public final class WorldActions {
         BlockPos p = hit.getBlockPos();
         if (s.anchorA == null) {
             s.anchorA = p;
-            Messages.info((s.cutOnCopy ? "Cut" : "Copy") + ": first corner set - click the opposite corner");
+            Messages.info((s.cutOnCopy ? "Move" : "Copy") + ": first corner set - click the opposite corner");
             return;
         }
         BlockPos a = s.anchorA;
@@ -215,35 +220,33 @@ public final class WorldActions {
     private void copyRegion(BlockPos a, BlockPos b) {
         BuildSession s = this.session;
         ClientWorld world = world();
-        String name = "Blueprint " + (Blueprint.loadAll().size() + 1);
+        boolean move = s.cutOnCopy;
+        String name = move ? "Moved building" : "Copy " + (Blueprint.loadAll().size() + 1);
         Blueprint bp = Blueprint.capture(world, a, b, name, RtsConfig.get().maxShapeBlocks);
         if (bp.blockCount() == 0) {
             Messages.warn("Nothing to copy there");
             return;
         }
-        bp.save();
         s.clipboard = bp;
         s.pasteTurns = 0;
+        s.pasteMirror = false;
         s.pasteAnchor = null;
-        if (s.cutOnCopy) {
-            // Move: mine the original once it's safely saved.
-            Map<BlockPos, BlockState> clear = new LinkedHashMap<>();
-            BlockPos min = BlockPos.ofFloored(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
-            BlockPos max = BlockPos.ofFloored(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
-            for (BlockPos p : BlockPos.iterate(min, max)) {
-                BlockState now = world.getBlockState(p);
-                if (!now.isAir() && !(now.getBlock() instanceof FluidBlock) && now.getHardness(world, p) >= 0) {
-                    clear.put(p.toImmutable(), Blocks.AIR.getDefaultState());
-                }
-            }
-            if (!clear.isEmpty()) {
-                pushUndo("Cut " + name, clear);
-                queue(new BuildTask("Cut " + name + " (" + clear.size() + ")", clear, true));
-            }
+        s.arrayX = 1;
+        s.arrayZ = 1;
+        if (move) {
+            // The original is only taken down once the copy has a place to go.
+            s.moveFrom = BlockPos.ofFloored(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
+            s.moveTo = BlockPos.ofFloored(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));
+            s.moveBlueprint = bp;
+            Messages.success("Picked up " + bp.blockCount() + " blocks (" + bp.size()
+                    + ") - move the cursor to the new spot, R to rotate, click to place, Enter to move it");
+        } else {
+            s.moveFrom = null;
+            s.moveTo = null;
+            Messages.success("Copied " + bp.blockCount() + " blocks (" + bp.size() + ") - click to place it, Save to keep it");
         }
-        Messages.success((s.cutOnCopy ? "Cut " : "Copied ") + bp.blockCount() + " blocks (" + bp.size() + ") as \"" + name
-                + "\" - click to place it, R to rotate");
     }
+
 
     public void confirmPaste() {
         BuildSession s = this.session;
@@ -252,8 +255,9 @@ public final class WorldActions {
             return;
         }
         Blueprint bp = s.clipboard;
+        Map<BlockPos, BlockState> placed = pasteBlocks(s, bp, s.pasteAnchor);
         Map<BlockPos, BlockState> build = new LinkedHashMap<>();
-        for (Map.Entry<BlockPos, BlockState> e : bp.placed(s.pasteAnchor, s.pasteTurns, s.pasteMirror).entrySet()) {
+        for (Map.Entry<BlockPos, BlockState> e : placed.entrySet()) {
             if (world.getBlockState(e.getKey()).getBlock() != e.getValue().getBlock()) {
                 build.put(e.getKey(), e.getValue());
             }
@@ -263,7 +267,7 @@ public final class WorldActions {
             if (bp.volume() > RtsConfig.get().maxShapeBlocks) {
                 Messages.warn("Too big to clear the air inside; pasting blocks only");
             } else {
-                for (BlockPos p : bp.placedAir(s.pasteAnchor, s.pasteTurns, s.pasteMirror)) {
+                for (BlockPos p : pasteAir(s, bp, s.pasteAnchor)) {
                     BlockState now = world.getBlockState(p);
                     if (!now.isAir() && !(now.getBlock() instanceof FluidBlock) && now.getHardness(world, p) >= 0) {
                         clear.put(p, Blocks.AIR.getDefaultState());
@@ -272,6 +276,25 @@ public final class WorldActions {
             }
         }
         s.pasteAnchor = null;
+        if (s.moving()) {
+            // Moving: take the original down first (its drops feed the new build), except where the
+            // new copy overlaps it with the same blocks.
+            for (BlockPos p : BlockPos.iterate(s.moveFrom, s.moveTo)) {
+                BlockPos q = p.toImmutable();
+                BlockState now = world.getBlockState(q);
+                BlockState wanted = placed.get(q);
+                if (now.isAir() || now.getBlock() instanceof FluidBlock || now.getHardness(world, q) < 0
+                        || wanted != null && wanted.getBlock() == now.getBlock()) {
+                    continue;
+                }
+                clear.put(q, Blocks.AIR.getDefaultState());
+            }
+            s.moveFrom = null;
+            s.moveTo = null;
+            s.moveBlueprint = null;
+            s.clipboard = null;
+            Messages.info("Moving " + bp.name() + ": clearing the old spot, then building the new one");
+        }
         if (build.isEmpty() && clear.isEmpty()) {
             Messages.info("Already built there");
             return;
@@ -300,10 +323,80 @@ public final class WorldActions {
         switch (s.terrainMode) {
             case FLATTEN -> flatten(a, b);
             case LIGHT_UP -> lightUp(a, b);
+            case QUARRY -> {
+                int top = Math.max(a.getY(), b.getY());
+                int bottom = Math.max(world().getBottomY(), Math.min(a.getY(), b.getY()) - (s.terrainClearHeight - 1));
+                queue(new com.testrts.rtsclient.task.QuarryTask(new BlockPos(a.getX(), top, a.getZ()), new BlockPos(b.getX(), bottom, b.getZ())));
+            }
+            case FELL_TREES -> {
+                int y = Math.min(a.getY(), b.getY());
+                queue(new com.testrts.rtsclient.task.TreeFellTask(new BlockPos(a.getX(), y - 3, a.getZ()),
+                        new BlockPos(b.getX(), Math.max(a.getY(), b.getY()) + 32, b.getZ()), true));
+            }
+            case HARVEST -> {
+                int y0 = Math.min(a.getY(), b.getY()) - 2;
+                int y1 = Math.max(a.getY(), b.getY()) + 3;
+                queue(new com.testrts.rtsclient.task.HarvestTask(new BlockPos(a.getX(), y0, a.getZ()), new BlockPos(b.getX(), y1, b.getZ())));
+            }
         }
     }
 
     /** Flatten fills with the brush block, or dirt if the brush isn't a block. */
+    /** The blueprint placed at {@code origin}, repeated as the session's grid of copies. */
+    public static Map<BlockPos, BlockState> pasteBlocks(BuildSession s, Blueprint bp, BlockPos origin) {
+        int[] f = bp.footprint(s.pasteTurns);
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        for (int i = 0; i < Math.max(1, s.arrayX); i++) {
+            for (int j = 0; j < Math.max(1, s.arrayZ); j++) {
+                BlockPos o = origin.add(i * (f[0] + s.arrayGap), 0, j * (f[1] + s.arrayGap));
+                out.putAll(bp.placed(o, s.pasteTurns, s.pasteMirror));
+            }
+        }
+        return out;
+    }
+
+    public static java.util.List<BlockPos> pasteAir(BuildSession s, Blueprint bp, BlockPos origin) {
+        int[] f = bp.footprint(s.pasteTurns);
+        java.util.List<BlockPos> out = new java.util.ArrayList<>();
+        for (int i = 0; i < Math.max(1, s.arrayX); i++) {
+            for (int j = 0; j < Math.max(1, s.arrayZ); j++) {
+                BlockPos o = origin.add(i * (f[0] + s.arrayGap), 0, j * (f[1] + s.arrayGap));
+                out.addAll(bp.placedAir(o, s.pasteTurns, s.pasteMirror));
+            }
+        }
+        return out;
+    }
+
+    /** Smart roof: find the room under the clicked wall top and pin a roof blueprint on it. */
+    private void makeRoof(BlockHitResult hit) {
+        BuildSession s = this.session;
+        ClientWorld world = world();
+        BlockState brush = s.brushState(0F);
+        if (world == null || brush == null) {
+            Messages.warn("Pick a roof block first (stairs work best, e.g. oak stairs)");
+            return;
+        }
+        String[] error = new String[1];
+        com.testrts.rtsclient.build.RoofPlanner.Roof roof = com.testrts.rtsclient.build.RoofPlanner.plan(
+                world, hit.getBlockPos(), brush, s.roofStyle, error);
+        if (roof == null) {
+            Messages.warn(error[0]);
+            return;
+        }
+        s.tool = ToolMode.BLUEPRINT;
+        s.clipboard = roof.blueprint();
+        s.pasteTurns = 0;
+        s.pasteMirror = false;
+        s.arrayX = 1;
+        s.arrayZ = 1;
+        s.moveFrom = null;
+        s.moveTo = null;
+        s.clearSelection();
+        s.pasteAnchor = roof.origin();
+        Messages.success(s.roofStyle.label() + " roof for a " + roof.width() + " x " + roof.depth()
+                + " room - Enter or click to build, arrows to nudge, X to cancel");
+    }
+
     public static BlockState flattenFill(BuildSession s) {
         return s.brush.getItem() instanceof BlockItem bi ? bi.getBlock().getDefaultState() : Blocks.DIRT.getDefaultState();
     }
@@ -370,6 +463,23 @@ public final class WorldActions {
     // ------------------------------------------------------------------ other actions
 
     /** Right click: send the character there. */
+    /** Mine a single block (Shift+click with the Build tool). */
+    public void destroyAt(BlockPos pos) {
+        ClientWorld world = world();
+        if (world == null) {
+            return;
+        }
+        BlockState now = world.getBlockState(pos);
+        if (now.isAir() || now.getBlock() instanceof FluidBlock || now.getHardness(world, pos) < 0) {
+            Messages.warn("Nothing to mine there");
+            return;
+        }
+        Map<BlockPos, BlockState> clear = new LinkedHashMap<>();
+        clear.put(pos.toImmutable(), Blocks.AIR.getDefaultState());
+        pushUndo("Mine " + now.getBlock().getName().getString(), clear);
+        queue(new BuildTask("Mine " + now.getBlock().getName().getString(), clear, true));
+    }
+
     public void moveTo(BlockHitResult hit) {
         BlockPos feet = hit.getSide() == Direction.UP || hit.getSide() == Direction.DOWN
                 ? hit.getBlockPos().up()

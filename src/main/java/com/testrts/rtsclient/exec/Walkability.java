@@ -2,6 +2,7 @@ package com.testrts.rtsclient.exec;
 
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.fluid.FluidState;
 import net.minecraft.registry.tag.FluidTags;
@@ -50,6 +51,42 @@ public final class Walkability {
     /** Feet at {@code feet}: body fits and there is ground (or water) under it. */
     public static boolean standable(ClientWorld world, BlockPos feet) {
         return passable(world, feet) && passable(world, feet.up()) && floor(world, feet.down());
+    }
+
+    /**
+     * Height (0..1) of the top of what a player stands on in {@code pos}: 0.5 for a bottom slab,
+     * 0.0625 for a carpet, 1 for a full block. Still water counts as 0.9 (swimming at the surface).
+     */
+    public static double floorTop(ClientWorld world, BlockPos pos) {
+        if (!world.isChunkLoaded(pos)) {
+            return 1.0;
+        }
+        BlockState state = world.getBlockState(pos);
+        VoxelShape shape = state.getCollisionShape(world, pos);
+        if (shape.isEmpty()) {
+            return state.getFluidState().isIn(FluidTags.WATER) ? 0.9 : 0.0;
+        }
+        return Math.min(1.0, shape.getMax(Direction.Axis.Y));
+    }
+
+    /** The Y the player's feet are actually at when standing on the node {@code feet}. */
+    public static double standY(ClientWorld world, BlockPos feet) {
+        return feet.getY() - 1 + floorTop(world, feet.down());
+    }
+
+    /**
+     * The node the player is standing on. On a slab, carpet or other low block the player's block
+     * position is the low block itself; the node is the one above it.
+     */
+    public static BlockPos feetNode(ClientWorld world, ClientPlayerEntity player) {
+        BlockPos pos = player.getBlockPos();
+        if (standable(world, pos)) {
+            return pos;
+        }
+        if (standable(world, pos.up())) {
+            return pos.up();
+        }
+        return pos;
     }
 
     private static boolean dangerous(BlockState state) {

@@ -19,9 +19,9 @@ import java.util.Locale;
 
 /** Pick a ready-made building; it goes onto the Blueprint tool for placing like any blueprint. */
 public final class PresetScreen extends Screen {
-    private static final int CARD_W = 150;
-    private static final int CARD_H = 24;
-    private static final int GAP = 4;
+    private static final int CARD_W = 136;
+    private static final int CARD_H = 20;
+    private static final int GAP = 3;
     private static final int PAD = 8;
 
     private final Screen parent;
@@ -43,7 +43,7 @@ public final class PresetScreen extends Screen {
 
     @Override
     protected void init() {
-        this.columns = this.width >= 2 * CARD_W + GAP + 2 * PAD + 20 ? 2 : 1;
+        this.columns = Math.max(1, Math.min(3, (this.width - 2 * PAD - 20 + GAP) / (CARD_W + GAP)));
         int rows = (this.presets.size() + this.columns - 1) / this.columns;
         int w = this.columns * CARD_W + (this.columns - 1) * GAP + 2 * PAD;
         int h = Theme.HEADER_H + 8 + rows * (CARD_H + GAP) + 26;

@@ -339,6 +339,33 @@ public final class StorageManager {
         return out;
     }
 
+    /**
+     * The item a linked container mostly holds (by count, from its index), for labels in the UI.
+     * Either half of a double chest works. Null if not linked, not indexed yet, or empty.
+     */
+    @Nullable
+    public Item labelFor(BlockPos pos) {
+        LinkedContainer c = this.containers.get(pos);
+        if (c == null) {
+            ClientWorld world = MinecraftClient.getInstance().world;
+            if (world != null) {
+                c = this.containers.get(canonical(world, pos));
+            }
+        }
+        if (c == null || !c.indexed) {
+            return null;
+        }
+        Item best = null;
+        int bestCount = 0;
+        for (Map.Entry<Item, Integer> e : c.items.entrySet()) {
+            if (e.getValue() > bestCount) {
+                best = e.getKey();
+                bestCount = e.getValue();
+            }
+        }
+        return best;
+    }
+
     public List<LinkedContainer> unindexed() {
         List<LinkedContainer> out = new ArrayList<>();
         for (LinkedContainer c : this.containers.values()) {

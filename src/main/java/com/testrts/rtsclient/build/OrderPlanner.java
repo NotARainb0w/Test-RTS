@@ -68,11 +68,17 @@ public final class OrderPlanner {
      * @param replaceTarget block to replace in {@link BuildMode#REPLACE_TYPE}, or null
      */
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
-                          boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit) {
+                          boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                          java.util.List<BlockState> mix) {
     }
 
     public static Request request(BuildSession s, BlockPos a, BlockPos b, float cameraYaw, int limit) {
-        return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, s.brushState(cameraYaw), s.replaceTarget, limit);
+        java.util.List<BlockState> mix = s.tool == ToolMode.BUILD ? s.mixStates(cameraYaw) : java.util.List.of();
+        BlockState brush = s.brushState(cameraYaw);
+        if (brush == null && !mix.isEmpty()) {
+            brush = mix.get(0);
+        }
+        return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix);
     }
 
     public static Plan plan(ClientWorld world, Request r) {
@@ -97,10 +103,10 @@ public final class OrderPlanner {
         if (brush == null) {
             return plan(changes, shape.positions(), false);
         }
-        Block block = brush.getBlock();
         for (BlockPos p : shape.positions()) {
+            BlockState want = pick(r, p);
             BlockState current = world.getBlockState(p);
-            if (current.getBlock() == block) {
+            if (current.getBlock() == want.getBlock()) {
                 continue;
             }
             boolean empty = current.isAir() || current.isReplaceable();
@@ -111,10 +117,23 @@ public final class OrderPlanner {
                 case COVER -> empty && isSolidTop(world, p.down());
             };
             if (take) {
-                changes.put(p, brush);
+                changes.put(p, want);
             }
         }
         return plan(changes, shape.positions(), false);
+    }
+
+    /** The brush, or with a pattern mix a pseudo-random pick that's stable per position (preview = build). */
+    private static BlockState pick(Request r, BlockPos p) {
+        java.util.List<BlockState> mix = r.mix();
+        if (mix.isEmpty()) {
+            return r.brush();
+        }
+        long h = p.asLong() * 0x9E3779B97F4A7C15L;
+        h ^= h >>> 29;
+        h *= 0xBF58476D1CE4E5B9L;
+        h ^= h >>> 32;
+        return mix.get((int) Math.floorMod(h, (long) mix.size()));
     }
 
     private static boolean isSolidTop(ClientWorld world, BlockPos below) {
@@ -131,7 +150,7 @@ public final class OrderPlanner {
             case FILL, COVER -> "Build ";
             case REPLACE, REPLACE_TYPE -> "Replace ";
         };
-        String name = r.brush() == null ? "?" : r.brush().getBlock().getName().getString();
+        String name = !r.mix().isEmpty() ? "mixed" : r.brush() == null ? "?" : r.brush().getBlock().getName().getString();
         return verb + count + "x " + name + shape;
     }
 }

@@ -138,6 +138,9 @@ public final class BuildTask implements RtsTask {
             } else {
                 Messages.success(this.label + " finished");
             }
+            if (!this.clearing) {
+                CompletedBuilds.record(this.label, this.blocks);
+            }
             if (this.clearing && RtsConfig.get().collectDrops) {
                 queue.pushFront(new CollectDropsTask(bounds()));
             }
@@ -213,6 +216,15 @@ public final class BuildTask implements RtsTask {
             }
         });
         return available;
+    }
+
+    @Override
+    public void suspend(MinecraftClient client) {
+        if (this.started) {
+            Engine.stop();
+        }
+        this.started = false;
+        this.detail = "on hold";
     }
 
     @Override

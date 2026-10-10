@@ -81,6 +81,9 @@ public final class RtsSettingsScreen extends Screen {
                 new Setting("Pick up drops", () -> onOff(c.collectDrops),
                         "Walk over the items a clear order dropped.",
                         () -> c.collectDrops = !c.collectDrops),
+                new Setting("Auto-repair builds", () -> onOff(c.autoRepair),
+                        "When there's nothing to do, check finished builds every 10 seconds and fill in missing or broken blocks.",
+                        () -> c.autoRepair = !c.autoRepair),
                 new Setting("Max shape size", () -> String.format(Locale.ROOT, "%,d", c.maxShapeBlocks),
                         "The largest order one shape or schematic can make.",
                         () -> c.maxShapeBlocks = next(SHAPE_LIMITS, c.maxShapeBlocks)))));

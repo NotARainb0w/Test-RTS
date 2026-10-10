@@ -263,6 +263,11 @@ public final class PreviewMesh implements AutoCloseable {
         VertexBuffer.unbind();
     }
 
+    /** Whether {@code key} is already the latest request (so its supplier needn't be built again). */
+    public boolean isRequested(Object key) {
+        return key.equals(this.requestedKey);
+    }
+
     public boolean isReady() {
         return this.requestedKey != null && this.requestedKey.equals(this.shownKey);
     }

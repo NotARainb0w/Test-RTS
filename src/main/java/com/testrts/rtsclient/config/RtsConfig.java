@@ -48,6 +48,8 @@ public final class RtsConfig {
     public boolean removeScaffolding = true;
     /** After a clear order, walk over the dropped items to pick them up. */
     public boolean collectDrops = true;
+    /** When idle, check finished builds now and then and fill in missing blocks. */
+    public boolean autoRepair = false;
     /** Stop the camera at solid blocks. Off: the camera flies through walls. */
     public boolean cameraCollision = false;
     /** Radius used by "Scan nearby" when looking for containers. */

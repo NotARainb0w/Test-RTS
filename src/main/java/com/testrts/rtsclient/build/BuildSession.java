@@ -40,6 +40,24 @@ public final class BuildSession {
     public TerrainMode terrainMode = TerrainMode.FLATTEN;
     /** How far above the level Flatten clears. */
     public int terrainClearHeight = 16;
+    /** Paste the blueprint as a grid of copies: count along x and z, and the gap between copies. */
+    public int arrayX = 1;
+    public int arrayZ = 1;
+    public int arrayGap = 0;
+    /** Pattern brush: blocks and their weights; shapes use a random mix when this isn't empty. */
+    public final java.util.LinkedHashMap<net.minecraft.item.Item, Integer> mix = new java.util.LinkedHashMap<>();
+    /** The next click picks a room to put a roof on. */
+    public boolean roofPick;
+    public RoofPlanner.Style roofStyle = RoofPlanner.Style.GABLE;
+    /** While moving a building: the source box (min, max) that is cleared once the copy is placed. */
+    public BlockPos moveFrom;
+    public BlockPos moveTo;
+    /** The blueprint picked up by Move; moving only happens when this is what gets placed. */
+    public Blueprint moveBlueprint;
+
+    public boolean moving() {
+        return this.moveFrom != null && this.moveBlueprint != null && this.moveBlueprint == this.clipboard;
+    }
     /** Air placement: the cursor targets a flat layer at {@link #airY}, so blocks can go in mid-air. */
     public boolean airPlace;
     public int airY = 64;
@@ -66,6 +84,36 @@ public final class BuildSession {
 
     /** The state the brush places, with facing from the camera and any properties the player picked. */
     @Nullable
+    /** The pattern mix as states (each repeated by its weight), oriented like the brush. */
+    public java.util.List<BlockState> mixStates(float cameraYaw) {
+        java.util.List<BlockState> out = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<net.minecraft.item.Item, Integer> e : this.mix.entrySet()) {
+            if (e.getKey() instanceof BlockItem bi) {
+                BlockState state = this.orientation.stateFor(bi.getBlock(), cameraYaw);
+                for (int i = 0; i < e.getValue(); i++) {
+                    out.add(state);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** "60% Stone, 40% Andesite". */
+    public String mixDescription() {
+        int total = 0;
+        for (int w : this.mix.values()) {
+            total += w;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<net.minecraft.item.Item, Integer> e : this.mix.entrySet()) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(Math.round(100.0F * e.getValue() / total)).append("% ").append(e.getKey().getName().getString());
+        }
+        return sb.toString();
+    }
+
     public BlockState brushState(float cameraYaw) {
         if (!(this.brush.getItem() instanceof BlockItem bi)) {
             return null;

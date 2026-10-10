@@ -62,22 +62,37 @@ Both have the same features and controls.
 ### Tools
 
 - **Build**: pick a block from the item bar, then click. Shapes: Block, Line, Floor, Wall, Box, Circle,
-  Cylinder, Sphere, Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
+  Cylinder, Sphere, Dome (half sphere), Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
   level you click). Two-point shapes: click A, click B, then click again or press Enter.
   - **Modes**: *Fill* only fills empty space; *Replace* turns everything in the shape into the brush;
     *Replace type* swaps only the block type you click first; *Cover* only fills empty spaces resting on
     solid ground (carpets, paths over terrain).
   - **Block state**: buttons under the shape list set properties like slab half or stair shape (auto =
     decided by where it's placed).
+  - **Shift+click** mines the clicked block without leaving the Build tool. To clear whatever is in a shape's
+    way while building it, use the *Replace* build mode.
+  - **Mix** (pattern brush): pick a block and press *+ Mix*, pick another and press it again (press several
+    times for more of it). Shapes are then built from a random mix, e.g. 60% stone, 30% andesite, 10% cobblestone.
+    The preview shows exactly the pattern that gets built. *Clear mix* goes back to one block.
+  - **Roof** (smart roof): press *Roof*, then click the top of any wall of a room. The walls are followed round
+    to find the room's size and a roof with a one-block overhang is laid on it, ready to build (Enter). *Style*
+    switches between a gable roof (two slopes) and a hip roof (four slopes). Use stairs as the block for a sloped
+    roof (matching slabs and planks are picked automatically for the ridge and gable ends).
 - **Destroy**: the same shapes, but mines the blocks. Afterwards the character picks up the drops.
 - **Interact**: click any block (chest, door, lever, crafting table...). Your character walks over and uses it.
 - **Link storage**: click containers to add them to your storage network.
 - **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
-  blueprints are listed on the left (Shift+click deletes). Switch *Copy* to *Cut* and the source region is
-  mined out after copying, so you can move a build.
+  blueprints are listed on the left (Shift+click deletes). **Save...** keeps the current blueprint (a copy, a
+  preset, a schematic or a roof) in that list under a name of your choice.
+  - **Move**: select a building with two clicks; it follows the cursor (R rotates, N mirrors). Click to place it:
+    the original is taken down (its drops feed the new build) and it's rebuilt at the new spot. The old spot is
+    outlined in red until then.
+  - **Repeat**: X / Z set how many copies are placed in a row or grid, *gap* the space between them - for rows
+    of houses, farm plots or fence posts.
   - **Presets...** (P): ready-made buildings to place like a blueprint: starter house, smelter room (furnaces,
     blast furnaces, smoker, chests), storage room, enchanting room (full bookshelf ring), workshop, watchtower,
-    animal pen, nether portal frame, bridge and lamp post. Rotate/mirror them like any blueprint; the material list
+    animal pen, nether portal frame, bridge, lamp post, wheat farm, sugar cane farm, iron farm frame, mob grinder
+    shell, villager trading hall, castle wall, dock and beacon pyramid. Rotate/mirror them like any blueprint; the material list
     shows what you need, and missing blocks are fetched from storage.
   - **Load schematic...** opens the files in `.minecraft/schematics/`: Litematica `.litematic`,
     WorldEdit/Sponge `.schem`, and vanilla structure `.nbt` files. Only blocks are imported (not chest
@@ -92,6 +107,10 @@ Both have the same features and controls.
 - **Terrain**: click two corners of an area.
   - *Flatten* levels it to the height of the first corner: everything above (up to the "mine above" height,
     Ctrl+scroll) is mined and dips below are filled with the brush block (dirt if none is picked).
+  - *Quarry* digs the area out layer by layer, from the top down to the depth you set (Ctrl+scroll or -/+),
+    and stores what it digs in linked storage when the inventory fills up.
+  - *Fell trees* chops every tree in the area, picks up the wood and replants saplings.
+  - *Harvest* breaks ripe crops in the area, replants them and stores the produce.
   - *Light up* places torches on every dark floor spot in the area (spaced out, so it doesn't need hundreds).
 - **Air placement** (B, or the Air button): the cursor targets a flat layer at a chosen height, so you can
   click empty space to build floating blocks and shapes. Alt+scroll (or -/+) moves the layer; a grid and a drop
@@ -132,8 +151,18 @@ Keep a stack of dirt or cobblestone in your inventory or storage for big domes a
 The top bar holds the tools (or press 1-7) and the settings. The left panel shows the options of the current
 tool: shapes, build mode, hollow, height, rotation and block state for Build/Destroy; copy/cut, rotate, mirror,
 air and saved blueprints for Blueprint; mode and clear height for Terrain. The right panel is the command
-panel: the engine, undo, store inventory and stop, every queued order with a progress bar (click the cross to
-cancel one) and the storage summary with Scan nearby / Re-index buttons. Messages appear as coloured toasts.
+panel: the engine, undo, store inventory and stop, every queued order with a progress bar and the storage
+summary with Scan nearby / Re-index / Sort / Smelt buttons.
+
+- **Orders**: drag a card up or down to change the order; the buttons on each card run it next, pause/resume it,
+  or cancel it.
+- **Materials** lists everything the queued orders still need against what you carry and what's in storage, and
+  *Fetch all* gets it in one trip.
+- **Repair** checks finished builds for blocks that never got placed or were broken since, and queues orders to
+  fill them in (Settings: *Auto-repair builds* does this by itself when there's nothing else to do).
+- **Sort** reorganises linked chests so each item type has its own chest; with the Link tool each chest shows a
+  label with what it holds. **Smelt** collects finished smelting from nearby furnaces, blast furnaces and smokers
+  and loads them again with ores, sand, cobblestone or food from storage plus fuel. Messages appear as coloured toasts.
 
 ## Storage
 
