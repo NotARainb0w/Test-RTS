@@ -56,9 +56,14 @@ final class Jobs {
             return false;
         }
         Vec3 hitVec = Vec3.atCenterOf(target).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
-        Reach.lookAt(player, hitVec);
-        client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, new BlockHitResult(hitVec, face, target, false));
-        player.swing(InteractionHand.MAIN_HAND);
+        BlockHitResult hit = new BlockHitResult(hitVec, face, target, false);
+        // Turn toward it first (no snapping), then click, as long as the item is still in hand.
+        com.testrts.rtsclient.exec.Look.thenDo(client, hitVec, () -> {
+            if (client.gameMode != null && client.player == player && player.getMainHandItem().is(item)) {
+                client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
+                player.swing(InteractionHand.MAIN_HAND);
+            }
+        });
         return true;
     }
 

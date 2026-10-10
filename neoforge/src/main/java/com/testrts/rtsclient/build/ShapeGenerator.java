@@ -13,9 +13,20 @@ import java.util.Set;
 /** Turns a shape and its control points into the set of block positions it covers. */
 public final class ShapeGenerator {
 
-    /** Positions in the order they were generated; {@code truncated} means the limit was hit. */
-    public record Result(Set<BlockPos> positions, boolean truncated) {
+    /**
+     * Positions in the order they were generated; {@code truncated} means the limit was hit.
+     * {@code facing} gives stair-like shapes the way each block should face ("north"...), for
+     * blocks that have a facing.
+     */
+    public record Result(Set<BlockPos> positions, boolean truncated, java.util.Map<BlockPos, String> facing,
+                         java.util.Map<BlockPos, String> roles) {
     }
+
+    /** {@link Result#roles()}: a railing (fence or wall matching the brush) and a lantern on top of a post. */
+    public static final String RAIL = "rail";
+    public static final String LAMP = "lamp";
+    /** A stair of the brush's material (facing given in {@link Result#facing()}), for walkable slopes. */
+    public static final String STAIR = "stair";
 
     private ShapeGenerator() {
     }
@@ -39,14 +50,24 @@ public final class ShapeGenerator {
             case CYLINDER -> cylinder(out, a, b, height, hollow);
             case SPHERE -> sphere(out, a, b, hollow, false);
             case DOME -> sphere(out, a, b, hollow, true);
+            case PYRAMID -> pyramid(out, a, b, hollow);
+            case CONE -> cone(out, a, b, height, hollow);
+            case TORUS -> torus(out, a, b, height, hollow);
+            case ARCH -> arch(out, a, b, height, hollow);
+            case BRIDGE -> bridge(out, a, b, height, hollow);
+            case STAIRS -> stairs(out, a, b, height, hollow);
+            case SPIRAL -> spiral(out, a, b, height, hollow);
             case VEIN -> vein(out, a);
             case HOLE -> hole(out, a);
         }
-        return new Result(out.positions, out.truncated);
+        return new Result(out.positions, out.truncated, out.facing, out.roles);
     }
 
     private static final class Collector {
         final Set<BlockPos> positions = new LinkedHashSet<>();
+        final java.util.Map<BlockPos, String> facing = new java.util.HashMap<>();
+        /** Blocks that aren't the brush: railings, lanterns. */
+        final java.util.Map<BlockPos, String> roles = new java.util.HashMap<>();
         final int limit;
         boolean truncated;
 
@@ -61,6 +82,30 @@ public final class ShapeGenerator {
                 return false;
             }
             this.positions.add(new BlockPos(x, y, z));
+            return true;
+        }
+
+        /** Add a block that isn't the brush but plays {@code role} (see {@link #RAIL}). */
+        boolean addRole(int x, int y, int z, String role) {
+            if (!add(x, y, z)) {
+                return false;
+            }
+            this.roles.put(new BlockPos(x, y, z), role);
+            return true;
+        }
+
+        /** Give an already added block a facing (see {@link #add(int, int, int, String)}). */
+        boolean addFacing(int x, int y, int z, String dir) {
+            this.facing.put(new BlockPos(x, y, z), dir);
+            return true;
+        }
+
+        /** Add a block that faces {@code dir} (a horizontal direction name) if its block has a facing. */
+        boolean add(int x, int y, int z, String dir) {
+            if (!add(x, y, z)) {
+                return false;
+            }
+            this.facing.put(new BlockPos(x, y, z), dir);
             return true;
         }
     }
@@ -267,6 +312,311 @@ public final class ShapeGenerator {
                         return;
                     }
                 }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ pyramid, cone, torus
+
+    private static void pyramid(Collector out, BlockPos center, BlockPos edge, boolean hollow) {
+        int w = Math.max(Math.abs(edge.getX() - center.getX()), Math.abs(edge.getZ() - center.getZ()));
+        // Buildable shells make each ring two wide, so every layer rests on the one below.
+        int thick = com.testrts.rtsclient.config.RtsConfig.get().buildableShells ? 2 : 1;
+        for (int i = 0; i <= w; i++) {
+            int half = w - i;
+            for (int x = -half; x <= half; x++) {
+                for (int z = -half; z <= half; z++) {
+                    boolean ring = Math.max(Math.abs(x), Math.abs(z)) > half - thick;
+                    if ((!hollow || ring || half == 0) && !out.add(center.getX() + x, center.getY() + i, center.getZ() + z)) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    private static void cone(Collector out, BlockPos center, BlockPos edge, int height, boolean hollow) {
+        double dx = edge.getX() - center.getX();
+        double dz = edge.getZ() - center.getZ();
+        double radius = Math.sqrt(dx * dx + dz * dz);
+        int h = Math.max(1, Math.abs(height) <= 1 ? (int) Math.round(radius * 2) : Math.abs(height));
+        int r = (int) Math.ceil(radius);
+        for (int i = 0; i < h; i++) {
+            double ri = radius * (1.0 - (double) i / h);
+            double limit = (ri + 0.5) * (ri + 0.5);
+            // A layer is "inside" where the next one up still covers it, so the outside steps stay closed.
+            double above = radius * (1.0 - (double) (i + 1) / h);
+            double inner = above - 0.5;
+            for (int x = -r; x <= r; x++) {
+                for (int z = -r; z <= r; z++) {
+                    double d2 = x * x + z * z;
+                    if (d2 > limit) {
+                        continue;
+                    }
+                    boolean shell = i == h - 1 || inner <= 0 || d2 > inner * inner || interiorOfDiscEdge(x, z, limit);
+                    if ((!hollow || shell) && !out.add(center.getX() + x, center.getY() + i, center.getZ() + z)) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /** On the rim of a disc (some neighbour falls outside it). */
+    private static boolean interiorOfDiscEdge(int x, int z, double limit) {
+        return !interiorOfDisc(x, z, limit);
+    }
+
+    /** Height is the tube's radius. */
+    private static void torus(Collector out, BlockPos center, BlockPos edge, int height, boolean hollow) {
+        double dx = edge.getX() - center.getX();
+        double dz = edge.getZ() - center.getZ();
+        double major = Math.sqrt(dx * dx + dz * dz);
+        double minor = Math.max(1, Math.min(Math.abs(height), Math.max(1, (int) major)));
+        int rx = (int) Math.ceil(major + minor);
+        int ry = (int) Math.ceil(minor);
+        for (int y = -ry; y <= ry; y++) {
+            for (int x = -rx; x <= rx; x++) {
+                for (int z = -rx; z <= rx; z++) {
+                    if (!inTorus(x, y, z, major, minor)) {
+                        continue;
+                    }
+                    if (hollow && torusInterior(x, y, z, major, minor)) {
+                        continue;
+                    }
+                    if (!out.add(center.getX() + x, center.getY() + y, center.getZ() + z)) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean inTorus(int x, int y, int z, double major, double minor) {
+        double q = Math.sqrt(x * x + z * z) - major;
+        return q * q + y * y <= (minor + 0.5) * (minor + 0.5);
+    }
+
+    /** Like {@link #interiorOfBall}: every face (and, for buildable shells, edge) neighbour is inside. */
+    private static boolean torusInterior(int x, int y, int z, double major, double minor) {
+        boolean buildable = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    int n = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+                    if (n == 0 || n == 3 || n == 2 && !buildable) {
+                        continue;
+                    }
+                    if (!inTorus(x + dx, y + dy, z + dz, major, minor)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    // ------------------------------------------------------------------ arch, bridge, stairs
+
+    /**
+     * Columns along the ground from A toward B (the same cells a one-block wall would use), with
+     * the step index; diagonal runs get a corner cell so they stay connected.
+     */
+    private static java.util.List<int[]> run(BlockPos a, BlockPos b) {
+        int dx = b.getX() - a.getX();
+        int dz = b.getZ() - a.getZ();
+        int steps = Math.max(Math.abs(dx), Math.abs(dz));
+        java.util.List<int[]> cells = new java.util.ArrayList<>();
+        int px = a.getX();
+        int pz = a.getZ();
+        for (int i = 0; i <= steps; i++) {
+            double t = steps == 0 ? 0.0 : (double) i / steps;
+            int x = (int) Math.round(a.getX() + dx * t);
+            int z = (int) Math.round(a.getZ() + dz * t);
+            if (i > 0 && x != px && z != pz) {
+                cells.add(new int[]{x, pz, i});
+            }
+            cells.add(new int[]{x, z, i});
+            px = x;
+            pz = z;
+        }
+        return cells;
+    }
+
+    /** The horizontal direction from A toward B ("north"...), by the longer axis. */
+    private static String heading(BlockPos a, BlockPos b) {
+        int dx = b.getX() - a.getX();
+        int dz = b.getZ() - a.getZ();
+        if (Math.abs(dx) >= Math.abs(dz)) {
+            return dx >= 0 ? "east" : "west";
+        }
+        return dz >= 0 ? "south" : "north";
+    }
+
+    /**
+     * Arch between A and B: the outline of a half ellipse as wide as A-B and {@code height} high (a
+     * half circle when 0-1). Solid: everything around the opening up to the top, like a gateway.
+     */
+    private static void arch(Collector out, BlockPos a, BlockPos b, int height, boolean hollow) {
+        java.util.List<int[]> cells = run(a, b);
+        int steps = cells.isEmpty() ? 0 : cells.get(cells.size() - 1)[2];
+        if (steps < 2) {
+            line3d(out, a, b);
+            return;
+        }
+        double half = steps / 2.0;
+        int rise = Math.abs(height) <= 1 ? (int) Math.ceil(half) : Math.abs(height);
+        boolean thick = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        for (int[] c : cells) {
+            for (int y = 0; y <= rise; y++) {
+                boolean inside = inArch(c[2], y, half, rise);
+                boolean edge = inside && archEdge(c[2], y, half, rise, thick);
+                if ((edge || !hollow && !inside) && !out.add(c[0], a.getY() + y, c[1])) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private static boolean inArch(int col, int y, double half, int rise) {
+        if (y < 0) {
+            return true; // the ground closes the bottom
+        }
+        double u = (col - half) / (half + 0.5);
+        double v = y / (rise + 0.5);
+        return u * u + v * v <= 1.0;
+    }
+
+    /** On the outline: a neighbour (side, or with buildable shells also diagonal) is outside. */
+    private static boolean archEdge(int col, int y, double half, int rise, boolean thick) {
+        for (int dc = -1; dc <= 1; dc++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dc == 0 && dy == 0 || !thick && dc != 0 && dy != 0) {
+                    continue;
+                }
+                if (!inArch(col + dc, y + dy, half, rise)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Deck from A to B (sloping with B's height) with a gentle hump. Unless hollow: fence railings on
+     * both sides (a wall or fence matching the deck block) with lantern posts every few blocks and at
+     * both ends.
+     */
+    private static void bridge(Collector out, BlockPos a, BlockPos b, int height, boolean hollow) {
+        java.util.List<int[]> cells = run(a, b);
+        int steps = Math.max(1, cells.isEmpty() ? 1 : cells.get(cells.size() - 1)[2]);
+        int width = Math.max(1, Math.abs(height));
+        boolean alongX = Math.abs(b.getX() - a.getX()) >= Math.abs(b.getZ() - a.getZ());
+        int lo = -(width - 1) / 2;
+        int hi = lo + width - 1;
+        double hump = Math.min(3.0, steps / 8.0);
+        // Railings stand just outside the deck, so the whole width stays walkable.
+        int railLo = lo - 1;
+        int railHi = hi + 1;
+        int[] ys = new int[steps + 1];
+        for (int i = 0; i <= steps; i++) {
+            double t = (double) i / steps;
+            ys[i] = a.getY() + (int) Math.round((b.getY() - a.getY()) * t + Math.sin(Math.PI * t) * hump);
+        }
+        String forward = heading(a, b);
+        String back = switch (forward) {
+            case "east" -> "west";
+            case "west" -> "east";
+            case "north" -> "south";
+            default -> "north";
+        };
+        for (int[] c : cells) {
+            int y = ys[c[2]];
+            // Where the deck steps up or down a block, a stair makes it walkable without jumping.
+            String stair = c[2] < steps && ys[c[2] + 1] > y ? forward : c[2] > 0 && ys[c[2] - 1] > y ? back : null;
+            boolean post = c[2] == 0 || c[2] == steps || c[2] % 5 == 0;
+            for (int w = hollow ? lo : railLo; w <= (hollow ? hi : railHi); w++) {
+                int x = alongX ? c[0] : c[0] + w;
+                int z = alongX ? c[1] + w : c[1];
+                boolean deck = w >= lo && w <= hi;
+                if (deck && stair != null ? !out.addRole(x, y, z, STAIR) || !out.addFacing(x, y, z, stair) : !out.add(x, y, z)) {
+                    return;
+                }
+                if (w == railLo || w == railHi) {
+                    if (!out.addRole(x, y + 1, z, RAIL)) {
+                        return;
+                    }
+                    if (post && (!out.addRole(x, y + 2, z, RAIL) || !out.addRole(x, y + 3, z, LAMP))) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /** One block up per block forward from A toward B; stops at B's height when B is higher. */
+    private static void stairs(Collector out, BlockPos a, BlockPos b, int height, boolean hollow) {
+        BlockPos low = a.getY() <= b.getY() ? a : b;
+        BlockPos high = low == a ? b : a;
+        String dir = heading(low, high);
+        int width = Math.max(1, Math.abs(height));
+        boolean alongX = dir.equals("east") || dir.equals("west");
+        int fx = alongX ? (dir.equals("east") ? 1 : -1) : 0;
+        int fz = alongX ? 0 : (dir.equals("south") ? 1 : -1);
+        int run = Math.max(Math.abs(high.getX() - low.getX()), Math.abs(high.getZ() - low.getZ()));
+        int rise = high.getY() - low.getY();
+        int steps = rise > 0 ? rise : run;
+        int lo = -(width - 1) / 2;
+        int hi = lo + width - 1;
+        for (int i = 0; i <= steps; i++) {
+            for (int w = lo; w <= hi; w++) {
+                int x = low.getX() + fx * i + (alongX ? 0 : w);
+                int z = low.getZ() + fz * i + (alongX ? w : 0);
+                int y = low.getY() + i;
+                if (!hollow) {
+                    for (int below = low.getY(); below < y; below++) {
+                        if (!out.add(x, below, z)) {
+                            return;
+                        }
+                    }
+                }
+                if (!out.add(x, y, z, dir)) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Spiral staircase: one step up per step (8-12 a turn), two wide, around a pole when solid. */
+    private static void spiral(Collector out, BlockPos center, BlockPos edge, int height, boolean hollow) {
+        double dx = edge.getX() - center.getX();
+        double dz = edge.getZ() - center.getZ();
+        double radius = Math.max(1.5, Math.sqrt(dx * dx + dz * dz));
+        int h = Math.max(2, Math.abs(height));
+        // About 8-12 steps per full turn (each step ~2 blocks along the outer edge): reads as a spiral
+        // staircase, and a turn rises 8+ blocks so there's always head room.
+        double perStep = 2.0 * Math.PI / Math.max(8, Math.round(Math.PI * radius));
+        double inner = Math.max(0.5, radius - 1.5);
+        for (int i = 0; i < h; i++) {
+            int y = center.getY() + i;
+            // The step covers a little more than its own angle so it overlaps the next one.
+            for (double ang = i * perStep; ang <= (i + 1.4) * perStep; ang += perStep / 3.0) {
+                double cs = Math.cos(ang);
+                double sn = Math.sin(ang);
+                // Walking up means moving along the turn (-sin, cos), so a stair block faces that way.
+                double tx = -sn;
+                double tz = cs;
+                String dir = Math.abs(tx) >= Math.abs(tz) ? (tx > 0 ? "east" : "west") : (tz > 0 ? "south" : "north");
+                for (double r = inner; r <= radius + 0.01; r += 0.5) {
+                    int x = center.getX() + (int) Math.round(cs * r);
+                    int z = center.getZ() + (int) Math.round(sn * r);
+                    if (!out.positions.contains(new BlockPos(x, y, z)) && !out.add(x, y, z, dir)) {
+                        return;
+                    }
+                }
+            }
+            if (!hollow && !out.add(center.getX(), y, center.getZ())) {
+                return;
             }
         }
     }

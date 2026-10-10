@@ -69,7 +69,7 @@ public final class OrderPlanner {
      */
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                           boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
-                          java.util.List<BlockState> mix, boolean clearInTheWay) {
+                          java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern) {
     }
 
     public static Request request(BuildSession s, BlockPos a, BlockPos b, float cameraYaw, int limit) {
@@ -79,7 +79,7 @@ public final class OrderPlanner {
             brush = mix.get(0);
         }
         return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix,
-                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay);
+                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern);
     }
 
     public static Plan plan(ClientWorld world, Request r) {
@@ -104,8 +104,29 @@ public final class OrderPlanner {
         if (brush == null) {
             return plan(changes, shape.positions(), false);
         }
+        // Pattern brushes: each block once (in the order added) and the shape's height, for layered patterns.
+        java.util.List<BlockState> distinct = new java.util.ArrayList<>(new java.util.LinkedHashSet<>(r.mix()));
+        int minY = Integer.MAX_VALUE;
+        int maxY = Integer.MIN_VALUE;
         for (BlockPos p : shape.positions()) {
-            BlockState want = pick(r, p);
+            minY = Math.min(minY, p.getY());
+            maxY = Math.max(maxY, p.getY());
+        }
+        for (BlockPos p : shape.positions()) {
+            BlockState want = pick(r, p, distinct, minY, maxY);
+            String role = shape.roles().get(p);
+            if (ShapeGenerator.RAIL.equals(role)) {
+                want = railingFor(want);
+            } else if (ShapeGenerator.LAMP.equals(role)) {
+                want = LANTERN;
+            } else if (ShapeGenerator.STAIR.equals(role)) {
+                want = stairsFor(want);
+            }
+            String facing = shape.facing().get(p);
+            if (facing != null) {
+                // Stair-like shapes: stairs (and anything else with a facing) point up the staircase.
+                want = BuildSession.withProperty(want, "facing", facing);
+            }
             BlockState current = world.getBlockState(p);
             if (com.testrts.rtsclient.task.MaterialPlanner.matches(current, want)) {
                 continue;
@@ -125,22 +146,79 @@ public final class OrderPlanner {
         return plan(changes, shape.positions(), false);
     }
 
-    /** The brush, or with a pattern mix a pseudo-random pick that's stable per position (preview = build). */
-    private static BlockState pick(Request r, BlockPos p) {
+    /** The brush, or with a mix the pattern's pick for this position (stable, so preview = build). */
+    private static BlockState pick(Request r, BlockPos p, java.util.List<BlockState> distinct, int minY, int maxY) {
         java.util.List<BlockState> mix = r.mix();
         if (mix.isEmpty()) {
             return r.brush();
         }
-        long h = p.asLong() * 0x9E3779B97F4A7C15L;
-        h ^= h >>> 29;
-        h *= 0xBF58476D1CE4E5B9L;
-        h ^= h >>> 32;
-        return mix.get((int) Math.floorMod(h, (long) mix.size()));
+        MixPattern pattern = r.pattern() == null ? MixPattern.RANDOM : r.pattern();
+        int i = pattern.pick(p.getX(), p.getY(), p.getZ(), mix.size(), distinct.size(), minY, maxY);
+        return pattern.usesWeights() ? mix.get(i) : distinct.get(i);
     }
 
     private static boolean isSolidTop(ClientWorld world, BlockPos below) {
         BlockState s = world.getBlockState(below);
         return !s.isAir() && !s.isReplaceable() && !s.getCollisionShape(world, below).isEmpty();
+    }
+
+    private static final BlockState LANTERN = Blocks.LANTERN.getDefaultState();
+
+    /**
+     * A fence or wall that goes with {@code deck}: oak planks or logs get oak fence, stone bricks a
+     * stone brick wall, cobblestone a cobblestone wall... oak fence when nothing matches.
+     */
+    public static BlockState railingFor(BlockState deck) {
+        net.minecraft.util.Identifier id = net.minecraft.registry.Registries.BLOCK.getId(deck.getBlock());
+        String path = id.getPath();
+        if (path.endsWith("_fence") || path.endsWith("_wall")) {
+            return deck.getBlock().getDefaultState();
+        }
+        String base = path.replace("stripped_", "");
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (String suffix : new String[]{"_planks", "_log", "_wood", "_stem", "_hyphae"}) {
+            if (base.endsWith(suffix)) {
+                names.add(base.substring(0, base.length() - suffix.length()) + "_fence");
+            }
+        }
+        if (base.endsWith("_bricks") || base.endsWith("_tiles")) {
+            names.add(base.substring(0, base.length() - 1) + "_wall");
+        }
+        names.add(base + "_wall");
+        names.add(base + "_fence");
+        // Stone has no wall of its own, but its bricks do (stone, deepslate, mud...).
+        names.add(base + "_brick_wall");
+        for (String name : names) {
+            net.minecraft.util.Identifier c = new net.minecraft.util.Identifier(id.getNamespace(), name);
+            if (net.minecraft.registry.Registries.BLOCK.containsId(c)) {
+                return net.minecraft.registry.Registries.BLOCK.get(c).getDefaultState();
+            }
+        }
+        return Blocks.OAK_FENCE.getDefaultState();
+    }
+
+    /** The stairs of {@code block}'s material (oak planks: oak stairs, stone bricks: stone brick stairs), or the block itself. */
+    public static BlockState stairsFor(BlockState block) {
+        net.minecraft.util.Identifier id = net.minecraft.registry.Registries.BLOCK.getId(block.getBlock());
+        String path = id.getPath();
+        if (path.endsWith("_stairs")) {
+            return block;
+        }
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (path.endsWith("_planks")) {
+            names.add(path.substring(0, path.length() - "_planks".length()) + "_stairs");
+        }
+        if (path.endsWith("_bricks") || path.endsWith("_tiles")) {
+            names.add(path.substring(0, path.length() - 1) + "_stairs");
+        }
+        names.add(path + "_stairs");
+        for (String name : names) {
+            net.minecraft.util.Identifier c = new net.minecraft.util.Identifier(id.getNamespace(), name);
+            if (net.minecraft.registry.Registries.BLOCK.containsId(c)) {
+                return net.minecraft.registry.Registries.BLOCK.get(c).getDefaultState();
+            }
+        }
+        return block;
     }
 
     public static String label(Request r, int count) {

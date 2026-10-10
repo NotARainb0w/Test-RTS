@@ -106,6 +106,8 @@ public final class TaskQueue {
     public void tick(Minecraft client) {
         if (client.player == null || client.level == null) {
             if (!this.tasks.isEmpty()) {
+                // Leaving the world: keep the orders for next time before dropping them.
+                QueueStore.autosave();
                 this.tasks.clear();
             }
             return;

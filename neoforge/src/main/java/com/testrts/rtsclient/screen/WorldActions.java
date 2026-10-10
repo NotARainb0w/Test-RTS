@@ -334,6 +334,7 @@ public final class WorldActions {
                 queue(new com.testrts.rtsclient.task.TreeFellTask(new BlockPos(a.getX(), y - 3, a.getZ()),
                         new BlockPos(b.getX(), Math.max(a.getY(), b.getY()) + 32, b.getZ()), true));
             }
+            case PLANT_TREES -> plantTrees(a, b);
             case HARVEST -> {
                 int y0 = Math.min(a.getY(), b.getY()) - 2;
                 int y1 = Math.max(a.getY(), b.getY()) + 3;
@@ -422,6 +423,39 @@ public final class WorldActions {
         if (!plan.fill().isEmpty()) {
             queue(new BuildTask("Flatten: fill " + plan.fill().size(), plan.fill(), false));
         }
+    }
+
+    private static final Block[] SAPLINGS = {Blocks.OAK_SAPLING, Blocks.BIRCH_SAPLING, Blocks.SPRUCE_SAPLING,
+            Blocks.JUNGLE_SAPLING, Blocks.ACACIA_SAPLING, Blocks.DARK_OAK_SAPLING, Blocks.CHERRY_SAPLING, Blocks.MANGROVE_PROPAGULE};
+
+    /** The sapling Plant trees uses: the brush if it is one, else whichever sapling you have most of (oak if none). */
+    public static Block treeSapling(BuildSession s) {
+        if (s.brush.getItem() instanceof BlockItem bi && bi.getBlock() instanceof net.minecraft.world.level.block.SaplingBlock) {
+            return bi.getBlock();
+        }
+        Minecraft mc = Minecraft.getInstance();
+        Block best = Blocks.OAK_SAPLING;
+        int bestCount = 0;
+        for (Block sapling : SAPLINGS) {
+            var item = sapling.asItem();
+            int n = (mc.player == null ? 0 : mc.player.getInventory().countItem(item)) + StorageManager.get().total(item);
+            if (n > bestCount) {
+                best = sapling;
+                bestCount = n;
+            }
+        }
+        return best;
+    }
+
+    private void plantTrees(BlockPos a, BlockPos b) {
+        Block sapling = treeSapling(this.session);
+        Map<BlockPos, BlockState> order = TerrainPlanner.plantTrees(world(), a, b, sapling, this.session.treeSpacing);
+        if (order.isEmpty()) {
+            Messages.info("Nowhere to plant there: needs grass or dirt with room above, away from other trees");
+            return;
+        }
+        pushUndo("Plant trees", order);
+        queue(new BuildTask("Plant " + order.size() + " " + sapling.getName().getString(), order, false));
     }
 
     private void lightUp(BlockPos a, BlockPos b) {

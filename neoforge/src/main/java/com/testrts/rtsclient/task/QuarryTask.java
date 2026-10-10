@@ -42,6 +42,14 @@ public final class QuarryTask implements RtsTask {
     private boolean finished;
     private String detail = "starting";
 
+    public BlockPos min() {
+        return this.min;
+    }
+
+    public BlockPos max() {
+        return this.max;
+    }
+
     public QuarryTask(BlockPos a, BlockPos b) {
         this.min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
         this.max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));

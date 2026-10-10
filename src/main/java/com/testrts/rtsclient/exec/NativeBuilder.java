@@ -54,6 +54,13 @@ import java.util.TreeMap;
  */
 public final class NativeBuilder {
     private static final int PLACE_DELAY_TICKS = 2;
+    /**
+     * Passes over the scaffolding. Reaching high scaffolding can take a little new scaffolding, which
+     * the next pass takes down, so a few passes may be needed.
+     */
+    private static final int MAX_CLEANUP_ROUNDS = 8;
+    /** With mid-air placing: how many layers above the current one may be placed while in reach. */
+    private static final int LOOKAHEAD_LAYERS = 2;
     private static final int BREAK_TIMEOUT_TICKS = 20 * 20;
     private static final int MAX_WALK_FAILS = 3;
     private static final int RESCAN_TICKS = 20;
@@ -141,6 +148,27 @@ public final class NativeBuilder {
     private BlockPos breaking;
     private Direction breakingSide = Direction.UP;
     private int breakTicks;
+    /** Already paused once to fetch scaffolding for a block out of reach. */
+    private boolean askedForScaffolding;
+    /** Ticks spent turning toward the block being placed. */
+    private int turnedTicks;
+    /** The block we're turning toward to place. */
+    @Nullable
+    private BlockPos aimTarget;
+
+    // Getting out when the finished build closed around us (a dome, a hollow sphere).
+    /** 0 = no, 1 = opening a doorway, 2 = closing it again from outside. */
+    private int escapeStage;
+    private int escapes;
+    /** The air we were shut in with; while closing the doorway we never stand in it. */
+    @Nullable
+    private Set<BlockPos> shutIn;
+    /** Order blocks taken out as the doorway, with the states to put back. */
+    private Map<BlockPos, BlockState> doorway = Map.of();
+    @Nullable
+    private int[] bounds;
+    /** Mining of {@link #breaking} began (we turn toward it first). */
+    private boolean breakStarted;
 
     @Nullable
     private PathFinder.Search search;
@@ -149,6 +177,66 @@ public final class NativeBuilder {
     @Nullable
     private BlockPos walkTarget;
     private String status = "starting";
+
+    /** What routes may build: temporary blocks anywhere that isn't part of the order. */
+    private final PathFinder.Building building = new PathFinder.Building() {
+        @Override
+        public boolean canPlace(BlockPos pos) {
+            ClientWorld world = MinecraftClient.getInstance().world;
+            if (world == null || !world.isChunkLoaded(pos) || NativeBuilder.this.originalOrder.containsKey(pos)) {
+                return false;
+            }
+            BlockState s = world.getBlockState(pos);
+            return (s.isAir() || s.isReplaceable()) && !s.getFluidState().isIn(net.minecraft.registry.tag.FluidTags.LAVA);
+        }
+
+        @Override
+        public boolean canDig(BlockPos pos) {
+            return NativeBuilder.this.scaffolds.contains(pos);
+        }
+
+        @Override
+        public int budget() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            Item item = scaffoldItem(client);
+            if (item == null) {
+                return 0;
+            }
+            return Creative.supplies(client) ? 64 : Math.min(64, Inventories.count(client, item));
+        }
+    };
+
+    /** Places the scaffolding blocks of a route for the path follower. */
+    private final PathFollower.Scaffolder scaffolder = new PathFollower.Scaffolder() {
+        @Override
+        public boolean holdScaffold() {
+            MinecraftClient client = MinecraftClient.getInstance();
+            Item item = scaffoldItem(client);
+            return item != null && Inventories.hold(client, item);
+        }
+
+        @Override
+        public Result place(BlockPos at) {
+            MinecraftClient client = MinecraftClient.getInstance();
+            if (!holdScaffold()) {
+                return Result.FAILED;
+            }
+            Item item = client.player.getMainHandStack().getItem();
+            return switch (NativeBuilder.this.place(client, at, Block.getBlockFromItem(item).getDefaultState())) {
+                case DONE -> {
+                    NativeBuilder.this.scaffolds.add(at.toImmutable());
+                    yield Result.DONE;
+                }
+                case TURNING -> Result.BUSY;
+                case FAILED -> Result.FAILED;
+            };
+        }
+
+        @Override
+        public void placed(BlockPos at) {
+            NativeBuilder.this.scaffolds.add(at.toImmutable());
+        }
+    };
 
     /** Scaffolding we placed that is still in the world (handed on if this builder is replaced). */
     public Set<BlockPos> scaffolds() {
@@ -250,17 +338,26 @@ public final class NativeBuilder {
             if (startCleanup(world)) {
                 return true;
             }
+            if (startEscape(client)) {
+                return true;
+            }
             MovementInput.restore(client);
             int left = skippedCount();
             this.status = left == 0 ? "done" : "done, " + left + " skipped";
+            if (!this.scaffolds.isEmpty() && com.testrts.rtsclient.config.RtsConfig.get().removeScaffolding) {
+                com.testrts.rtsclient.util.Messages.warn(this.scaffolds.size() + " scaffolding block(s) couldn't be taken down");
+            }
             return false;
         }
         String layerInfo = (this.cleaning ? " scaffolding" : "") + (this.layered && this.layerOrder.size() > 1
                 ? " (layer " + (this.layerIndex + 1) + "/" + this.layerOrder.size() + ", " + this.todo.size() + " left)"
                 : " (" + this.todo.size() + " left)");
 
-        // 1) Work on something within reach (this may also plan scaffolding).
-        if (actInReach(client)) {
+        // 1) Work on something within reach (this may also plan scaffolding). Not halfway through
+        //    a pillar jump or a bridge block, though: finish that step first.
+        BlockPos feetNow = Walkability.feetNode(world, player);
+        boolean shutInNow = this.escapeStage == 2 && (this.shutIn.contains(feetNow) || inDoorway(feetNow));
+        if ((this.walk == null || !this.walk.buildingStep()) && !shutInNow && actInReach(client)) {
             this.walk = null;
             this.search = null;
             this.seekingPillarSite = false;
@@ -290,14 +387,16 @@ public final class NativeBuilder {
             this.walkTarget = target;
             this.walk = null;
             this.seekingPillarSite = false;
-            this.search = PathFinder.start(world, Walkability.feetNode(world, player), feet -> canWorkFrom(client, feet, target),
-                    Vec3d.ofCenter(target));
+            this.search = PathFinder.start(world, Walkability.feetNode(world, player),
+                    feet -> canWorkFrom(client, feet, target) && mayStandAt(world, feet, target),
+                    Vec3d.ofCenter(target), hasScaffoldItem(client) ? this.building : null);
         }
         if (this.search != null) {
             this.status = (this.seekingPillarSite ? "finding a spot to climb" : "planning") + info;
             PathFinder.Search.State s = this.search.step(PathFinder.NODES_PER_TICK);
             if (s == PathFinder.Search.State.FOUND) {
                 List<BlockPos> path = this.search.result();
+                List<PathFinder.Action> actions = this.search.actions();
                 this.search = null;
                 if (path.isEmpty()) {
                     // Already standing at the best spot.
@@ -310,7 +409,7 @@ public final class NativeBuilder {
                     }
                     return;
                 }
-                this.walk = new PathFollower(path, this::mayBreakInWay, false);
+                this.walk = new PathFollower(path, this::mayBreakInWay, false).building(actions, this.scaffolder);
             } else if (s == PathFinder.Search.State.FAILED) {
                 this.search = null;
                 if (!this.seekingPillarSite && hasScaffoldItem(client)) {
@@ -318,6 +417,12 @@ public final class NativeBuilder {
                     this.seekingPillarSite = true;
                     this.search = PathFinder.start(world, Walkability.feetNode(world, player), feet -> pillarSite(world, feet, target),
                             Vec3d.ofCenter(target));
+                } else if (!this.seekingPillarSite && !this.askedForScaffolding && !hasScaffoldItem(client)
+                        && scaffoldInStorage()) {
+                    // Out of reach without building a way up, and nothing to build it with: fetch some
+                    // scaffolding (the build task gets it from storage) and try again.
+                    this.askedForScaffolding = true;
+                    pauseForScaffolding();
                 } else {
                     unreachable(target);
                 }
@@ -541,11 +646,12 @@ public final class NativeBuilder {
             return;
         }
         this.status = "placing scaffolding";
-        if (place(client, c, net.minecraft.block.Block.getBlockFromItem(item).getDefaultState())) {
+        Placed placed = place(client, c, net.minecraft.block.Block.getBlockFromItem(item).getDefaultState());
+        if (placed == Placed.DONE) {
             this.scaffolds.add(c.toImmutable());
             this.scaffoldPlan.pollFirst();
             this.cooldown = PLACE_DELAY_TICKS;
-        } else {
+        } else if (placed == Placed.FAILED) {
             abandonScaffold();
         }
     }
@@ -553,12 +659,16 @@ public final class NativeBuilder {
     @Nullable
     private Item scaffoldItem(MinecraftClient client) {
         Item fallback = null;
+        boolean creative = Creative.supplies(client);
         for (String id : com.testrts.rtsclient.config.RtsConfig.get().scaffoldBlocks) {
             net.minecraft.util.Identifier ident = net.minecraft.util.Identifier.tryParse(id);
             if (ident == null || !net.minecraft.registry.Registries.ITEM.containsId(ident)) {
                 continue;
             }
             Item item = net.minecraft.registry.Registries.ITEM.get(ident);
+            if (creative && !this.orderItems.contains(item)) {
+                return item;
+            }
             if (Inventories.count(client, item) > 0) {
                 if (!this.orderItems.contains(item)) {
                     return item;
@@ -573,6 +683,18 @@ public final class NativeBuilder {
 
     private boolean hasScaffoldItem(MinecraftClient client) {
         return scaffoldItem(client) != null;
+    }
+
+    /** Some scaffolding block is in linked storage. */
+    private static boolean scaffoldInStorage() {
+        for (String id : com.testrts.rtsclient.config.RtsConfig.get().scaffoldBlocks) {
+            net.minecraft.util.Identifier ident = net.minecraft.util.Identifier.tryParse(id);
+            if (ident != null && net.minecraft.registry.Registries.ITEM.containsId(ident)
+                    && com.testrts.rtsclient.storage.StorageManager.get().total(net.minecraft.registry.Registries.ITEM.get(ident)) > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Out of scaffolding blocks: pause and ask for some (the build task fetches it from storage). */
@@ -596,7 +718,7 @@ public final class NativeBuilder {
     /** When everything is built, mine the scaffolding back out. */
     private boolean startCleanup(ClientWorld world) {
         if (this.scaffolds.isEmpty() || !com.testrts.rtsclient.config.RtsConfig.get().removeScaffolding
-                || this.cleanupRounds >= 3) {
+                || this.cleanupRounds >= MAX_CLEANUP_ROUNDS) {
             return false;
         }
         Map<BlockPos, BlockState> cleanup = new LinkedHashMap<>();
@@ -628,6 +750,237 @@ public final class NativeBuilder {
         this.search = null;
         buildLayers();
         return true;
+    }
+
+    /**
+     * We placed a block here and it turned into another solid block by itself (a torch on a wall, a
+     * door's other half...): that spot is done, or we'd keep coming back to it.
+     */
+    private boolean changedByItself(ClientWorld world, BlockPos p) {
+        if (this.clearing || !this.placedHere.contains(p)) {
+            return false;
+        }
+        BlockState now = world.getBlockState(p);
+        return !now.isAir() && !now.isReplaceable();
+    }
+
+    // ------------------------------------------------------------------ getting out
+
+    /**
+     * The finished build closed around us (a dome, a hollow sphere): open a two-block doorway at the
+     * lowest point, walk out, and close it again from outside. Runs after the scaffolding is gone.
+     *
+     * @return true while there is escape work to do
+     */
+    private boolean startEscape(MinecraftClient client) {
+        if (this.escapeStage == 1) {
+            // The doorway is open: put it back, working from anywhere but inside.
+            this.escapeStage = 2;
+            beginPass(new LinkedHashMap<>(this.doorway), false);
+            return true;
+        }
+        this.escapeStage = 0;
+        this.shutIn = null;
+        if (this.escapes >= 2 || this.originalOrder.isEmpty() || this.originalOrder.values().iterator().next().isAir()) {
+            return false;
+        }
+        ClientWorld world = client.world;
+        ClientPlayerEntity player = client.player;
+        Set<BlockPos> inside = enclosedSpace(world, Walkability.feetNode(world, player));
+        if (inside == null) {
+            return false;
+        }
+        this.escapes++;
+        Map<BlockPos, BlockState> door = pickDoorway(world, player, inside);
+        if (door.isEmpty()) {
+            warn("The build closed around you and there's no wall to open - mine your way out");
+            return false;
+        }
+        this.shutIn = inside;
+        this.doorway = door;
+        this.escapeStage = 1;
+        Map<BlockPos, BlockState> open = new LinkedHashMap<>();
+        BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
+        for (BlockPos d : door.keySet()) {
+            open.put(d, air);
+        }
+        beginPass(open, true);
+        com.testrts.rtsclient.util.Messages.info("The build closed around you - opening a doorway to get out (it's closed again from outside)");
+        return true;
+    }
+
+    /** Work on a new set of blocks with fresh failure counts. */
+    private void beginPass(Map<BlockPos, BlockState> blocks, boolean clear) {
+        this.order = blocks;
+        this.clearing = clear;
+        this.cleaning = false;
+        this.skipped.clear();
+        this.failures.clear();
+        this.walkStucks.clear();
+        this.stepAsides.clear();
+        this.breakAttempts.clear();
+        this.placeAttempts.clear();
+        this.sweeps = 0;
+        this.walk = null;
+        this.search = null;
+        buildLayers();
+    }
+
+    /**
+     * The air around our feet, if it's closed off: flood through passable cells. Getting outside the
+     * order's bounds (or very far) means we're not shut in.
+     */
+    @Nullable
+    private Set<BlockPos> enclosedSpace(ClientWorld world, BlockPos feet) {
+        int[] b = orderBounds();
+        if (!within(b, feet) || !Walkability.passable(world, feet)) {
+            return null;
+        }
+        Set<BlockPos> seen = new HashSet<>();
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        seen.add(feet.toImmutable());
+        queue.add(feet.toImmutable());
+        while (!queue.isEmpty()) {
+            BlockPos c = queue.poll();
+            for (Direction d : Direction.values()) {
+                BlockPos n = c.offset(d);
+                if (seen.contains(n) || !Walkability.passable(world, n)) {
+                    continue;
+                }
+                if (!within(b, n) || seen.size() > 50_000) {
+                    return null;
+                }
+                seen.add(n);
+                queue.add(n);
+            }
+        }
+        return seen;
+    }
+
+    /** Thickest wall a doorway is dug through. */
+    private static final int MAX_DOOR_DEPTH = 3;
+
+    /**
+     * A doorway two blocks high, straight out through the wall (up to {@link #MAX_DOOR_DEPTH} thick)
+     * from standable inside air to open air. Lowest first, then shallowest, so we walk out at ground
+     * level taking out as little as possible.
+     */
+    private Map<BlockPos, BlockState> pickDoorway(ClientWorld world, ClientPlayerEntity player, Set<BlockPos> inside) {
+        List<BlockPos> best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (BlockPos c : inside) {
+            if (!Walkability.standable(world, c)) {
+                continue;
+            }
+            for (Direction d : Direction.Type.HORIZONTAL) {
+                List<BlockPos> cells = new ArrayList<>();
+                BlockPos out = null;
+                for (int k = 1; k <= MAX_DOOR_DEPTH + 1; k++) {
+                    BlockPos w = c.offset(d, k);
+                    BlockPos head = w.up();
+                    if (k > 1 && !inside.contains(w) && Walkability.passable(world, w) && Walkability.passable(world, head)) {
+                        out = w;
+                        break;
+                    }
+                    if (k > MAX_DOOR_DEPTH || !doorCell(world, w, true) || !doorCell(world, head, false)) {
+                        break;
+                    }
+                    if (!world.getBlockState(w).isAir()) {
+                        cells.add(w.toImmutable());
+                    }
+                    if (!world.getBlockState(head).isAir() && this.originalOrder.containsKey(head)) {
+                        cells.add(head.toImmutable());
+                    }
+                }
+                if (out == null || cells.isEmpty()) {
+                    continue;
+                }
+                // Going out through a door of the build is best: it's only taken out and put back.
+                boolean viaDoor = world.getBlockState(cells.get(0)).getBlock() instanceof DoorBlock;
+                double score = c.getY() * 100.0 + cells.size() * 5.0 + (Walkability.standable(world, out) ? 0.0 : 50.0)
+                        - (viaDoor ? 150.0 : 0.0)
+                        + c.getSquaredDistance(player.getBlockPos()) * 0.01;
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = cells;
+                }
+            }
+        }
+        Map<BlockPos, BlockState> door = new LinkedHashMap<>();
+        if (best != null) {
+            for (BlockPos q : best) {
+                door.put(q, this.originalOrder.get(q));
+            }
+        }
+        return door;
+    }
+
+    /**
+     * A cell a doorway may go through: open already, or a block of the order (never terrain or anything
+     * else that isn't ours to take out). The feet cell must be part of the wall or open.
+     */
+    private boolean doorCell(ClientWorld world, BlockPos cell, boolean feet) {
+        if (Walkability.passable(world, cell)) {
+            return true;
+        }
+        return this.originalOrder.containsKey(cell) && !world.getBlockState(cell).isAir();
+    }
+
+    /** Our feet or head would be in a doorway cell. */
+    private boolean inDoorway(BlockPos feet) {
+        return this.doorway.containsKey(feet) || this.doorway.containsKey(feet.up());
+    }
+
+    /** minX, minY, minZ, maxX, maxY, maxZ of the order. */
+    private int[] orderBounds() {
+        if (this.bounds == null) {
+            int[] b = {Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE, Integer.MIN_VALUE};
+            for (BlockPos q : this.originalOrder.keySet()) {
+                b[0] = Math.min(b[0], q.getX());
+                b[1] = Math.min(b[1], q.getY());
+                b[2] = Math.min(b[2], q.getZ());
+                b[3] = Math.max(b[3], q.getX());
+                b[4] = Math.max(b[4], q.getY());
+                b[5] = Math.max(b[5], q.getZ());
+            }
+            this.bounds = b;
+        }
+        return this.bounds;
+    }
+
+    private static boolean within(int[] b, BlockPos q) {
+        return q.getX() >= b[0] && q.getX() <= b[3] && q.getY() >= b[1] && q.getY() <= b[4] && q.getZ() >= b[2] && q.getZ() <= b[5];
+    }
+
+    /** {@code pos} is one of the (up to four) blocks right under the player's feet. */
+    private static boolean holdsUp(ClientPlayerEntity player, BlockPos pos) {
+        var box = player.getBoundingBox();
+        int y = (int) Math.floor(box.minY - 0.01);
+        return pos.getY() == y
+                && pos.getX() >= (int) Math.floor(box.minX) && pos.getX() <= (int) Math.floor(box.maxX - 1.0E-6)
+                && pos.getZ() >= (int) Math.floor(box.minZ) && pos.getZ() <= (int) Math.floor(box.maxZ - 1.0E-6);
+    }
+
+    /** Empty cells straight below {@code pos} before something to land on (up to 32). */
+    private static int dropUnder(ClientWorld world, BlockPos pos) {
+        int n = 0;
+        BlockPos c = pos.down();
+        while (n < 32 && Walkability.passable(world, c)) {
+            n++;
+            c = c.down();
+        }
+        return n;
+    }
+
+    /**
+     * Where a route to {@code target} may end. Not inside while closing a doorway (that's how we got
+     * shut in), and not on top of a block we're about to mine over a long drop.
+     */
+    private boolean mayStandAt(ClientWorld world, BlockPos feet, BlockPos target) {
+        if (this.escapeStage == 2 && (this.shutIn.contains(feet) || inDoorway(feet))) {
+            return false;
+        }
+        return !(this.clearing && feet.down().equals(target) && dropUnder(world, target) >= 3);
     }
 
     // ------------------------------------------------------------------ pillaring
@@ -703,9 +1056,13 @@ public final class NativeBuilder {
         }
         input.forward = false;
         if (player.isOnGround()) {
+            // Look down at our feet first (turning, not snapping), then jump.
+            if (!Look.toward(player, player.getYaw(), 90.0F)) {
+                input.jump = false;
+                return;
+            }
             this.pillarStep = player.getBlockPos();
             input.jump = true;
-            Reach.face(player, player.getYaw(), 90.0F);
             return;
         }
         input.jump = false;
@@ -734,7 +1091,8 @@ public final class NativeBuilder {
             while (this.layerIndex < this.layerOrder.size()) {
                 this.todo.clear();
                 for (BlockPos p : this.layers.get(this.layerOrder.get(this.layerIndex))) {
-                    if (!this.skipped.contains(p) && !this.impossible.contains(p) && !done(world, p, this.order.get(p))) {
+                    if (!this.skipped.contains(p) && !this.impossible.contains(p) && !done(world, p, this.order.get(p))
+                            && !changedByItself(world, p)) {
                         this.todo.add(p);
                     }
                 }
@@ -761,7 +1119,7 @@ public final class NativeBuilder {
     }
 
     public void stop(MinecraftClient client) {
-        if (this.breaking != null && client.interactionManager != null) {
+        if (this.breaking != null && this.breakStarted && client.interactionManager != null) {
             client.interactionManager.cancelBlockBreaking();
         }
         this.breaking = null;
@@ -823,15 +1181,43 @@ public final class NativeBuilder {
                 inReach.add(p);
             }
         }
+        // With mid-air placing nothing needs a neighbour, so blocks of the next layers that are already
+        // in reach go too, instead of walking the whole ring once per layer.
+        if (!this.clearing && this.layered && com.testrts.rtsclient.config.RtsConfig.get().airPlace) {
+            for (int k = 1; k <= LOOKAHEAD_LAYERS && this.layerIndex + k < this.layerOrder.size(); k++) {
+                for (BlockPos p : this.layers.get(this.layerOrder.get(this.layerIndex + k))) {
+                    if (!this.skipped.contains(p) && !this.impossible.contains(p)
+                            && Vec3d.ofCenter(p).squaredDistanceTo(eye) <= r2 && !done(world, p, this.order.get(p))) {
+                        inReach.add(p);
+                    }
+                }
+            }
+        }
         if (inReach.isEmpty()) {
             return false;
         }
-        inReach.sort(Comparator.comparingDouble(p -> Vec3d.ofCenter(p).squaredDistanceTo(eye)));
+        // Nearest first, but rather what's close to where we already look: less turning between blocks.
+        Vec3d look = player.getRotationVector();
+        inReach.sort(Comparator.comparingDouble(p -> {
+            Vec3d to = Vec3d.ofCenter(p).subtract(eye);
+            double turn = Math.acos(Math.max(-1.0, Math.min(1.0, to.normalize().dotProduct(look))));
+            return to.lengthSquared() + turn * 6.0;
+        }));
+        // Stay with the block we're already turning toward: re-picking every tick could switch back and
+        // forth between two blocks as the view moves and never finish turning to either.
+        if (this.aimTarget != null && inReach.remove(this.aimTarget)) {
+            inReach.add(0, this.aimTarget);
+        }
         if (this.clearing) {
             BlockPos below = player.getBlockPos().down();
             for (BlockPos p : inReach) {
                 // Leave the block we're standing on for last.
                 if (p.equals(below) && inReach.size() > 1) {
+                    continue;
+                }
+                // ...and never pull out anything we stand on (on an edge that can be a neighbour of
+                // that block) over a drop that hurts: it gets mined from somewhere else.
+                if (holdsUp(player, p) && dropUnder(world, p) >= 3) {
                     continue;
                 }
                 BlockState state = world.getBlockState(p);
@@ -896,15 +1282,25 @@ public final class NativeBuilder {
                 this.status = "missing " + item.getName().getString();
                 return true;
             }
-            if (this.placeAttempts.merge(p, 1, Integer::sum) > MAX_PLACE_ATTEMPTS) {
+            if (this.placeAttempts.getOrDefault(p, 0) >= MAX_PLACE_ATTEMPTS) {
                 // The server keeps rejecting it (entity in the way, protection...): come back later.
                 this.placeAttempts.remove(p);
                 fail(p);
                 continue;
             }
-            if (place(client, p, wanted)) {
+            Placed placed = place(client, p, wanted);
+            if (placed == Placed.TURNING) {
+                this.turnedTicks++;
+                this.aimTarget = p.toImmutable();
+                return true;
+            }
+            this.aimTarget = null;
+            if (placed == Placed.DONE) {
+                this.placeAttempts.merge(p, 1, Integer::sum);
                 this.placedHere.add(p.toImmutable());
-                this.cooldown = PLACE_DELAY_TICKS;
+                // Time spent turning already spaced the clicks out.
+                this.cooldown = Math.max(0, PLACE_DELAY_TICKS - this.turnedTicks);
+                this.turnedTicks = 0;
                 return true;
             }
         }
@@ -981,7 +1377,10 @@ public final class NativeBuilder {
 
     // ------------------------------------------------------------------ placing
 
-    private boolean place(MinecraftClient client, BlockPos pos, BlockState wanted) {
+    private enum Placed { DONE, TURNING, FAILED }
+
+    /** Turn toward the spot and, once facing it, click to place {@code wanted} there. */
+    private Placed place(MinecraftClient client, BlockPos pos, BlockState wanted) {
         ClientPlayerEntity player = client.player;
         ClientWorld world = client.world;
         Direction toSupport = support(world, pos);
@@ -1020,20 +1419,21 @@ public final class NativeBuilder {
                 }
             }
         } else {
-            return false;
+            return Placed.FAILED;
         }
         if (rotation == null) {
             if (this.strict && !wanted.getBlock().getDefaultState().equals(wanted)) {
                 impossible(pos);
-                return false;
+                return Placed.FAILED;
             }
-            Reach.lookAt(player, hitVec);
-        } else {
-            Reach.face(player, rotation[0], rotation[1]);
+            rotation = Look.anglesTo(player, hitVec);
+        }
+        if (!Look.toward(player, rotation[0], rotation[1])) {
+            return Placed.TURNING;
         }
         client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
         player.swingHand(Hand.MAIN_HAND);
-        return true;
+        return Placed.DONE;
     }
 
     @Nullable
@@ -1042,6 +1442,15 @@ public final class NativeBuilder {
         float oldYaw = player.getYaw();
         float oldPitch = player.getPitch();
         try {
+            // Simply looking at the spot is what a player would do; use it whenever it gives the
+            // right state (always, for blocks without a facing). Only oriented blocks need the
+            // fixed directions below.
+            float[] natural = Look.anglesTo(player, hit.getPos());
+            player.setYaw(natural[0]);
+            player.setPitch(natural[1]);
+            if (wanted.equals(wanted.getBlock().getPlacementState(new ItemPlacementContext(player, Hand.MAIN_HAND, stack, hit)))) {
+                return natural;
+            }
             for (float pitch : PITCHES) {
                 for (float yaw : YAWS) {
                     player.setYaw(yaw);
@@ -1082,12 +1491,10 @@ public final class NativeBuilder {
         Vec3d eye = player.getEyePos();
         Vec3d center = Vec3d.ofCenter(pos);
         this.breakingSide = Direction.getFacing(eye.x - center.x, eye.y - center.y, eye.z - center.z);
-        Reach.lookAt(player, center.add(this.breakingSide.getOffsetX() * 0.5, this.breakingSide.getOffsetY() * 0.5,
-                this.breakingSide.getOffsetZ() * 0.5));
+        // Mining starts in continueBreaking once we've turned toward the block.
         this.breaking = pos.toImmutable();
         this.breakTicks = 0;
-        client.interactionManager.attackBlock(pos, this.breakingSide);
-        player.swingHand(Hand.MAIN_HAND);
+        this.breakStarted = false;
     }
 
     private void continueBreaking(MinecraftClient client) {
@@ -1099,12 +1506,23 @@ public final class NativeBuilder {
             return;
         }
         if (++this.breakTicks > BREAK_TIMEOUT_TICKS || !Reach.inReach(client, pos)) {
-            client.interactionManager.cancelBlockBreaking();
+            if (this.breakStarted) {
+                client.interactionManager.cancelBlockBreaking();
+            }
             this.breaking = null;
             fail(pos);
             return;
         }
-        if (client.interactionManager.updateBlockBreakingProgress(pos, this.breakingSide)) {
+        Vec3d face = Vec3d.ofCenter(pos).add(this.breakingSide.getOffsetX() * 0.5, this.breakingSide.getOffsetY() * 0.5,
+                this.breakingSide.getOffsetZ() * 0.5);
+        if (!Look.at(client.player, face) && !this.breakStarted) {
+            return; // still turning toward it
+        }
+        if (!this.breakStarted) {
+            this.breakStarted = true;
+            client.interactionManager.attackBlock(pos, this.breakingSide);
+            client.player.swingHand(Hand.MAIN_HAND);
+        } else if (client.interactionManager.updateBlockBreakingProgress(pos, this.breakingSide)) {
             client.player.swingHand(Hand.MAIN_HAND);
         }
     }

@@ -14,6 +14,7 @@ import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.Vec3d;
 import org.jetbrains.annotations.Nullable;
 
@@ -73,6 +74,33 @@ public final class PathFollower {
     private BlockPos breaking;
     private Direction breakingSide = Direction.UP;
     private int breakTicks;
+    /** Mining began (we turn toward the block first). */
+    private boolean breakStarted;
+    /** Next to a drop that hurts: sneak while not lined up (and while backing off). */
+    private boolean edgeGuard;
+    /** {@link #breaking} is the floor we dig through (any block), not something soft in the way. */
+    private boolean digging;
+
+    // Building our own way (pillars, bridges, digging down); null actions = walking only.
+    @Nullable
+    private List<PathFinder.Action> actions;
+    @Nullable
+    private Scaffolder scaffolder;
+    private int buildTicks;
+
+    /** Places the temporary blocks a route needs. Implemented by the builder. */
+    public interface Scaffolder {
+        enum Result { DONE, BUSY, FAILED }
+
+        /** Put a scaffolding block in hand. */
+        boolean holdScaffold();
+
+        /** Turn toward {@code at} and place a scaffolding block there (over several ticks). */
+        Result place(BlockPos at);
+
+        /** A scaffolding block was put at {@code at} by the follower itself (pillaring). */
+        void placed(BlockPos at);
+    }
 
     public PathFollower(List<BlockPos> path) {
         this(path, null, false);
@@ -86,6 +114,22 @@ public final class PathFollower {
         this.path = path;
         this.mayBreak = mayBreak;
         this.precise = precise;
+    }
+
+    /** Let the route pillar, bridge and dig ({@link PathFinder.Action}s, one per path step). */
+    public PathFollower building(List<PathFinder.Action> actions, Scaffolder scaffolder) {
+        this.actions = actions;
+        this.scaffolder = scaffolder;
+        return this;
+    }
+
+    /** In the middle of placing a pillar or bridge block (don't interrupt it). */
+    public boolean buildingStep() {
+        return this.buildTicks > 0 && this.index < this.path.size() && action(this.index) != PathFinder.Action.WALK;
+    }
+
+    private PathFinder.Action action(int i) {
+        return this.actions == null || i >= this.actions.size() ? PathFinder.Action.WALK : this.actions.get(i);
     }
 
     public List<BlockPos> path() {
@@ -143,6 +187,13 @@ public final class PathFollower {
             return State.STUCK;
         }
         BlockPos target = this.path.get(this.index);
+        PathFinder.Action action = action(this.index);
+        if (action != PathFinder.Action.WALK && this.scaffolder != null) {
+            State s = tickBuildStep(client, world, player, input, target, action);
+            if (s != null) {
+                return s;
+            }
+        }
         double targetY = Walkability.standY(world, target);
         Vec3d pos = player.getPos();
         double dx = target.getX() + 0.5 - pos.x;
@@ -157,10 +208,25 @@ public final class PathFollower {
             return State.STUCK;
         }
 
+        // Dropping down to the next step: steer in the air toward the middle of it rather than holding
+        // forward, or we sail past a narrow ledge (the side of a dome or sphere) into a long fall.
+        if (!player.isOnGround() && !inFluid && pos.y > targetY + 0.3 && this.recovery == Recovery.NONE) {
+            nudge(player, input, dx, dz);
+            input.sneak = false;
+            input.jump = false;
+            return State.WALKING;
+        }
+
         float yaw = (float) (MathHelper.atan2(dz, dx) * MathHelper.DEGREES_PER_RADIAN) - 90.0F;
-        player.setYaw(yaw);
-        player.setHeadYaw(yaw);
-        player.setPitch(10.0F);
+        // Turn toward the next step like a player would (no snapping); walk once roughly facing it.
+        Look.toward(player, yaw, 10.0F);
+        float off = Math.abs(MathHelper.wrapDegrees(yaw - player.getYaw()));
+        boolean facing = off < 50.0F;
+        // Up on scaffolding or a narrow bridge, a step taken while still turning (or while backing off
+        // to get unstuck) can go over the side. Sneak there - vanilla keeps a sneaking player from
+        // walking off an edge - unless this step is meant to drop down.
+        boolean dropping = targetY < pos.y - 0.5;
+        this.edgeGuard = !dropping && !inFluid && player.isOnGround() && nearDrop(world, player.getBlockPos());
 
         if (this.recovery != Recovery.NONE) {
             applyRecovery(player, input);
@@ -172,9 +238,9 @@ public final class PathFollower {
         input.back = false;
         input.left = false;
         input.right = false;
-        input.forward = horizontal > (careful ? 0.1 : 0.15);
+        input.forward = facing && horizontal > (careful ? 0.1 : 0.15);
         // Sneak the last bit of a precise stop so we don't overshoot (or slide off an edge).
-        input.sneak = careful && horizontal < 0.8;
+        input.sneak = careful && horizontal < 0.8 || this.edgeGuard && off > 8.0F;
         // Rise measured from where we really stand, so slabs and carpets don't trigger needless jumps.
         boolean climb = targetY - pos.y > 0.6;
         // Bumping into something: jump over it, but not into a low ceiling.
@@ -194,6 +260,122 @@ public final class PathFollower {
             }
         }
         return State.WALKING;
+    }
+
+    /**
+     * The block work of a pillar, bridge or dig step.
+     *
+     * @return the state to report, or null once the block is in place (or gone) and the step can be
+     * walked like any other
+     */
+    @Nullable
+    private State tickBuildStep(MinecraftClient client, ClientWorld world, ClientPlayerEntity player, MovementInput input,
+                                BlockPos target, PathFinder.Action action) {
+        switch (action) {
+            case PILLAR -> {
+                BlockPos base = target.down();
+                if (!world.getBlockState(base).isReplaceable()) {
+                    // Placed: land on it, then the step counts as reached.
+                    input.release();
+                    if (player.isOnGround()) {
+                        this.buildTicks = 0;
+                        this.windowTicks = 0;
+                        return null;
+                    }
+                    return State.WALKING;
+                }
+                if (++this.buildTicks > 100) {
+                    input.release();
+                    return State.STUCK;
+                }
+                input.release();
+                Vec3d pos = player.getPos();
+                if (player.isOnGround()) {
+                    double dx = base.getX() + 0.5 - pos.x;
+                    double dz = base.getZ() + 0.5 - pos.z;
+                    if (dx * dx + dz * dz > 0.15 * 0.15) {
+                        // Get over the middle of the cell first (sneaking, so we don't step off).
+                        nudge(player, input, dx, dz);
+                        return State.WALKING;
+                    }
+                    if (!this.scaffolder.holdScaffold()) {
+                        return State.STUCK;
+                    }
+                    // Look down at our feet (turning, not snapping), then jump.
+                    if (Look.toward(player, player.getYaw(), 90.0F)) {
+                        input.jump = true;
+                    }
+                    return State.WALKING;
+                }
+                BlockPos below = base.down();
+                // Near the top of the jump: put the block where our feet just were.
+                if (pos.y >= base.getY() + 1.0 && !world.getBlockState(below).isReplaceable()) {
+                    BlockHitResult hit = new BlockHitResult(new Vec3d(base.getX() + 0.5, base.getY(), base.getZ() + 0.5),
+                            Direction.UP, below, false);
+                    client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
+                    player.swingHand(Hand.MAIN_HAND);
+                    this.scaffolder.placed(base);
+                }
+                return State.WALKING;
+            }
+            case BRIDGE -> {
+                BlockPos floor = target.down();
+                if (!world.getBlockState(floor).isReplaceable()) {
+                    this.buildTicks = 0;
+                    this.windowTicks = 0;
+                    return null;
+                }
+                input.release();
+                if (++this.buildTicks > 100) {
+                    return State.STUCK;
+                }
+                if (!player.isOnGround()) {
+                    return State.WALKING;
+                }
+                input.sneak = true;
+                return switch (this.scaffolder.place(floor)) {
+                    case DONE, BUSY -> State.WALKING;
+                    case FAILED -> State.STUCK;
+                };
+            }
+            case DIG -> {
+                BlockState s = world.getBlockState(target);
+                if (s.isAir() || s.isReplaceable()) {
+                    this.buildTicks = 0;
+                    this.windowTicks = 0;
+                    return null;
+                }
+                input.release();
+                if (++this.buildTicks > 200) {
+                    return State.STUCK;
+                }
+                if (player.isOnGround() && this.breaking == null) {
+                    Inventories.holdBestTool(client, s);
+                    this.breaking = target.toImmutable();
+                    this.breakingSide = Direction.UP;
+                    this.breakTicks = 0;
+                    this.breakStarted = false;
+                    this.digging = true;
+                }
+                return State.WALKING;
+            }
+            default -> {
+                return null;
+            }
+        }
+    }
+
+    /** Press the keys that move us by (dx, dz), whichever way we're facing. Sneaks. */
+    private static void nudge(ClientPlayerEntity player, MovementInput input, double dx, double dz) {
+        float yaw = player.getYaw() * MathHelper.RADIANS_PER_DEGREE;
+        // The player's forward is (-sin, cos) and left is (cos, sin).
+        double forward = -dx * MathHelper.sin(yaw) + dz * MathHelper.cos(yaw);
+        double left = dx * MathHelper.cos(yaw) + dz * MathHelper.sin(yaw);
+        input.forward = forward > 0.05;
+        input.back = forward < -0.05;
+        input.left = left > 0.05;
+        input.right = left < -0.05;
+        input.sneak = true;
     }
 
     /** No progress for a whole window: try the next, stronger way of getting unstuck. */
@@ -221,7 +403,7 @@ public final class PathFollower {
     }
 
     private void applyRecovery(ClientPlayerEntity player, MovementInput input) {
-        input.sneak = false;
+        input.sneak = this.edgeGuard;
         switch (this.recovery) {
             case JUMP -> {
                 input.forward = true;
@@ -281,12 +463,9 @@ public final class PathFollower {
             Vec3d eye = player.getEyePos();
             Vec3d center = Vec3d.ofCenter(p);
             this.breakingSide = Direction.getFacing(eye.x - center.x, eye.y - center.y, eye.z - center.z);
-            Reach.lookAt(player, center.add(this.breakingSide.getOffsetX() * 0.5, this.breakingSide.getOffsetY() * 0.5,
-                    this.breakingSide.getOffsetZ() * 0.5));
             this.breaking = p.toImmutable();
             this.breakTicks = 0;
-            client.interactionManager.attackBlock(p, this.breakingSide);
-            player.swingHand(Hand.MAIN_HAND);
+            this.breakStarted = false;
             return true;
         }
         return false;
@@ -295,18 +474,48 @@ public final class PathFollower {
     private void tickBreaking(MinecraftClient client) {
         BlockPos p = this.breaking;
         BlockState state = client.world.getBlockState(p);
-        boolean gone = state.isAir() || !soft(state);
+        boolean gone = state.isAir() || (this.digging ? state.isReplaceable() : !soft(state));
         if (gone || ++this.breakTicks > BREAK_TIMEOUT_TICKS || !Reach.inReach(client, p)) {
-            if (!gone && client.interactionManager != null) {
+            if (!gone && this.breakStarted && client.interactionManager != null) {
                 client.interactionManager.cancelBlockBreaking();
             }
             this.breaking = null;
+            this.digging = false;
             this.windowTicks = 0;
             return;
         }
-        if (client.interactionManager != null && client.interactionManager.updateBlockBreakingProgress(p, this.breakingSide)) {
+        Vec3d face = Vec3d.ofCenter(p).add(this.breakingSide.getOffsetX() * 0.5, this.breakingSide.getOffsetY() * 0.5,
+                this.breakingSide.getOffsetZ() * 0.5);
+        if (!Look.at(client.player, face) && !this.breakStarted) {
+            return; // still turning toward it
+        }
+        if (!this.breakStarted) {
+            this.breakStarted = true;
+            client.interactionManager.attackBlock(p, this.breakingSide);
+            client.player.swingHand(Hand.MAIN_HAND);
+        } else if (client.interactionManager != null && client.interactionManager.updateBlockBreakingProgress(p, this.breakingSide)) {
             client.player.swingHand(Hand.MAIN_HAND);
         }
+    }
+
+    /** A neighbouring cell has a drop of 3 or more blocks under it (a fall that hurts). */
+    private static boolean nearDrop(ClientWorld world, BlockPos feet) {
+        for (Direction d : Direction.Type.HORIZONTAL) {
+            BlockPos c = feet.offset(d);
+            if (!Walkability.passable(world, c)) {
+                continue;
+            }
+            int air = 0;
+            BlockPos below = c.down();
+            while (air < 3 && Walkability.passable(world, below)) {
+                air++;
+                below = below.down();
+            }
+            if (air >= 3) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Blocks that are quick to mine and never part of anything worth keeping in the way of a walk. */
@@ -317,6 +526,12 @@ public final class PathFollower {
 
     private boolean reached(ClientWorld world, ClientPlayerEntity player, int i) {
         BlockPos feet = this.path.get(i);
+        PathFinder.Action a = action(i);
+        if ((a == PathFinder.Action.PILLAR || a == PathFinder.Action.BRIDGE)
+                && (world.getBlockState(feet.down()).isReplaceable() || !player.isOnGround())) {
+            // Not there until the block we stand on exists and we're on it.
+            return false;
+        }
         boolean careful = this.precise && i == this.path.size() - 1;
         double radius = careful ? 0.18 : 0.35;
         Vec3d pos = player.getPos();

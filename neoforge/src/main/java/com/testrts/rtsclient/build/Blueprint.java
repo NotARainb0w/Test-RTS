@@ -52,6 +52,23 @@ public final class Blueprint {
         return this.blocks.size();
     }
 
+    public int sizeX() {
+        return this.sizeX;
+    }
+
+    public int sizeY() {
+        return this.sizeY;
+    }
+
+    public int sizeZ() {
+        return this.sizeZ;
+    }
+
+    /** Blocks by position relative to the minimum corner (air left out). */
+    public Map<BlockPos, BlockState> blocks() {
+        return java.util.Collections.unmodifiableMap(this.blocks);
+    }
+
     public String size() {
         return this.sizeX + "x" + this.sizeY + "x" + this.sizeZ;
     }
@@ -209,6 +226,20 @@ public final class Blueprint {
         List<String> palette = new ArrayList<>();
         /** x, y, z, palette index - flattened. */
         List<Integer> data = new ArrayList<>();
+    }
+
+    /** A block state as text (SNBT), for files. */
+    public static String stateToString(BlockState state) {
+        return NbtUtils.writeBlockState(state).toString();
+    }
+
+    /** Back from {@link #stateToString}; air if it can't be read (e.g. the block's mod is gone). */
+    public static BlockState stateFromString(String snbt) {
+        try {
+            return NbtUtils.readBlockState(BuiltInRegistries.BLOCK.asLookup(), TagParser.parseTag(snbt));
+        } catch (Exception e) {
+            return net.minecraft.world.level.block.Blocks.AIR.defaultBlockState();
+        }
     }
 
     public static Path dir() {

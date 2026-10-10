@@ -16,7 +16,9 @@ import java.util.function.Predicate;
 
 /**
  * A* over standing positions (feet blocks). Moves: walk, diagonal walk, step up one block,
- * and drop down up to three. No bridging or pillaring; that's what Baritone is for.
+ * and drop down up to three. With a {@link Building} context (the builder) it can also build its
+ * own way: pillar up (jump and place a block underneath), bridge (place the block to step onto)
+ * and dig back down through its own scaffolding, so blocks high up or over a drop are reachable.
  * Steps are checked against the real floor heights (slabs, carpets, soul sand...), so a path
  * never asks for a jump higher than the player can make.
  */
@@ -34,6 +36,33 @@ public final class PathFinder {
     private static final double STRIKE_EDGE_COST = 30.0;
     private static final double STRIKE_NODE_COST = 4.0;
     private static final Direction[] HORIZONTAL = {Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+    /** Costs of the building moves, in "blocks walked": slower than walking, and they use up blocks. */
+    private static final double PILLAR_COST = 5.0;
+    private static final double BRIDGE_COST = 4.0;
+    private static final double DIG_COST = 3.0;
+
+    /** How a step of the path is taken. */
+    public enum Action {
+        WALK,
+        /** Jump and place a block under ourselves: the step is straight up. */
+        PILLAR,
+        /** Place the block under the next step first, then walk onto it. */
+        BRIDGE,
+        /** Mine the block we stand on (our own scaffolding) and drop onto the one below. */
+        DIG
+    }
+
+    /** What the search may build or take down to get somewhere. */
+    public interface Building {
+        /** A temporary block may be put in this (empty) cell. */
+        boolean canPlace(BlockPos pos);
+
+        /** This block is ours to mine on the way down. */
+        boolean canDig(BlockPos pos);
+
+        /** How many blocks one route may place. */
+        int budget();
+    }
 
     /** A step from one node to another; {@code from == Long.MIN_VALUE} stands for "any step into {@code to}". */
     private record Edge(long from, long to) {
@@ -92,12 +121,21 @@ public final class PathFinder {
         final double g;
         final double f;
         final Node parent;
+        final Action action;
+        /** Blocks placed along the route so far. */
+        final int placed;
 
         Node(BlockPos pos, double g, double h, Node parent) {
+            this(pos, g, h, parent, Action.WALK, 0);
+        }
+
+        Node(BlockPos pos, double g, double h, Node parent, Action action, int placed) {
             this.pos = pos;
             this.g = g;
             this.f = g + h;
             this.parent = parent;
+            this.action = action;
+            this.placed = placed;
         }
 
         @Override
@@ -123,17 +161,22 @@ public final class PathFinder {
         private final Map<Long, Double> best = new HashMap<>();
         private final long now = System.currentTimeMillis();
         private final boolean strikes = !STRIKES.isEmpty();
+        @Nullable
+        private final Building building;
         private int expanded;
         private State state = State.RUNNING;
         private List<BlockPos> result;
+        private List<Action> actions;
 
-        Search(ClientLevel world, BlockPos start, Predicate<BlockPos> goal, Vec3 toward) {
+        Search(ClientLevel world, BlockPos start, Predicate<BlockPos> goal, Vec3 toward, @Nullable Building building) {
             this.world = world;
+            this.building = building;
             this.goal = goal;
             this.toward = toward;
             if (goal.test(start)) {
                 this.state = State.FOUND;
                 this.result = new ArrayList<>();
+                this.actions = new ArrayList<>();
                 return;
             }
             this.open.add(new Node(start, 0.0, h(start, toward), null));
@@ -147,6 +190,11 @@ public final class PathFinder {
         /** The path once {@link State#FOUND}: feet positions, start excluded. */
         public List<BlockPos> result() {
             return this.result;
+        }
+
+        /** How each step of {@link #result()} is taken. */
+        public List<Action> actions() {
+            return this.actions;
         }
 
         public State step(int budget) {
@@ -163,11 +211,15 @@ public final class PathFinder {
                 this.expanded++;
                 done++;
                 if (this.goal.test(cur.pos)) {
-                    this.result = unwind(cur);
+                    unwind(cur);
                     this.state = State.FOUND;
                     break;
                 }
-                for (Move m : moves(this.world, cur.pos)) {
+                List<Move> moves = moves(this.world, cur.pos);
+                if (this.building != null) {
+                    buildingMoves(this.world, this.building, cur, moves);
+                }
+                for (Move m : moves) {
                     double extra = this.strikes ? strikeCost(cur.pos, m.to, this.now) : 0.0;
                     if (extra == Double.POSITIVE_INFINITY) {
                         continue;
@@ -176,19 +228,71 @@ public final class PathFinder {
                     long key = m.to.asLong();
                     if (g < this.best.getOrDefault(key, Double.MAX_VALUE)) {
                         this.best.put(key, g);
-                        this.open.add(new Node(m.to, g, h(m.to, this.toward), cur));
+                        int placed = cur.placed + (m.action == Action.PILLAR || m.action == Action.BRIDGE ? 1 : 0);
+                        this.open.add(new Node(m.to, g, h(m.to, this.toward), cur, m.action, placed));
                     }
                 }
             }
             return this.state;
         }
+
+        private void unwind(Node end) {
+            List<BlockPos> path = new ArrayList<>();
+            List<Action> acts = new ArrayList<>();
+            for (Node n = end; n.parent != null; n = n.parent) {
+                path.add(n.pos);
+                acts.add(n.action);
+            }
+            Collections.reverse(path);
+            Collections.reverse(acts);
+            this.result = path;
+            this.actions = acts;
+        }
     }
 
     public static Search start(ClientLevel world, BlockPos start, Predicate<BlockPos> goal, Vec3 toward) {
-        return new Search(world, start, goal, toward);
+        return new Search(world, start, goal, toward, null);
     }
 
-    private record Move(BlockPos to, double cost) {
+    /** A search that may also pillar, bridge and dig through scaffolding (see {@link Building}). */
+    public static Search start(ClientLevel world, BlockPos start, Predicate<BlockPos> goal, Vec3 toward,
+                               @Nullable Building building) {
+        return new Search(world, start, goal, toward, building);
+    }
+
+    private record Move(BlockPos to, double cost, Action action) {
+        Move(BlockPos to, double cost) {
+            this(to, cost, Action.WALK);
+        }
+    }
+
+    /**
+     * Moves that change the world. The search doesn't track what an earlier step of the same route
+     * placed; each step only looks at the cells it needs (like Baritone), and if the world turns out
+     * different the follower gets stuck and the route is planned again from there.
+     */
+    private static void buildingMoves(ClientLevel world, Building b, Node cur, List<Move> out) {
+        BlockPos from = cur.pos;
+        boolean canPlace = cur.placed < b.budget();
+        boolean inFluid = !world.getBlockState(from).getFluidState().isEmpty();
+        // Pillar: our feet cell becomes a block and we stand on it.
+        if (canPlace && !inFluid && Walkability.passable(world, from.above(2)) && b.canPlace(from)) {
+            out.add(new Move(from.above(), PILLAR_COST, Action.PILLAR));
+        }
+        // Bridge: put a block under the next cell and walk onto it.
+        if (canPlace) {
+            for (Direction d : HORIZONTAL) {
+                BlockPos n = from.relative(d);
+                if (clear(world, n) && !Walkability.standable(world, n) && b.canPlace(n.below())) {
+                    out.add(new Move(n, BRIDGE_COST, Action.BRIDGE));
+                }
+            }
+        }
+        // Dig down through our own scaffolding onto the block below it.
+        BlockPos floor = from.below();
+        if (b.canDig(floor) && (Walkability.floor(world, floor.below()) || b.canDig(floor.below()))) {
+            out.add(new Move(floor, DIG_COST, Action.DIG));
+        }
     }
 
     private static List<Move> moves(ClientLevel world, BlockPos from) {
@@ -258,12 +362,4 @@ public final class PathFinder {
         return Math.sqrt(dx * dx + dy * dy + dz * dz);
     }
 
-    private static List<BlockPos> unwind(Node end) {
-        List<BlockPos> path = new ArrayList<>();
-        for (Node n = end; n.parent != null; n = n.parent) {
-            path.add(n.pos);
-        }
-        Collections.reverse(path);
-        return path;
-    }
 }

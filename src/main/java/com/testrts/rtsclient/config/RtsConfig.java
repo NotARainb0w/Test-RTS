@@ -52,10 +52,18 @@ public final class RtsConfig {
     public boolean autoRepair = false;
     /** Built-in engine: place blocks against the empty cell itself, so nothing needs to be next to them. */
     public boolean airPlace = true;
+    /** In creative mode, spawn the blocks a build needs instead of fetching them or stopping. */
+    public boolean creativeSupply = true;
     /** Shapes (Fill mode) mine and replace whatever is in their cells instead of skipping them. */
     public boolean clearInTheWay = true;
     /** Stop the camera at solid blocks. Off: the camera flies through walls. */
     public boolean cameraCollision = false;
+    /**
+     * Fastest the character turns its head, in degrees per tick, when it looks at blocks to place
+     * or mine. Turning smoothly instead of snapping looks human (and doesn't upset anti-cheat).
+     * 0 = snap instantly.
+     */
+    public double turnSpeed = 30.0;
     /** Radius used by "Scan nearby" when looking for containers. */
     public int scanRadius = 32;
     /** When false, Baritone may place oriented blocks (stairs, logs) in any direction it can manage. */

@@ -16,18 +16,33 @@ repositories {
     mavenCentral()
 }
 
+// Live tests (see src/devtest): only on the dev run's classpath, never in the jar.
+sourceSets {
+    devtest {
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
 neoForge {
     version = project.neo_version
+    addModdingDependenciesTo(sourceSets.devtest)
 
     runs {
         client {
             client()
+            // ./gradlew runClient -Pautotest=dome6,sphere5 (or all) [-Pautoquit]
+            if (project.hasProperty('autotest')) {
+                systemProperty 'rtsclient.autotest', project.property('autotest').toString()
+                systemProperty 'rtsclient.autotest.quit', project.hasProperty('autoquit').toString()
+            }
         }
     }
 
     mods {
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            sourceSet(sourceSets.devtest)
         }
     }
 }

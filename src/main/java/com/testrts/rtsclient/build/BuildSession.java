@@ -40,12 +40,16 @@ public final class BuildSession {
     public TerrainMode terrainMode = TerrainMode.FLATTEN;
     /** How far above the level Flatten clears. */
     public int terrainClearHeight = 16;
+    /** Plant trees: blocks between saplings. */
+    public int treeSpacing = 5;
     /** Paste the blueprint as a grid of copies: count along x and z, and the gap between copies. */
     public int arrayX = 1;
     public int arrayZ = 1;
     public int arrayGap = 0;
     /** Pattern brush: blocks and their weights; shapes use a random mix when this isn't empty. */
     public final java.util.LinkedHashMap<net.minecraft.item.Item, Integer> mix = new java.util.LinkedHashMap<>();
+    /** How the mix blocks are laid out (random, clusters, gradient, layers...). */
+    public MixPattern pattern = MixPattern.RANDOM;
     /** The next click picks a room to put a roof on. */
     public boolean roofPick;
     public RoofPlanner.Style roofStyle = RoofPlanner.Style.GABLE;
@@ -98,8 +102,13 @@ public final class BuildSession {
         return out;
     }
 
-    /** "60% Stone, 40% Andesite". */
+    /** "60% Stone, 40% Andesite" (and the pattern when it isn't random). */
     public String mixDescription() {
+        String pattern = this.pattern == MixPattern.RANDOM ? "" : this.pattern.label() + ": ";
+        return pattern + mixShares();
+    }
+
+    private String mixShares() {
         int total = 0;
         for (int w : this.mix.values()) {
             total += w;
@@ -125,7 +134,8 @@ public final class BuildSession {
         return state;
     }
 
-    private static BlockState withProperty(BlockState state, String name, String value) {
+    /** {@code state} with property {@code name} set to {@code value}, if it has that property and value. */
+    public static BlockState withProperty(BlockState state, String name, String value) {
         for (Property<?> property : state.getProperties()) {
             if (property.getName().equals(name)) {
                 return withValue(state, property, value);

@@ -51,6 +51,8 @@ public final class Messages {
     }
 
     private static void push(Text text, Kind kind) {
+        // Also in the log, so problems can be traced afterwards.
+        com.testrts.rtsclient.RtsClientMod.LOGGER.info("[{}] {}", kind, text.getString());
         synchronized (ENTRIES) {
             ENTRIES.addLast(new Entry(text, System.currentTimeMillis(), kind));
             while (ENTRIES.size() > MAX) {

@@ -14,6 +14,98 @@ import java.util.Map;
 
 /** Plans for the Terrain tool. Pure world reads, so previews can run them on the worker thread. */
 public final class TerrainPlanner {
+    /**
+     * Saplings on a grid {@code spacing} apart over the area, on grass or dirt with room above for the
+     * trunk. Spots close to existing trees or saplings are skipped. Dark oak is planted 2x2 (it only
+     * grows that way).
+     */
+    public static Map<BlockPos, BlockState> plantTrees(ClientLevel world, BlockPos a, BlockPos b,
+                                                       net.minecraft.world.level.block.Block sapling, int spacing) {
+        int x0 = Math.min(a.getX(), b.getX());
+        int x1 = Math.max(a.getX(), b.getX());
+        int z0 = Math.min(a.getZ(), b.getZ());
+        int z1 = Math.max(a.getZ(), b.getZ());
+        int top = Math.max(a.getY(), b.getY()) + 8;
+        int bottom = Math.min(a.getY(), b.getY()) - 8;
+        boolean big = sapling == Blocks.DARK_OAK_SAPLING;
+        int step = Math.max(2, spacing) + (big ? 1 : 0);
+        // Centre the grid in the area.
+        int ox = x0 + ((x1 - x0) % step) / 2;
+        int oz = z0 + ((z1 - z0) % step) / 2;
+        BlockState state = sapling.defaultBlockState();
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        for (int x = ox; x <= x1; x += step) {
+            for (int z = oz; z <= z1; z += step) {
+                BlockPos ground = treeGround(world, x, z, top, bottom);
+                if (ground == null) {
+                    continue;
+                }
+                BlockPos spot = ground.above();
+                if (nearTree(world, spot, Math.max(1, spacing / 2))) {
+                    continue;
+                }
+                if (big) {
+                    List<BlockPos> four = List.of(spot, spot.east(), spot.south(), spot.east().south());
+                    boolean ok = true;
+                    for (BlockPos q : four) {
+                        ok &= plantable(world, q);
+                    }
+                    if (ok) {
+                        for (BlockPos q : four) {
+                            out.put(q, state);
+                        }
+                    }
+                } else if (plantable(world, spot)) {
+                    out.put(spot, state);
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The top block of a column if it's grass or dirt (null under trees, on stone, in water...). */
+    private static BlockPos treeGround(ClientLevel world, int x, int z, int top, int bottom) {
+        for (int y = top; y >= bottom; y--) {
+            BlockPos p = new BlockPos(x, y, z);
+            BlockState s = world.getBlockState(p);
+            if (s.isAir() || s.canBeReplaced() && s.getFluidState().isEmpty()) {
+                continue; // air, tall grass, flowers, snow
+            }
+            if (s.is(net.minecraft.tags.BlockTags.LEAVES) || s.is(net.minecraft.tags.BlockTags.LOGS)) {
+                return null;
+            }
+            return s.is(net.minecraft.tags.BlockTags.DIRT) ? p : null;
+        }
+        return null;
+    }
+
+    /** Grass or dirt below, and five free blocks above for the trunk. */
+    private static boolean plantable(ClientLevel world, BlockPos spot) {
+        if (!world.getBlockState(spot.below()).is(net.minecraft.tags.BlockTags.DIRT)) {
+            return false;
+        }
+        for (int i = 0; i < 5; i++) {
+            BlockState s = world.getBlockState(spot.above(i));
+            if (!(s.isAir() || s.canBeReplaced() && s.getFluidState().isEmpty())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean nearTree(ClientLevel world, BlockPos spot, int r) {
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                for (int dy = -1; dy <= 3; dy++) {
+                    BlockState s = world.getBlockState(spot.offset(dx, dy, dz));
+                    if (s.is(net.minecraft.tags.BlockTags.LOGS) || s.is(net.minecraft.tags.BlockTags.SAPLINGS)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
     private TerrainPlanner() {
     }
 

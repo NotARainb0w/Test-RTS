@@ -34,7 +34,8 @@ public final class Inventories {
                 return swapIntoHand(client, i);
             }
         }
-        return false;
+        // Creative supply: conjure it up.
+        return Creative.spawnInHand(client, item);
     }
 
     /** Hold the fastest tool for this block (if any tool helps at all). */

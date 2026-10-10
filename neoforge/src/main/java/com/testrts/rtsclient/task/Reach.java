@@ -54,10 +54,16 @@ public final class Reach {
             side = Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
             hitVec = center.add(side.getStepX() * 0.5, side.getStepY() * 0.5, side.getStepZ() * 0.5);
         }
-        lookAt(player, hitVec);
-        ContainerTracker.get().expect(pos);
-        client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, new BlockHitResult(hitVec, side, pos, false));
-        player.swing(InteractionHand.MAIN_HAND);
+        BlockHitResult hit = new BlockHitResult(hitVec, side, pos, false);
+        // Turn toward it first (no snapping), then click.
+        com.testrts.rtsclient.exec.Look.thenDo(client, hitVec, () -> {
+            if (client.gameMode == null || client.player != player) {
+                return;
+            }
+            ContainerTracker.get().expect(pos);
+            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
+            player.swing(InteractionHand.MAIN_HAND);
+        });
     }
 
     /** Set an exact rotation and tell the server about it right away. */

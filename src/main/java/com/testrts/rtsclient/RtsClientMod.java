@@ -55,10 +55,14 @@ public final class RtsClientMod implements ClientModInitializer {
         });
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> client.execute(() -> {
             RtsController.get().disable(client);
+            com.testrts.rtsclient.task.QueueStore.autosave();
             TaskQueue.get().clear(client);
             StorageManager.get().flush();
         }));
-        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> StorageManager.get().flush());
+        ClientLifecycleEvents.CLIENT_STOPPING.register(client -> {
+            com.testrts.rtsclient.task.QueueStore.autosave();
+            StorageManager.get().flush();
+        });
     }
 
     private static void onTick(MinecraftClient client) {
@@ -68,10 +72,12 @@ public final class RtsClientMod implements ClientModInitializer {
         while (stopKey.wasPressed()) {
             TaskQueue.get().clear(client);
         }
+        com.testrts.rtsclient.task.QueueStore.tick(client);
         StorageManager.get().tick(client);
         ContainerTracker.get().tick(client);
         RtsController.get().tick(client);
         TaskQueue.get().tick(client);
+        com.testrts.rtsclient.exec.Look.tick(client);
         Engine.tick(client);
         NativeEngine.get().tick(client);
     }

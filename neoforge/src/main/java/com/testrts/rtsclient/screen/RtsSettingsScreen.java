@@ -24,6 +24,7 @@ public final class RtsSettingsScreen extends Screen {
     private static final int[] GHOST_LIMITS = {4_000, 12_000, 24_000, 60_000, 150_000};
     private static final int[] SHAPE_LIMITS = {16_384, 65_536, 262_144, 1_000_000, 4_000_000};
     private static final double[] SPEEDS = {8, 12, 18, 26, 40};
+    private static final double[] TURN_SPEEDS = {15, 30, 45, 90, 0};
 
     private static final int COL_W = 196;
     private static final int ROW_H = 18;
@@ -62,6 +63,10 @@ public final class RtsSettingsScreen extends Screen {
                 new Setting("Engine", () -> Engine.configured().label(),
                         "Auto = Baritone when installed, else built-in. Built-in walks, builds and mines without Baritone.",
                         Engine::cycle),
+                new Setting("Turn speed", () -> c.turnSpeed <= 0 ? "Instant" : (int) c.turnSpeed + " deg/tick",
+                        "How fast your character turns its head toward blocks it places or mines. Smooth turning looks "
+                                + "natural to other players and anti-cheat; Instant snaps like before.",
+                        () -> c.turnSpeed = next(TURN_SPEEDS, c.turnSpeed)),
                 new Setting("Manage Baritone", () -> onOff(c.manageBaritoneSettings),
                         "Turns on Baritone's allowPlace/allowBreak/allowInventory and layer building for RTS orders.",
                         () -> c.manageBaritoneSettings = !c.manageBaritoneSettings))));
@@ -85,6 +90,10 @@ public final class RtsSettingsScreen extends Screen {
                         "Built-in engine: place blocks with nothing next to them (domes, spheres, floating builds) without scaffolding. "
                                 + "Works on vanilla servers; some anti-cheat plugins may not allow it.",
                         () -> c.airPlace = !c.airPlace),
+                new Setting("Creative supply", () -> onOff(c.creativeSupply),
+                        "In creative mode, the builder spawns the blocks (and scaffolding) it needs into your hotbar "
+                                + "instead of fetching them from storage. Does nothing in survival.",
+                        () -> c.creativeSupply = !c.creativeSupply),
                 new Setting("Clear blocks in the way", () -> onOff(c.clearInTheWay),
                         "Shapes mine whatever is in their cells (terrain, trees) and put the brush block there instead of skipping them.",
                         () -> c.clearInTheWay = !c.clearInTheWay),

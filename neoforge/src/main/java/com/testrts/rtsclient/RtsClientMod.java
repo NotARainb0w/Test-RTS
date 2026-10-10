@@ -68,10 +68,23 @@ public final class RtsClientMod {
         bus.addListener(ClientPlayerNetworkEvent.LoggingOut.class, event -> {
             Minecraft client = Minecraft.getInstance();
             RtsController.get().disable(client);
+            com.testrts.rtsclient.task.QueueStore.autosave();
             TaskQueue.get().clear(client);
             StorageManager.get().flush();
         });
-        bus.addListener(GameShuttingDownEvent.class, event -> StorageManager.get().flush());
+        bus.addListener(GameShuttingDownEvent.class, event -> {
+            com.testrts.rtsclient.task.QueueStore.autosave();
+            StorageManager.get().flush();
+        });
+
+        // Live tests (src/devtest, dev runs only; not part of the release jar).
+        if (System.getProperty("rtsclient.autotest") != null) {
+            try {
+                Class.forName("com.testrts.rtsclient.devtest.AutoTest").getMethod("install").invoke(null);
+            } catch (ReflectiveOperationException e) {
+                LOGGER.error("Couldn't start the live tests", e);
+            }
+        }
     }
 
     private static void onTick(Minecraft client) {
@@ -81,10 +94,12 @@ public final class RtsClientMod {
         while (stopKey.consumeClick()) {
             TaskQueue.get().clear(client);
         }
+        com.testrts.rtsclient.task.QueueStore.tick(client);
         StorageManager.get().tick(client);
         ContainerTracker.get().tick(client);
         RtsController.get().tick(client);
         TaskQueue.get().tick(client);
+        com.testrts.rtsclient.exec.Look.tick(client);
         Engine.tick(client);
         NativeEngine.get().tick(client);
     }

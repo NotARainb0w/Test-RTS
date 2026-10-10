@@ -38,6 +38,10 @@ public final class MaterialPlanner {
 
     /** {@link #required} minus what the player is carrying. */
     public static Map<Item, Integer> missing(Minecraft client, Map<BlockPos, BlockState> blocks) {
+        if (com.testrts.rtsclient.exec.Creative.supplies(client)) {
+            // Creative supply spawns whatever is needed; nothing to fetch.
+            return new java.util.LinkedHashMap<>();
+        }
         Map<Item, Integer> missing = new LinkedHashMap<>();
         if (client.player == null || client.level == null) {
             return missing;
@@ -82,8 +86,19 @@ public final class MaterialPlanner {
         if (current.getBlock() == wanted.getBlock()) {
             return true;
         }
+        // Soil turns into other soil by itself (dirt grows grass, grass under a block or farmland left
+        // dry goes back to dirt): rebuilding it would dig the grass up over and over.
+        if (soil(current) && soil(wanted)) {
+            return true;
+        }
         Item item = wanted.getBlock().asItem();
         return item != Items.AIR && current.getBlock().asItem() == item;
+    }
+
+    private static boolean soil(BlockState s) {
+        var b = s.getBlock();
+        return b == net.minecraft.world.level.block.Blocks.DIRT || b == net.minecraft.world.level.block.Blocks.GRASS_BLOCK || b == net.minecraft.world.level.block.Blocks.PODZOL || b == net.minecraft.world.level.block.Blocks.MYCELIUM
+                || b == net.minecraft.world.level.block.Blocks.DIRT_PATH || b == net.minecraft.world.level.block.Blocks.FARMLAND;
     }
 
     public static String describe(Map<Item, Integer> items, int max) {

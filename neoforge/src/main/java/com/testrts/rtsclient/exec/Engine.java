@@ -192,8 +192,9 @@ public final class Engine {
     public static void build(String name, Map<BlockPos, BlockState> blocks, boolean strict, boolean manageSettings) {
         boolean layered = RtsConfig.get().buildInLayers;
         boolean clearing = !blocks.isEmpty() && blocks.values().iterator().next().isAir();
-        // Baritone can't place blocks in mid-air; on Auto, builds go to the built-in engine when that's on.
-        boolean airBuild = !clearing && RtsConfig.get().airPlace && configured() == Kind.AUTO;
+        // Baritone can't place blocks in mid-air (domes, spheres, floating builds stall or loop), so
+        // builds go to the built-in engine while that's on, whichever engine is selected.
+        boolean airBuild = !clearing && RtsConfig.get().airPlace;
         if (baritone() && !airBuild) {
             if (manageSettings) {
                 BaritoneBridge.applySettings(strict, layered, clearing);
@@ -235,6 +236,7 @@ public final class Engine {
     }
 
     public static void stop() {
+        Look.cancel();
         fallback = null;
         walkGoal = null;
         NativeEngine.get().stop(Minecraft.getInstance());

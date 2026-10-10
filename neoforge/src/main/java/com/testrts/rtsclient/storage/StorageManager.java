@@ -134,7 +134,8 @@ public final class StorageManager {
         this.dirty = true;
     }
 
-    private static String computeWorldKey(Minecraft client) {
+    /** Server or singleplayer world plus dimension, safe for a file name. */
+    public static String computeWorldKey(Minecraft client) {
         String server;
         if (client.hasSingleplayerServer() && client.getSingleplayerServer() != null) {
             server = "sp_" + client.getSingleplayerServer().getWorldData().getLevelName();

@@ -65,7 +65,22 @@ public final class Presets {
                 new Preset("Dock", "Plank pier on log posts with railings and lanterns",
                         Items.OAK_BOAT, Presets::dock),
                 new Preset("Beacon pyramid", "Full 4-level iron pyramid with a beacon on top (164 iron blocks)",
-                        Items.BEACON, Presets::beaconPyramid));
+                        Items.BEACON, Presets::beaconPyramid),
+                // Modpack bases: plain vanilla shells laid out for machines, power and storage mods.
+                new Preset("Machine hall", "15x11 open hall, 5 high, with a centre aisle, skylight and a 3-wide entrance "
+                        + "- room for lines of machines (Mekanism, Create, Thermal...)", Items.SMOOTH_STONE, Presets::machineHall),
+                new Preset("Power room", "9x9 deepslate room with obsidian pillars and a marked 3x3 generator pad "
+                        + "(reactors, generators, batteries)", Items.OBSIDIAN, Presets::powerRoom),
+                new Preset("Storage core", "9x7 room with a bench along the back for drives and terminals, "
+                        + "barrels for overflow (AE2, Refined Storage)", Items.BARREL, Presets::storageCore),
+                new Preset("Greenhouse", "11x9 glass house with dirt beds either side of a water channel "
+                        + "(fill the channel with water, hoe the beds) - crops, botany pots", Items.GLASS, Presets::greenhouse),
+                new Preset("Launch pad", "11x11 concrete pad with hazard stripes, a landing mark and corner lights "
+                        + "(rockets, jetpacks, airships)", Items.YELLOW_CONCRETE, Presets::launchPad),
+                new Preset("Rail station", "13 long platform beside a track, with a roof, lights and benches",
+                        Items.RAIL, Presets::railStation),
+                new Preset("Bee yard", "9x9 fenced flower meadow with hives and a composter (Productive Bees and friends)",
+                        Items.BEEHIVE, Presets::beeYard));
     }
 
     // ------------------------------------------------------------------ designs
@@ -382,6 +397,188 @@ public final class Presets {
         }
         b.set(0, 5, 11, state(Blocks.LANTERN));
         b.set(2, 5, 11, state(Blocks.LANTERN));
+        return b.blueprint();
+    }
+
+    // ------------------------------------------------------------------ modpack bases
+
+    private static Blueprint machineHall() {
+        Shape b = new Shape("Machine hall");
+        b.box(0, 0, 0, 14, 0, 10, state(Blocks.SMOOTH_STONE));
+        // A lighter aisle down the middle; machines go either side of it.
+        b.box(6, 0, 0, 8, 0, 10, state(Blocks.POLISHED_ANDESITE));
+        b.walls(0, 1, 0, 14, 5, 10, state(Blocks.STONE_BRICKS));
+        // Window band between the pillars.
+        b.box(1, 3, 0, 13, 4, 0, state(Blocks.GLASS));
+        b.box(1, 3, 10, 13, 4, 10, state(Blocks.GLASS));
+        b.box(0, 3, 1, 0, 4, 9, state(Blocks.GLASS));
+        b.box(14, 3, 1, 14, 4, 9, state(Blocks.GLASS));
+        for (int x : new int[]{0, 7, 14}) {
+            for (int z : new int[]{0, 5, 10}) {
+                if (x == 0 || x == 14 || z == 0 || z == 10) {
+                    b.box(x, 1, z, x, 5, z, state(Blocks.POLISHED_DEEPSLATE));
+                }
+            }
+        }
+        // Flat roof with a skylight down the middle and glowstone for light.
+        b.box(0, 6, 0, 14, 6, 10, state(Blocks.SMOOTH_STONE));
+        b.box(2, 6, 5, 12, 6, 5, state(Blocks.GLASS));
+        for (int[] q : new int[][]{{3, 2}, {11, 2}, {3, 8}, {11, 8}, {7, 2}, {7, 8}}) {
+            b.set(q[0], 6, q[1], state(Blocks.GLOWSTONE));
+        }
+        // 3-wide, 3-high entrance.
+        for (int x = 6; x <= 8; x++) {
+            for (int y = 1; y <= 3; y++) {
+                b.remove(x, y, 0);
+            }
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint powerRoom() {
+        Shape b = new Shape("Power room");
+        b.box(0, 0, 0, 8, 0, 8, state(Blocks.POLISHED_DEEPSLATE));
+        // The generator pad, and a darker cable lane round it.
+        b.box(2, 0, 2, 6, 0, 6, state(Blocks.DEEPSLATE_TILES));
+        b.box(3, 0, 3, 5, 0, 5, state(Blocks.IRON_BLOCK));
+        b.walls(0, 1, 0, 8, 4, 8, state(Blocks.DEEPSLATE_TILES));
+        for (int[] q : new int[][]{{0, 0}, {8, 0}, {0, 8}, {8, 8}, {4, 8}, {0, 4}, {8, 4}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], state(Blocks.OBSIDIAN));
+        }
+        b.box(0, 5, 0, 8, 5, 8, state(Blocks.DEEPSLATE_TILES));
+        for (int[] q : new int[][]{{2, 2}, {6, 2}, {2, 6}, {6, 6}}) {
+            b.set(q[0], 5, q[1], state(Blocks.SEA_LANTERN));
+        }
+        door(b, 4, 1, 0, Blocks.IRON_DOOR, Direction.SOUTH);
+        b.set(3, 2, 0, state(Blocks.TINTED_GLASS));
+        b.set(5, 2, 0, state(Blocks.TINTED_GLASS));
+        return b.blueprint();
+    }
+
+    private static Blueprint storageCore() {
+        Shape b = new Shape("Storage core");
+        b.box(0, 0, 0, 8, 0, 6, state(Blocks.SMOOTH_QUARTZ));
+        b.walls(0, 1, 0, 8, 4, 6, state(Blocks.LIGHT_GRAY_CONCRETE));
+        b.box(1, 3, 0, 7, 3, 0, state(Blocks.GLASS));
+        for (int[] q : new int[][]{{0, 0}, {8, 0}, {0, 6}, {8, 6}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], state(Blocks.QUARTZ_PILLAR));
+        }
+        // Bench along the back wall: put drives, the controller and terminals on and in front of it.
+        b.box(1, 1, 5, 7, 1, 5, state(Blocks.SMOOTH_STONE));
+        b.box(1, 2, 5, 7, 2, 5, slab(Blocks.SMOOTH_STONE_SLAB, false));
+        // Overflow barrels along the sides.
+        for (int z = 1; z <= 3; z++) {
+            b.set(1, 1, z, facing(Blocks.BARREL, Direction.EAST));
+            b.set(7, 1, z, facing(Blocks.BARREL, Direction.WEST));
+        }
+        b.box(0, 5, 0, 8, 5, 6, slab(Blocks.SMOOTH_STONE_SLAB, false));
+        b.set(2, 5, 3, state(Blocks.SEA_LANTERN));
+        b.set(6, 5, 3, state(Blocks.SEA_LANTERN));
+        door(b, 4, 1, 0, Blocks.IRON_DOOR, Direction.SOUTH);
+        return b.blueprint();
+    }
+
+    private static Blueprint greenhouse() {
+        Shape b = new Shape("Greenhouse");
+        b.walls(0, 0, 0, 10, 0, 8, state(Blocks.STONE_BRICKS));
+        // Beds either side of a water channel (left open) down the middle, a path round them.
+        b.box(1, 0, 1, 9, 0, 3, state(Blocks.DIRT));
+        b.box(1, 0, 5, 9, 0, 7, state(Blocks.DIRT));
+        b.set(1, 0, 4, state(Blocks.STONE_BRICKS));
+        b.set(9, 0, 4, state(Blocks.STONE_BRICKS));
+        b.walls(0, 1, 0, 10, 3, 8, state(Blocks.GLASS));
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}, {5, 0}, {5, 8}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], state(Blocks.SPRUCE_LOG));
+        }
+        b.box(0, 4, 0, 10, 4, 8, state(Blocks.GLASS));
+        b.box(0, 4, 0, 10, 4, 0, state(Blocks.STRIPPED_SPRUCE_LOG));
+        b.box(0, 4, 8, 10, 4, 8, state(Blocks.STRIPPED_SPRUCE_LOG));
+        b.box(1, 5, 4, 9, 5, 4, state(Blocks.GLASS));
+        door(b, 5, 1, 0, Blocks.SPRUCE_DOOR, Direction.SOUTH);
+        b.remove(5, 0, 0);
+        b.set(5, 0, 0, state(Blocks.STONE_BRICKS));
+        b.set(1, 1, 1, state(Blocks.COMPOSTER));
+        b.set(9, 1, 1, facing(Blocks.CHEST, Direction.WEST));
+        return b.blueprint();
+    }
+
+    private static Blueprint launchPad() {
+        Shape b = new Shape("Launch pad");
+        b.box(0, 0, 0, 10, 0, 10, state(Blocks.GRAY_CONCRETE));
+        // Hazard stripes round the edge.
+        for (int i = 0; i <= 10; i++) {
+            BlockState stripe = state(i % 2 == 0 ? Blocks.YELLOW_CONCRETE : Blocks.BLACK_CONCRETE);
+            b.set(i, 0, 0, stripe);
+            b.set(i, 0, 10, stripe);
+            b.set(0, 0, i, stripe);
+            b.set(10, 0, i, stripe);
+        }
+        // Landing mark: a white ring with a cross in the middle.
+        for (int i = 3; i <= 7; i++) {
+            b.set(i, 0, 3, state(Blocks.WHITE_CONCRETE));
+            b.set(i, 0, 7, state(Blocks.WHITE_CONCRETE));
+            b.set(3, 0, i, state(Blocks.WHITE_CONCRETE));
+            b.set(7, 0, i, state(Blocks.WHITE_CONCRETE));
+        }
+        b.box(5, 0, 4, 5, 0, 6, state(Blocks.WHITE_CONCRETE));
+        b.box(4, 0, 5, 6, 0, 5, state(Blocks.WHITE_CONCRETE));
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 10}, {10, 10}}) {
+            b.set(q[0], 1, q[1], state(Blocks.IRON_BARS));
+            b.set(q[0], 2, q[1], state(Blocks.SEA_LANTERN));
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint railStation() {
+        Shape b = new Shape("Rail station");
+        // Track bed and rails along x at z = 0.
+        b.box(0, 0, 0, 12, 0, 0, state(Blocks.STONE_BRICKS));
+        b.box(0, 1, 0, 12, 1, 0, state(Blocks.RAIL));
+        // Platform one block up beside it, with a yellow safety edge.
+        b.box(0, 0, 1, 12, 1, 4, state(Blocks.STONE_BRICKS));
+        b.box(0, 1, 1, 12, 1, 1, state(Blocks.YELLOW_CONCRETE));
+        b.box(0, 1, 2, 12, 1, 4, state(Blocks.SMOOTH_STONE));
+        // Roof on posts along the back.
+        for (int x : new int[]{0, 6, 12}) {
+            b.box(x, 2, 4, x, 4, 4, state(Blocks.SPRUCE_LOG));
+            b.set(x, 2, 1, state(Blocks.SPRUCE_FENCE));
+            b.set(x, 3, 1, state(Blocks.SPRUCE_FENCE));
+            b.set(x, 4, 1, state(Blocks.SPRUCE_FENCE));
+        }
+        b.box(0, 5, 1, 12, 5, 4, slab(Blocks.SPRUCE_SLAB, false));
+        for (int x : new int[]{3, 9}) {
+            b.set(x, 2, 3, facing(Blocks.SPRUCE_STAIRS, Direction.SOUTH));
+            b.set(x + 1, 2, 3, facing(Blocks.SPRUCE_STAIRS, Direction.SOUTH));
+            b.set(x, 4, 2, state(Blocks.LANTERN));
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint beeYard() {
+        Shape b = new Shape("Bee yard");
+        b.box(0, 0, 0, 8, 0, 8, state(Blocks.GRASS_BLOCK));
+        b.box(4, 0, 0, 4, 0, 4, state(Blocks.DIRT_PATH));
+        b.walls(0, 1, 0, 8, 1, 8, state(Blocks.OAK_FENCE));
+        b.set(4, 1, 0, facing(Blocks.OAK_FENCE_GATE, Direction.SOUTH));
+        Block[] flowers = {Blocks.DANDELION, Blocks.POPPY, Blocks.CORNFLOWER, Blocks.ALLIUM, Blocks.OXEYE_DAISY,
+                Blocks.AZURE_BLUET, Blocks.ORANGE_TULIP, Blocks.LILY_OF_THE_VALLEY};
+        int f = 0;
+        for (int x = 1; x <= 7; x++) {
+            for (int z = 1; z <= 7; z++) {
+                if (x != 4 && (x + z) % 2 == 0 && z != 6) {
+                    b.set(x, 1, z, state(flowers[f++ % flowers.length]));
+                }
+            }
+        }
+        // Hives along the back, facing the gate, and a composter.
+        for (int x : new int[]{2, 4, 6}) {
+            b.set(x, 0, 6, state(Blocks.OAK_PLANKS));
+            b.set(x, 1, 6, facing(Blocks.BEEHIVE, Direction.NORTH));
+        }
+        b.set(7, 1, 7, state(Blocks.COMPOSTER));
+        for (int[] q : new int[][]{{0, 0}, {8, 0}, {0, 8}, {8, 8}}) {
+            b.set(q[0], 2, q[1], state(Blocks.LANTERN));
+        }
         return b.blueprint();
     }
 

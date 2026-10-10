@@ -62,7 +62,9 @@ Both have the same features and controls.
 ### Tools
 
 - **Build**: pick a block from the item bar, then click. Shapes: Block, Line, Floor, Wall, Box, Circle,
-  Cylinder, Sphere, Dome (half sphere), Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
+  Cylinder, Sphere, Dome (half sphere), Pyramid, Cone, Torus, Arch (Height = how high it rises; solid makes a
+  gateway), Bridge (deck with a hump and railings; Height = width), Stairs (one up per block, stair blocks face up the
+  stairs; Height = width), Spiral (spiral staircase around a centre), Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
   level you click). Two-point shapes: click A, click B, then click again or press Enter.
   - **Modes**: *Fill* only fills empty space; *Replace* turns everything in the shape into the brush;
     *Replace type* swaps only the block type you click first; *Cover* only fills empty spaces resting on
@@ -74,6 +76,9 @@ Both have the same features and controls.
   - **Mix** (pattern brush): pick a block and press *+ Mix*, pick another and press it again (press several
     times for more of it). Shapes are then built from a random mix, e.g. 60% stone, 30% andesite, 10% cobblestone.
     The preview shows exactly the pattern that gets built. *Clear mix* goes back to one block.
+    **Pattern** sets how the mix is laid out: *Random* (by the proportions), *Clusters* (blended patches, like
+    weathered stone), *Gradient* (bottom to top in the order the blocks were added, with a soft blend - nice on
+    domes and towers), *Layers*, *Stripes* or *Checker*.
   - **Roof** (smart roof): press *Roof*, then click the top of any wall of a room. The walls are followed round
     to find the room's size and a roof with a one-block overhang is laid on it, ready to build (Enter). *Style*
     switches between a gable roof (two slopes) and a hip roof (four slopes). Use stairs as the block for a sloped
@@ -83,7 +88,9 @@ Both have the same features and controls.
 - **Link storage**: click containers to add them to your storage network.
 - **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
   blueprints are listed on the left (Shift+click deletes). **Save...** keeps the current blueprint (a copy, a
-  preset, a schematic or a roof) in that list under a name of your choice.
+  preset, a schematic or a roof) in that list under a name of your choice. **Export...** writes it as a schematic
+  file in `.minecraft/schematics/` that other tools open: WorldEdit/Sponge `.schem` (Litematica, FAWE and Axiom read
+  it too), or a vanilla structure `.nbt` with Shift+click. Exported files show up under *Load schematic...* as well.
   - **Move**: select a building with two clicks; it follows the cursor (R rotates, N mirrors). Click to place it:
     the original is taken down (its drops feed the new build) and it's rebuilt at the new spot. The old spot is
     outlined in red until then.
@@ -111,6 +118,8 @@ Both have the same features and controls.
     and stores what it digs in linked storage when the inventory fills up.
   - *Fell trees* chops every tree in the area, picks up the wood and replants saplings.
   - *Harvest* breaks ripe crops in the area, replants them and stores the produce.
+  - *Plant trees* plants saplings spread out over the area (spacing -/+), on grass or dirt with room to grow and
+    away from other trees: the brush sapling, or the one you have most of. Dark oak is planted 2x2.
   - *Light up* places torches on every dark floor spot in the area (spaced out, so it doesn't need hundreds).
 - **Air placement** (B, or the Air button): the cursor targets a flat layer at a chosen height, so you can
   click empty space to build floating blocks and shapes. Alt+scroll (or -/+) moves the layer; a grid and a drop
@@ -137,17 +146,26 @@ The built-in engine also handles shapes that overhang or float, like spheres and
 - **Scaffolding**: when a block has nothing to attach to, it places a few temporary blocks (dirt, cobblestone,
   netherrack... see `scaffoldBlocks` in the config) to connect it to something solid, or a column down to the
   ground.
-- **Pillaring**: when a block is too high to reach from the ground, it walks next to it, jumps and places blocks
-  under itself until it can reach.
+- **Pillaring and bridging**: routes can build their own way. When a block is too high or over a drop, the path
+  planner adds steps that pillar up (jump and place a block underneath), bridge across (place the block to step
+  onto) and later dig back down through its own scaffolding, so it never gets stranded on top of a pillar.
 - **Cleanup**: when the order is done, the scaffolding and pillars are mined out again (Settings: Remove
-  scaffolding). If you run out of scaffolding blocks, it fetches more from linked storage.
+  scaffolding). The block underneath is never pulled out over a drop that would hurt.
+- **Getting out**: if a finished dome or hollow sphere closed around the character, it opens a two-block doorway
+  at the lowest point, walks out and closes it again from outside. If you run out of scaffolding blocks, it fetches more from linked storage.
 - **Buildable hollow shells** (on by default): hollow spheres and circles get a slightly thicker inside where
   layers would otherwise only touch at the edges, so every block can be placed. The outside looks the same.
 
 - **Place in mid-air** (Settings, on by default): the built-in engine places a block even when nothing is next
   to it, by clicking the empty spot itself. Domes, spheres and floating builds then need no scaffolding at all.
-  This works on vanilla servers; some anti-cheat plugins don't allow it, so turn it off there. On *Auto*, build
-  orders use the built-in engine while this is on, since Baritone can't do it.
+  This works on vanilla servers; some anti-cheat plugins don't allow it, so turn it off there. Build orders use the
+  built-in engine while this is on (whatever the Engine setting), since Baritone can't do it; Baritone still walks
+  and mines when selected.
+- **Smooth turning** (Settings: Turn speed): the character turns its head toward each block it places or mines at a
+  limited speed and only clicks once it faces it, instead of snapping to a new angle every block. *Instant* restores
+  the old snapping.
+- **Creative supply** (Settings, on by default): in creative mode the builder spawns the blocks and scaffolding it
+  needs into your hotbar instead of fetching them from storage. Does nothing in survival.
 - **Clear blocks in the way** (Settings, on by default): shapes mine whatever is in their cells (terrain, trees,
   plants) and put the brush block there, instead of skipping them.
 
@@ -164,6 +182,10 @@ summary with Scan nearby / Re-index / Sort / Smelt buttons.
 
 - **Orders**: drag a card up or down to change the order; the buttons on each card run it next, pause/resume it,
   or cancel it.
+- **Save queue / Load queue**: save every queued order under a name and add them back later (for this world and
+  dimension; saved in `config/rtsclient/queues/`). Half-finished builds carry on where they were, paused orders stay
+  paused. Orders still queued when you leave the world or quit are kept as *Last session*, and you're reminded of
+  them when you come back.
 - **Materials** lists everything the queued orders still need against what you carry and what's in storage, and
   *Fetch all* gets it in one trip.
 - **Repair** checks finished builds for blocks that never got placed or were broken since, and queues orders to
@@ -209,3 +231,14 @@ For NeoForge, put `baritone-api-neoforge-<version>.jar` (1.11.x, MC 1.21) in `ne
 `./gradlew build` inside `neoforge/` (Java 21).
 
 CI downloads the jars automatically and uploads both mods as workflow artifacts.
+
+### Live tests (NeoForge)
+
+`neoforge/src/devtest` holds a harness that is only on the dev run's classpath (never in the jar). It creates a
+flat survival world, builds each scenario with the real task queue and engine, and writes the outcome (missing
+blocks, leftover scaffolding, time, health) to `neoforge/run/autotest/results.txt` plus a screenshot each:
+
+```
+cd neoforge
+./gradlew runClient -Pautotest=dome6,sphere5,floor -Pautoquit   # or -Pautotest=all
+```

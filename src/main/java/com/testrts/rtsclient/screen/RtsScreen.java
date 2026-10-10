@@ -65,7 +65,7 @@ import java.util.Map;
 public final class RtsScreen extends Screen {
     // Layout
     private static final int TOP_H = 24;
-    private static final int LEFT_W = 116;
+    private static final int LEFT_W = 134;
     private static final int RIGHT_W = 164;
     private static final int SLOT = 18;
     private static final int GRID_ROWS = 3;
@@ -104,6 +104,8 @@ public final class RtsScreen extends Screen {
     private final List<String> leftSectionNames = new ArrayList<>();
     private int heightRowY = -1;
     private int clipboardInfoY = -1;
+    /** Where the chosen shape's name is written under the shape icons. */
+    private int shapeNameY = -1;
     private int ordersTop;
     private int ordersBottom;
     private int storageTop;
@@ -115,6 +117,10 @@ public final class RtsScreen extends Screen {
     private double pressX;
     private double pressY;
     private boolean dragging;
+    /** The cursor is on the air layer (not on a block). */
+    private boolean hoverOnLayer;
+    /** Air placement is on, but terrain in front of the layer took the cursor. */
+    private boolean terrainInFront;
 
     public RtsScreen(RtsController controller) {
         super(Text.literal("RTS"));
@@ -208,6 +214,13 @@ public final class RtsScreen extends Screen {
             case CYLINDER -> Glyphs.CYLINDER;
             case SPHERE -> Glyphs.SPHERE;
             case DOME -> Glyphs.DOME;
+            case PYRAMID -> Glyphs.PYRAMID;
+            case CONE -> Glyphs.CONE;
+            case TORUS -> Glyphs.TORUS;
+            case ARCH -> Glyphs.ARCH;
+            case BRIDGE -> Glyphs.BRIDGE;
+            case STAIRS -> Glyphs.STAIRS;
+            case SPIRAL -> Glyphs.SPIRAL;
             case VEIN -> Glyphs.VEIN;
             case HOLE -> Glyphs.HOLE;
         };
@@ -271,8 +284,28 @@ public final class RtsScreen extends Screen {
                 rx, y, half, 16, () -> this.client.setScreen(new MaterialsScreen(this))).glyph(Glyphs.LIST, Theme.GOLD);
         button("Repair", "Check finished builds for missing or broken blocks and queue orders to fill them in",
                 rx + half + 2, y, half, 16, () -> CompletedBuilds.queueRepairs(this.client.world, false)).glyph(Glyphs.WRENCH, Theme.ACCENT);
+        y += 18;
+        button("Save queue", "Save every queued order to load again later in this world. Orders still queued when you "
+                + "leave are kept as \"Last session\" by themselves.", rx, y, half, 16, () -> {
+            if (TaskQueue.get().isEmpty()) {
+                Messages.info("Nothing queued to save");
+                return;
+            }
+            String suggested = "Queue " + new java.text.SimpleDateFormat("MMM d HH-mm").format(new java.util.Date());
+            this.client.setScreen(new NameScreen(this, "Save queue", suggested, name -> {
+                try {
+                    int[] r = com.testrts.rtsclient.task.QueueStore.save(name);
+                    Messages.success("Saved " + r[0] + " order(s) as \"" + name + "\""
+                            + (r[1] > 0 ? " (" + r[1] + " helper step(s) left out; they come back on their own)" : ""));
+                } catch (java.io.IOException ex) {
+                    Messages.error("Couldn't save the queue: " + ex.getMessage());
+                }
+            }));
+        }).glyph(Glyphs.FOLDER, Theme.GOOD);
+        button("Load queue", "Add the orders of a saved queue to the end of this one", rx + half + 2, y, half, 16,
+                () -> this.client.setScreen(new QueueScreen(this))).glyph(Glyphs.LIST, Theme.ACCENT);
         y += 20;
-        this.ordersTop = y + 11;
+        this.ordersTop = y + 22;
 
         int bottom = rightBottom();
         int sy = bottom - PAD - 3 * 18;
@@ -306,6 +339,7 @@ public final class RtsScreen extends Screen {
         this.leftSectionNames.clear();
         this.heightRowY = -1;
         this.clipboardInfoY = -1;
+        this.shapeNameY = -1;
         BuildSession s = this.session;
         int x = PAD + 4;
         int full = LEFT_W - 8;
@@ -313,16 +347,21 @@ public final class RtsScreen extends Screen {
         int y = TOP_H + PAD + Theme.HEADER_H + 4;
         switch (s.tool) {
             case BUILD, DESTROY -> {
+                // Compact picker: four icon buttons per row (tooltips name them), the chosen shape spelled out below.
                 BuildShape[] shapes = BuildShape.values();
+                int perRow = 4;
+                int cw = (full - (perRow - 1) * 2) / perRow;
                 for (int i = 0; i < shapes.length; i++) {
                     BuildShape shape = shapes[i];
-                    button(shape.label(), shape.description() + " [ and ] cycle", x + (i % 2) * (col + 2), y + (i / 2) * ROW, col, ROW - 1,
-                            () -> {
+                    button(shape.label(), shape.label() + ": " + shape.description() + "  [ and ] cycle",
+                            x + (i % perRow) * (cw + 2), y + (i / perRow) * ROW, cw, ROW - 1, () -> {
                                 s.shape = shape;
                                 s.clearSelection();
-                            }).glyph(shapeGlyph(shape), Theme.TEXT_DIM).selected(() -> s.shape == shape);
+                            }).glyph(shapeGlyph(shape), Theme.TEXT_DIM).iconOnly().selected(() -> s.shape == shape);
                 }
-                y += ((shapes.length + 1) / 2) * ROW + 4;
+                y += ((shapes.length + perRow - 1) / perRow) * ROW + 1;
+                this.shapeNameY = y;
+                y += 13;
                 section(y, "OPTIONS");
                 y += 11;
                 if (s.tool == ToolMode.BUILD) {
@@ -336,15 +375,19 @@ public final class RtsScreen extends Screen {
                 button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, full, ROW - 1,
                         () -> s.hollow = !s.hollow).selected(() -> s.hollow).dynamic(() -> s.hollow ? "Hollow: on" : "Hollow: off").left();
                 y += ROW;
-                button("-", "Move the air layer down [Alt+scroll]", x, y, 16, ROW - 1, () -> s.airY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("-", "Move the air layer down [Alt+scroll]", x, y, 16, ROW - 1, () -> s.airY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly()
+                        .enabled(() -> s.airPlace);
                 button("Air", "Air placement: point at empty space on a flat layer to build in mid-air [B]",
                         x + 18, y, full - 36, ROW - 1, this::toggleAir)
                         .selected(() -> s.airPlace).dynamic(() -> s.airPlace ? "Air: Y " + s.airY : "Air: off");
-                button("+", "Move the air layer up [Alt+scroll]", x + full - 16, y, 16, ROW - 1, () -> s.airY++).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                button("+", "Move the air layer up [Alt+scroll]", x + full - 16, y, 16, ROW - 1, () -> s.airY++).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly()
+                        .enabled(() -> s.airPlace);
                 y += ROW;
-                button("-", "Lower", x, y, 16, ROW - 1, () -> s.adjustHeight(-1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("-", "Lower", x, y, 16, ROW - 1, () -> s.adjustHeight(-1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly()
+                        .enabled(() -> s.shape.usesHeight());
                 button("+", "Height for walls, boxes and cylinders. Negative digs down. [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
-                        () -> s.adjustHeight(1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                        () -> s.adjustHeight(1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly()
+                        .enabled(() -> s.shape.usesHeight());
                 this.heightRowY = y;
                 y += ROW;
                 if (s.tool == ToolMode.BUILD) {
@@ -361,6 +404,12 @@ public final class RtsScreen extends Screen {
                         }
                     }).selected(() -> !s.mix.isEmpty());
                     button("Clear mix", "Build with a single block again", x + col + 2, y, col, ROW - 1, s.mix::clear);
+                    y += ROW;
+                    button("Pattern", "How the mix is laid out: Random, Clusters, Gradient (bottom to top, in the order the "
+                            + "blocks were added), Layers, Stripes or Checker. Add blocks with + Mix first.",
+                            x, y, full, ROW - 1, () -> s.pattern = s.pattern.next())
+                            .dynamic(() -> "Pattern: " + s.pattern.label()).enabled(() -> !s.mix.isEmpty())
+                            .glyph(Glyphs.LIST, Theme.ACCENT).left();
                     y += ROW;
                     button("Roof", "Smart roof: click the top of a room's wall and get a roof sized to the room "
                             + "(use stairs as the block for a sloped roof)", x, y, col, ROW - 1, () -> {
@@ -424,7 +473,7 @@ public final class RtsScreen extends Screen {
                         .dynamic(() -> "gap " + s.arrayGap);
                 y += ROW;
                 RtsButton save = button("Save...", "Keep this blueprint (copies, presets, schematics and roofs) in the saved list, with a name",
-                        x, y, full, ROW - 1, () -> {
+                        x, y, col, ROW - 1, () -> {
                             if (s.clipboard == null) {
                                 return;
                             }
@@ -438,6 +487,29 @@ public final class RtsScreen extends Screen {
                             }));
                         }).glyph(Glyphs.FOLDER, Theme.GOOD).left();
                 save.active = s.clipboard != null;
+                RtsButton export = button("Export...", "Write it as a schematic file in .minecraft/schematics that WorldEdit, "
+                        + "Litematica and others can open (.schem). Shift+click: vanilla structure .nbt.",
+                        x + col + 2, y, col, ROW - 1, () -> {
+                            if (s.clipboard == null) {
+                                return;
+                            }
+                            com.testrts.rtsclient.build.SchematicWriter.Format format = hasShiftDown()
+                                    ? com.testrts.rtsclient.build.SchematicWriter.Format.NBT
+                                    : com.testrts.rtsclient.build.SchematicWriter.Format.SCHEM;
+                            Blueprint bp = s.clipboard;
+                            this.client.setScreen(new NameScreen(this, "Export as " + format.label(),
+                                    com.testrts.rtsclient.build.SchematicWriter.suggestName(bp.name()), name -> {
+                                        try {
+                                            java.nio.file.Path file = com.testrts.rtsclient.build.SchematicWriter.write(
+                                                    bp, SchematicBrowserScreen.folder(), name, format);
+                                            Messages.success("Exported " + file.getFileName() + " to schematics/");
+                                        } catch (java.io.IOException ex) {
+                                            com.testrts.rtsclient.RtsClientMod.LOGGER.warn("Could not export schematic", ex);
+                                            Messages.error("Export failed: " + ex.getMessage());
+                                        }
+                                    }));
+                        }).glyph(Glyphs.FOLDER, Theme.GOLD);
+                export.active = s.clipboard != null;
                 y += ROW;
                 button("Presets...", "Ready-made buildings: house, smelter room, storage, enchanting room and more [P]",
                         x, y, full, ROW - 1, () -> this.client.setScreen(new PresetScreen(this))).glyph(Glyphs.BOX, Theme.ACCENT).left();
@@ -491,6 +563,7 @@ public final class RtsScreen extends Screen {
                                 case QUARRY -> Items.IRON_PICKAXE;
                                 case FELL_TREES -> Items.IRON_AXE;
                                 case HARVEST -> Items.WHEAT;
+                                case PLANT_TREES -> Items.OAK_SAPLING;
                             }));
                 }
                 y += ((TerrainMode.values().length + 1) / 2) * (ROW + 5) + 2;
@@ -501,6 +574,16 @@ public final class RtsScreen extends Screen {
                             () -> s.terrainClearHeight = Math.max(1, s.terrainClearHeight - 4)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
                     button("+", "How far above the level to mine [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
                             () -> s.terrainClearHeight = Math.min(64, s.terrainClearHeight + 4)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    this.heightRowY = y;
+                    y += ROW + 2;
+                }
+                if (s.terrainMode == TerrainMode.PLANT_TREES) {
+                    section(y, "SPACING");
+                    y += 11;
+                    button("-", "Plant closer together", x, y, 16, ROW - 1,
+                            () -> s.treeSpacing = Math.max(2, s.treeSpacing - 1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                    button("+", "Leave more room between trees (big trees like more than 6)", x + full - 16, y, 16, ROW - 1,
+                            () -> s.treeSpacing = Math.min(16, s.treeSpacing + 1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
                     this.heightRowY = y;
                     y += ROW + 2;
                 }
@@ -639,6 +722,17 @@ public final class RtsScreen extends Screen {
         var cam = this.controller.camera();
         BlockHitResult hit = MouseRay.pick(cam, mx, my, this.width, this.height, false);
         BuildSession s = this.session;
+        this.hoverOnLayer = false;
+        this.terrainInFront = false;
+        // Drawing a shape in air mode: the next point stays on the air layer even where terrain is in
+        // front of it, so a dome or sphere gets the radius you see instead of jumping to the ground.
+        if (s.airPlace && s.anchorA != null && s.tool == ToolMode.BUILD) {
+            BlockHitResult onLayer = MouseRay.pickLayer(cam, mx, my, this.width, this.height, s.airY);
+            if (onLayer != null) {
+                this.hoverOnLayer = true;
+                return onLayer;
+            }
+        }
         Integer layer = s.airPlace ? Integer.valueOf(s.airY)
                 : hit == null && s.anchorA != null ? Integer.valueOf(s.anchorA.getY()) : null;
         if (layer == null) {
@@ -649,8 +743,10 @@ public final class RtsScreen extends Screen {
             return hit;
         }
         if (hit != null && hit.getPos().squaredDistanceTo(cam.position()) < air.getPos().squaredDistanceTo(cam.position())) {
+            this.terrainInFront = s.airPlace;
             return hit; // terrain in front of the layer
         }
+        this.hoverOnLayer = true;
         return air;
     }
 
@@ -1125,7 +1221,8 @@ public final class RtsScreen extends Screen {
             x += Theme.chip(ctx, this.textRenderer, "CUT Y" + cut, x, 7, 0xFF3A2E10, Theme.GOLD) + 4;
         }
         String engine = Engine.activeName() + ": " + Engine.status();
-        if (x + 8 + this.textRenderer.getWidth(engine) < limit) {
+        if (limit - x > 60) {
+            engine = trim(engine, limit - x - 12);
             boolean busy = !TaskQueue.get().isEmpty();
             Theme.light(ctx, x + 3, 12, busy ? Theme.GOOD : Theme.TEXT_FAINT, busy);
             ctx.drawText(this.textRenderer, engine, x + 9, 8, busy ? Theme.TEXT : Theme.TEXT_DIM, false);
@@ -1186,14 +1283,15 @@ public final class RtsScreen extends Screen {
             BlockPos t = WorldOverlay.targetFor(this.session, hover);
             double dist = Math.sqrt(t.getSquaredDistance(this.client.player.getX(), this.client.player.getY(), this.client.player.getZ()));
             String coords = t.getX() + "  " + t.getY() + "  " + t.getZ();
-            String d = String.format(Locale.ROOT, "%.0fm", dist);
+            String d = String.format(Locale.ROOT, "%.0fm", dist) + (this.terrainInFront ? "  (ground in front of the air layer)" : "");
             int cw = this.textRenderer.getWidth(coords) + this.textRenderer.getWidth(d) + 34;
             int bx = cx - cw / 2;
             int by = y0 + h + 2;
             Theme.round(ctx, bx, by, cw, 11, 0xA00E141B);
             int tx = bx + 4;
-            ctx.drawText(this.textRenderer, "XYZ", tx, by + 2, Theme.ACCENT, false);
-            tx += this.textRenderer.getWidth("XYZ") + 5;
+            String tag = this.hoverOnLayer ? "AIR" : "XYZ";
+            ctx.drawText(this.textRenderer, tag, tx, by + 2, this.hoverOnLayer ? Theme.GOOD : this.terrainInFront ? Theme.GOLD : Theme.ACCENT, false);
+            tx += this.textRenderer.getWidth(tag) + 5;
             ctx.drawText(this.textRenderer, coords, tx, by + 2, Theme.TEXT, false);
             tx += this.textRenderer.getWidth(coords) + 6;
             ctx.drawText(this.textRenderer, d, tx, by + 2, Theme.TEXT_DIM, false);
@@ -1207,9 +1305,17 @@ public final class RtsScreen extends Screen {
             Theme.section(ctx, this.textRenderer, x0, x1, this.leftSections.get(i)[0], this.leftSectionNames.get(i));
         }
         BuildSession s = this.session;
+        if (this.shapeNameY >= 0) {
+            String name = s.shape.label();
+            ctx.drawText(this.textRenderer, name, x0 + 1, this.shapeNameY + 2, Theme.ACCENT, false);
+            String what = s.shape.description();
+            int nx = x0 + 1 + this.textRenderer.getWidth(name) + 5;
+            ctx.drawText(this.textRenderer, trim(what, x1 - nx), nx, this.shapeNameY + 2, Theme.TEXT_FAINT, false);
+        }
         if (this.heightRowY >= 0) {
             boolean terrain = s.tool == ToolMode.TERRAIN;
-            String h = terrain ? s.terrainClearHeight + " blocks" : "Height " + s.height;
+            String h = terrain ? s.terrainMode == TerrainMode.PLANT_TREES ? s.treeSpacing + " apart" : s.terrainClearHeight + " blocks"
+                    : s.shape.heightLabel() + " " + s.height;
             boolean active = terrain || s.shape.usesHeight();
             ctx.drawCenteredTextWithShadow(this.textRenderer, h, (x0 + x1) / 2, this.heightRowY + 3, active ? Theme.TEXT : Theme.TEXT_FAINT);
         }
@@ -1227,6 +1333,7 @@ public final class RtsScreen extends Screen {
                     case QUARRY -> "Dig " + s.terrainClearHeight + " deep from the top";
                     case FELL_TREES -> "Replants saplings";
                     case HARVEST -> "Replants, stores produce";
+                    case PLANT_TREES -> "Plants " + WorldActions.treeSapling(s).getName().getString();
                 };
                 ctx.drawText(this.textRenderer, trim(fill, x1 - x0), x0, this.clipboardInfoY, Theme.TEXT_DIM, false);
                 ctx.drawText(this.textRenderer, "Click two corners", x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
@@ -1242,7 +1349,12 @@ public final class RtsScreen extends Screen {
         int x0 = rightX() + PAD;
         int x1 = this.width - 2 * PAD;
         List<RtsTask> tasks = TaskQueue.get().snapshot();
-        Theme.section(ctx, this.textRenderer, x0, x1, this.ordersTop - 11, "ORDERS" + (tasks.isEmpty() ? "" : " (" + tasks.size() + ")"));
+        Theme.section(ctx, this.textRenderer, x0, x1, this.ordersTop - 22, "ORDERS" + (tasks.isEmpty() ? "" : " (" + tasks.size() + ")"));
+        // What the character is doing right now.
+        boolean working = !tasks.isEmpty();
+        String activity = working ? Engine.activeName() + ": " + Engine.status() : "Idle";
+        Theme.light(ctx, x0 + 3, this.ordersTop - 7, working ? Theme.GOOD : Theme.TEXT_FAINT, working);
+        ctx.drawText(this.textRenderer, trim(activity, x1 - x0 - 12), x0 + 9, this.ordersTop - 11, working ? Theme.TEXT_DIM : Theme.TEXT_FAINT, false);
         int visible = visibleCards();
         this.taskScroll = MathHelper.clamp(this.taskScroll, 0, Math.max(0, tasks.size() - visible));
         int y = this.ordersTop;
@@ -1308,7 +1420,7 @@ public final class RtsScreen extends Screen {
         }
         if (tasks.size() > visible) {
             String more = (this.taskScroll + 1) + "-" + Math.min(tasks.size(), this.taskScroll + visible) + " of " + tasks.size();
-            ctx.drawText(this.textRenderer, more, x1 - this.textRenderer.getWidth(more), this.ordersTop - 11, Theme.TEXT_FAINT, false);
+            ctx.drawText(this.textRenderer, more, x1 - this.textRenderer.getWidth(more), this.ordersTop - 22, Theme.TEXT_FAINT, false);
         }
     }
 
@@ -1387,6 +1499,9 @@ public final class RtsScreen extends Screen {
                 }
             }
             boolean hot = mx >= x && mx < x + SLOT && my >= y && my < y + SLOT;
+            if (item == null && (pinned.isEmpty() || i >= 9)) {
+                continue; // a few empty slots invite pinning; a whole row of them is noise
+            }
             slot(ctx, x, y, hot && item != null, item != null && this.session.brush.getItem() == item);
             if (item == null) {
                 continue;
@@ -1394,7 +1509,7 @@ public final class RtsScreen extends Screen {
             ItemStack stack = new ItemStack(item);
             ctx.drawItem(stack, x + 1, y + 1);
             int count = (this.client.player == null ? 0 : this.client.player.getInventory().count(item)) + StorageManager.get().total(item);
-            ctx.drawItemInSlot(this.textRenderer, stack, x + 1, y + 1, count == 0 ? "§c0" : shortCount(count));
+            drawCount(ctx, stack, x + 1, y + 1, count == 0 ? "§c0" : shortCount(count));
         }
         if (pinned.isEmpty()) {
             ctx.drawText(this.textRenderer, "Quick bar - right-click items below to pin them here", gridX() + 6, y + 5, Theme.TEXT_FAINT, false);
@@ -1411,14 +1526,14 @@ public final class RtsScreen extends Screen {
                 int idx = (row + this.gridScroll) * cols + col;
                 PaletteEntry e = idx < this.palette.size() ? this.palette.get(idx) : null;
                 boolean hot = e != null && mx >= x && mx < x + SLOT && my >= y && my < y + SLOT;
-                slot(ctx, x, y, hot, e != null && this.session.brush.getItem() == e.item());
                 if (e == null) {
-                    continue;
+                    continue; // only filled slots get a frame
                 }
+                slot(ctx, x, y, hot, this.session.brush.getItem() == e.item());
                 ctx.drawItem(e.display(), x + 1, y + 1);
                 String count = shortCount(e.total());
                 // Gold count: only in storage, a build will fetch it.
-                ctx.drawItemInSlot(this.textRenderer, e.display(), x + 1, y + 1, e.inventory() == 0 ? "§6" + count : count);
+                drawCount(ctx, e.display(), x + 1, y + 1, e.inventory() == 0 ? "§6" + count : count);
             }
         }
         if (this.palette.isEmpty()) {
@@ -1586,6 +1701,8 @@ public final class RtsScreen extends Screen {
                 case FLATTEN -> counts[0] < 0 ? "planning..." : "mine " + counts[0] + ", fill " + counts[1] + " at Y" + s.anchorA.getY();
                 case LIGHT_UP -> counts[1] < 0 ? "planning..." : counts[1] + " torches";
                 case QUARRY -> s.terrainClearHeight + " deep, " + (w * l * s.terrainClearHeight) + " blocks at most";
+                case PLANT_TREES -> "about " + ((w / s.treeSpacing + 1) * (l / s.treeSpacing + 1)) + " trees, "
+                        + s.treeSpacing + " apart";
                 default -> w * l + " columns";
             };
             lines.add(Text.literal(s.terrainMode.label() + " " + w + " x " + l + "  |  " + what).formatted(Formatting.GREEN));
@@ -1631,6 +1748,22 @@ public final class RtsScreen extends Screen {
             return s;
         }
         return this.textRenderer.trimToWidth(s, Math.max(0, width - this.textRenderer.getWidth("..."))) + "...";
+    }
+
+    /**
+     * The count in a slot's corner, shrunk when it's wider than the slot so it never runs into the
+     * next one (vanilla's count does past two digits).
+     */
+    private void drawCount(DrawContext ctx, ItemStack stack, int x, int y, String text) {
+        // Durability bar and the like, without vanilla's count.
+        ctx.drawItemInSlot(this.textRenderer, stack, x, y, "");
+        int w = this.textRenderer.getWidth(text);
+        float scale = w > 16 ? Math.max(0.5F, 16.0F / w) : 1.0F;
+        ctx.getMatrices().push();
+        ctx.getMatrices().translate(x + 17.0F, y + 17.0F, 200.0F);
+        ctx.getMatrices().scale(scale, scale, 1.0F);
+        ctx.drawText(this.textRenderer, text, -w, -8, 0xFFFFFFFF, true);
+        ctx.getMatrices().pop();
     }
 
     private static String shortCount(int n) {

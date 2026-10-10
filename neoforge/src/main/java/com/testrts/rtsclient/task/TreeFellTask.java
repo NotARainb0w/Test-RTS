@@ -69,6 +69,18 @@ public final class TreeFellTask implements RtsTask {
     private int found;
     private String detail = "looking for trees";
 
+    public BlockPos min() {
+        return this.min;
+    }
+
+    public BlockPos max() {
+        return this.max;
+    }
+
+    public boolean replant() {
+        return this.replant;
+    }
+
     public TreeFellTask(BlockPos a, BlockPos b, boolean replant) {
         this.min = new BlockPos(Math.min(a.getX(), b.getX()), Math.min(a.getY(), b.getY()), Math.min(a.getZ(), b.getZ()));
         this.max = new BlockPos(Math.max(a.getX(), b.getX()), Math.max(a.getY(), b.getY()), Math.max(a.getZ(), b.getZ()));

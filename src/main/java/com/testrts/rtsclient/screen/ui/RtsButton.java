@@ -22,6 +22,8 @@ public class RtsButton extends PressableWidget {
     private int glyphColor = Theme.TEXT;
     private BooleanSupplier selected = () -> false;
     @Nullable
+    private BooleanSupplier enabled;
+    @Nullable
     private Supplier<String> label;
     private boolean iconOnly;
     private boolean centered = true;
@@ -41,6 +43,12 @@ public class RtsButton extends PressableWidget {
     public RtsButton glyph(Glyphs glyph, int color) {
         this.glyph = glyph;
         this.glyphColor = color;
+        return this;
+    }
+
+    /** Greyed out (and not clickable) while this says false, re-checked every frame. */
+    public RtsButton enabled(BooleanSupplier enabled) {
+        this.enabled = enabled;
         return this;
     }
 
@@ -84,6 +92,9 @@ public class RtsButton extends PressableWidget {
         int y = getY();
         int w = getWidth();
         int h = getHeight();
+        if (this.enabled != null) {
+            this.active = this.enabled.getAsBoolean();
+        }
         boolean sel = this.selected.getAsBoolean();
         boolean hover = this.active && isHovered();
         // Ease hover and selection in and out instead of snapping.
