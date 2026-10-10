@@ -50,6 +50,10 @@ public final class RtsConfig {
     public boolean collectDrops = true;
     /** When idle, check finished builds now and then and fill in missing blocks. */
     public boolean autoRepair = false;
+    /** Built-in engine: place blocks against the empty cell itself, so nothing needs to be next to them. */
+    public boolean airPlace = true;
+    /** Shapes (Fill mode) mine and replace whatever is in their cells instead of skipping them. */
+    public boolean clearInTheWay = true;
     /** Stop the camera at solid blocks. Off: the camera flies through walls. */
     public boolean cameraCollision = false;
     /** Radius used by "Scan nearby" when looking for containers. */

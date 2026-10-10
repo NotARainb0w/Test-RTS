@@ -364,6 +364,14 @@ public final class HarvestTask implements RtsTask {
     }
 
     @Override
+    public void suspend(MinecraftClient client) {
+        if (this.phase == Phase.BREAK && this.target != null) {
+            this.toBreak.add(this.target);
+        }
+        cancel(client);
+    }
+
+    @Override
     public void cancel(MinecraftClient client) {
         if (this.target != null && this.breakTicks > 0 && client.interactionManager != null) {
             client.interactionManager.cancelBlockBreaking();

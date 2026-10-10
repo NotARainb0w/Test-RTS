@@ -137,24 +137,7 @@ public final class SortStorageTask implements RtsTask {
                 return Status.RUNNING;
             }
             this.visit = null;
-            Map<Item, Integer> after = inventoryCounts(player.getInventory());
-            boolean progress = false;
-            Set<Item> all = new HashSet<>(after.keySet());
-            all.addAll(this.before.keySet());
-            for (Item item : all) {
-                int d = after.getOrDefault(item, 0) - this.before.getOrDefault(item, 0);
-                if (d != 0) {
-                    progress = true;
-                    this.moved += Math.abs(d);
-                    int now = this.carried.getOrDefault(item, 0) + d;
-                    if (now > 0) {
-                        this.carried.put(item, now);
-                    } else {
-                        this.carried.remove(item);
-                    }
-                }
-            }
-            if (!progress) {
+            if (!settle(player.getInventory())) {
                 this.skipped.add(this.visiting);
             }
         }
@@ -177,6 +160,29 @@ public final class SortStorageTask implements RtsTask {
         Visit work = new Visit(next);
         this.visit = new ContainerVisitTask(next, "Sort", work::run);
         return Status.RUNNING;
+    }
+
+    /** Book what the last visit moved into/out of the inventory. @return true if anything moved. */
+    private boolean settle(PlayerInventory inv) {
+        Map<Item, Integer> after = inventoryCounts(inv);
+        boolean progress = false;
+        Set<Item> all = new HashSet<>(after.keySet());
+        all.addAll(this.before.keySet());
+        for (Item item : all) {
+            int d = after.getOrDefault(item, 0) - this.before.getOrDefault(item, 0);
+            if (d != 0) {
+                progress = true;
+                this.moved += Math.abs(d);
+                int now = this.carried.getOrDefault(item, 0) + d;
+                if (now > 0) {
+                    this.carried.put(item, now);
+                } else {
+                    this.carried.remove(item);
+                }
+            }
+        }
+        this.before = after;
+        return progress;
     }
 
     /** Nearest container where we can deliver what we carry or take out something misplaced. */
@@ -459,6 +465,17 @@ public final class SortStorageTask implements RtsTask {
             return ((Inventory) be).size();
         }
         return 0;
+    }
+
+    @Override
+    public void suspend(MinecraftClient client) {
+        if (this.visit != null) {
+            this.visit.cancel(client);
+            this.visit = null;
+            if (client.player != null && this.before != null) {
+                settle(client.player.getInventory());
+            }
+        }
     }
 
     @Override

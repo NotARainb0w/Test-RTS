@@ -137,6 +137,10 @@ public final class TreeFellTask implements RtsTask {
                 return Status.RUNNING;
             }
             case CHOP -> {
+                if (this.chop == null) {
+                    this.phase = Phase.NEXT;
+                    return Status.RUNNING;
+                }
                 if (this.chop.tick(client, queue) == Status.RUNNING) {
                     return Status.RUNNING;
                 }
@@ -375,6 +379,17 @@ public final class TreeFellTask implements RtsTask {
         }
         Identifier saplingId = new Identifier(id.getNamespace(), wood + "_sapling");
         return Registries.ITEM.containsId(saplingId) ? Registries.ITEM.get(saplingId) : null;
+    }
+
+    @Override
+    public void suspend(MinecraftClient client) {
+        cancel(client);
+        if (this.phase == Phase.CHOP && this.current != null) {
+            // Start this tree over when we get the queue back.
+            this.trees.add(this.current);
+            this.phase = Phase.NEXT;
+        }
+        this.walk = null;
     }
 
     @Override

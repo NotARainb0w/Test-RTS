@@ -192,7 +192,9 @@ public final class Engine {
     public static void build(String name, Map<BlockPos, BlockState> blocks, boolean strict, boolean manageSettings) {
         boolean layered = RtsConfig.get().buildInLayers;
         boolean clearing = !blocks.isEmpty() && blocks.values().iterator().next().isAir();
-        if (baritone()) {
+        // Baritone can't place blocks in mid-air; on Auto, builds go to the built-in engine when that's on.
+        boolean airBuild = !clearing && RtsConfig.get().airPlace && configured() == Kind.AUTO;
+        if (baritone() && !airBuild) {
             if (manageSettings) {
                 BaritoneBridge.applySettings(strict, layered, clearing);
             }

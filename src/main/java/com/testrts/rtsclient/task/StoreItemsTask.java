@@ -171,6 +171,15 @@ public final class StoreItemsTask implements RtsTask {
     }
 
     @Override
+    public void suspend(MinecraftClient client) {
+        if (this.visit != null) {
+            this.visit.cancel(client);
+            this.visited.remove(this.visit.pos());
+            this.visit = null;
+        }
+    }
+
+    @Override
     public void cancel(MinecraftClient client) {
         if (this.visit != null) {
             this.visit.cancel(client);

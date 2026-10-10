@@ -81,6 +81,13 @@ public final class RtsSettingsScreen extends Screen {
                 new Setting("Pick up drops", () -> onOff(c.collectDrops),
                         "Walk over the items a clear order dropped.",
                         () -> c.collectDrops = !c.collectDrops),
+                new Setting("Place in mid-air", () -> onOff(c.airPlace),
+                        "Built-in engine: place blocks with nothing next to them (domes, spheres, floating builds) without scaffolding. "
+                                + "Works on vanilla servers; some anti-cheat plugins may not allow it.",
+                        () -> c.airPlace = !c.airPlace),
+                new Setting("Clear blocks in the way", () -> onOff(c.clearInTheWay),
+                        "Shapes mine whatever is in their cells (terrain, trees) and put the brush block there instead of skipping them.",
+                        () -> c.clearInTheWay = !c.clearInTheWay),
                 new Setting("Auto-repair builds", () -> onOff(c.autoRepair),
                         "When there's nothing to do, check finished builds every 10 seconds and fill in missing or broken blocks.",
                         () -> c.autoRepair = !c.autoRepair),

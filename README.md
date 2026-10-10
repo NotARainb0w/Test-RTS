@@ -144,7 +144,15 @@ The built-in engine also handles shapes that overhang or float, like spheres and
 - **Buildable hollow shells** (on by default): hollow spheres and circles get a slightly thicker inside where
   layers would otherwise only touch at the edges, so every block can be placed. The outside looks the same.
 
-Keep a stack of dirt or cobblestone in your inventory or storage for big domes and floating builds.
+- **Place in mid-air** (Settings, on by default): the built-in engine places a block even when nothing is next
+  to it, by clicking the empty spot itself. Domes, spheres and floating builds then need no scaffolding at all.
+  This works on vanilla servers; some anti-cheat plugins don't allow it, so turn it off there. On *Auto*, build
+  orders use the built-in engine while this is on, since Baritone can't do it.
+- **Clear blocks in the way** (Settings, on by default): shapes mine whatever is in their cells (terrain, trees,
+  plants) and put the brush block there, instead of skipping them.
+
+With mid-air placement off, keep a stack of dirt or cobblestone in your inventory or storage for big domes and
+floating builds.
 
 ### Interface
 

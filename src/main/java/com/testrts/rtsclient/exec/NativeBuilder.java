@@ -944,7 +944,7 @@ public final class NativeBuilder {
         if (player.getBoundingBox().intersects(new Box(pos))) {
             return false;
         }
-        return hasSupport(world, pos);
+        return hasSupport(world, pos) || com.testrts.rtsclient.config.RtsConfig.get().airPlace;
     }
 
     /** The side of the target to click: a neighbour that is solid and won't open a GUI. */
@@ -980,17 +980,43 @@ public final class NativeBuilder {
         ClientPlayerEntity player = client.player;
         ClientWorld world = client.world;
         Direction toSupport = support(world, pos);
-        if (toSupport == null) {
+        BlockHitResult hit;
+        Vec3d hitVec;
+        float[] rotation;
+        if (toSupport != null) {
+            BlockPos supportPos = pos.offset(toSupport);
+            Direction face = toSupport.getOpposite();
+            hitVec = Vec3d.ofCenter(pos).add(toSupport.getOffsetX() * 0.5, toSupport.getOffsetY() * 0.5, toSupport.getOffsetZ() * 0.5);
+            hit = new BlockHitResult(hitVec, face, supportPos, false);
+            // Vanilla decides the placed state from where the player looks. Try the four directions
+            // (and up/down) until the block would come out the way the order wants it.
+            rotation = rotationFor(player, wanted, hit);
+        } else if (com.testrts.rtsclient.config.RtsConfig.get().airPlace) {
+            // Nothing to attach to: click the empty cell itself. The server places a block in a
+            // replaceable cell that is clicked directly, so no neighbour (or scaffolding) is needed.
+            // Try each face of the cell, since the clicked face decides slab/stair halves.
+            hit = null;
+            hitVec = null;
+            rotation = null;
+            Vec3d eye = player.getEyePos();
+            Direction toward = Direction.getFacing(eye.x - (pos.getX() + 0.5), eye.y - (pos.getY() + 0.5), eye.z - (pos.getZ() + 0.5));
+            Direction[] faces = {toward, Direction.UP, Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+            for (Direction f : faces) {
+                Vec3d v = Vec3d.ofCenter(pos).add(f.getOffsetX() * 0.5, f.getOffsetY() * 0.5, f.getOffsetZ() * 0.5);
+                BlockHitResult h = new BlockHitResult(v, f, pos, false);
+                float[] r = rotationFor(player, wanted, h);
+                if (hit == null || r != null) {
+                    hit = h;
+                    hitVec = v;
+                    rotation = r;
+                }
+                if (r != null) {
+                    break;
+                }
+            }
+        } else {
             return false;
         }
-        BlockPos supportPos = pos.offset(toSupport);
-        Direction face = toSupport.getOpposite();
-        Vec3d hitVec = Vec3d.ofCenter(pos).add(toSupport.getOffsetX() * 0.5, toSupport.getOffsetY() * 0.5, toSupport.getOffsetZ() * 0.5);
-        BlockHitResult hit = new BlockHitResult(hitVec, face, supportPos, false);
-
-        // Vanilla decides the placed state from where the player looks. Try the four directions
-        // (and up/down) until the block would come out the way the order wants it.
-        float[] rotation = rotationFor(player, wanted, hit);
         if (rotation == null) {
             if (this.strict && !wanted.getBlock().getDefaultState().equals(wanted)) {
                 impossible(pos);

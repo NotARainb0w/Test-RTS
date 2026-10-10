@@ -69,7 +69,7 @@ public final class OrderPlanner {
      */
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                           boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
-                          java.util.List<BlockState> mix) {
+                          java.util.List<BlockState> mix, boolean clearInTheWay) {
     }
 
     public static Request request(BuildSession s, BlockPos a, BlockPos b, float cameraYaw, int limit) {
@@ -78,7 +78,8 @@ public final class OrderPlanner {
         if (brush == null && !mix.isEmpty()) {
             brush = mix.get(0);
         }
-        return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix);
+        return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix,
+                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay);
     }
 
     public static Plan plan(ClientWorld world, Request r) {
@@ -111,7 +112,8 @@ public final class OrderPlanner {
             }
             boolean empty = current.isAir() || current.isReplaceable();
             boolean take = switch (r.mode()) {
-                case FILL -> empty;
+                case FILL -> empty || r.clearInTheWay() && !(current.getBlock() instanceof FluidBlock)
+                        && current.getHardness(world, p) >= 0;
                 case REPLACE -> current.getHardness(world, p) >= 0;
                 case REPLACE_TYPE -> r.replaceTarget() != null && current.getBlock() == r.replaceTarget();
                 case COVER -> empty && isSolidTop(world, p.down());

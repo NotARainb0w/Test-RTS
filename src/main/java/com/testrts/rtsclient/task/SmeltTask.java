@@ -487,6 +487,17 @@ public final class SmeltTask implements RtsTask {
     }
 
     @Override
+    public void suspend(MinecraftClient client) {
+        if (this.visit != null) {
+            // Visit that furnace again when we resume.
+            this.visit.cancel(client);
+            this.route.add(0, this.visit.pos());
+            this.visited--;
+            this.visit = null;
+        }
+    }
+
+    @Override
     public void cancel(MinecraftClient client) {
         if (this.visit != null) {
             this.visit.cancel(client);
