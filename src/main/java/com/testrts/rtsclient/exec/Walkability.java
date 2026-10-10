@@ -86,6 +86,10 @@ public final class Walkability {
         if (standable(world, pos.up())) {
             return pos.up();
         }
+        // Mid-jump (e.g. re-planning during a recovery jump): the node is the one below.
+        if (standable(world, pos.down())) {
+            return pos.down();
+        }
         return pos;
     }
 

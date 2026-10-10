@@ -63,7 +63,6 @@ public final class TreeFellTask implements RtsTask {
     private WalkPhase walk;
     private int plantWait;
     private int plantTries;
-    private final Set<Item> fetched = new HashSet<>();
     private int felled;
     private int logsCut;
     private int planted;
@@ -150,7 +149,7 @@ public final class TreeFellTask implements RtsTask {
                 Item sapling = this.current.sapling();
                 int have = client.player.getInventory().count(sapling);
                 int stored = StorageManager.get().total(sapling);
-                if (have < this.toPlant.size() && stored > 0 && this.fetched.add(sapling)) {
+                if (have < this.toPlant.size() && stored > 0) {
                     this.detail = "fetching saplings";
                     // Fetch a few extra so the next trees of this kind don't need another trip.
                     queue.pushFront(new FetchTask(Map.of(sapling, Math.min(stored, Math.max(this.toPlant.size(), 16)))));
