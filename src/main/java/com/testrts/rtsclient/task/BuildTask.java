@@ -20,6 +20,7 @@ import java.util.Map;
 public final class BuildTask implements RtsTask {
     private static final int START_GRACE_TICKS = 10;
     private static final int MAX_FETCH_ROUNDS = 4;
+    private static final int MAX_RETRIES = 2;
 
     private final String label;
     private final Map<BlockPos, BlockState> blocks;
@@ -30,6 +31,9 @@ public final class BuildTask implements RtsTask {
     private Map<Item, Integer> lastMissing = Collections.emptyMap();
     private boolean stallReported;
     private int pausedTicks;
+    private int countIn;
+    private int retries;
+    private net.minecraft.util.math.Box bounds;
     private String detail = "waiting";
 
     public BuildTask(String label, Map<BlockPos, BlockState> blocks, boolean clearing) {
@@ -40,6 +44,24 @@ public final class BuildTask implements RtsTask {
 
     public Map<BlockPos, BlockState> blocks() {
         return Collections.unmodifiableMap(this.blocks);
+    }
+
+    /** Bounding box of the order, computed once (used for drawing every frame). */
+    public net.minecraft.util.math.Box bounds() {
+        if (this.bounds == null) {
+            int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
+            int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
+            for (BlockPos p : this.blocks.keySet()) {
+                minX = Math.min(minX, p.getX());
+                minY = Math.min(minY, p.getY());
+                minZ = Math.min(minZ, p.getZ());
+                maxX = Math.max(maxX, p.getX());
+                maxY = Math.max(maxY, p.getY());
+                maxZ = Math.max(maxZ, p.getZ());
+            }
+            this.bounds = new net.minecraft.util.math.Box(minX, minY, minZ, maxX + 1, maxY + 1, maxZ + 1);
+        }
+        return this.bounds;
     }
 
     public boolean clearing() {
@@ -80,18 +102,46 @@ public final class BuildTask implements RtsTask {
             this.grace--;
             return Status.RUNNING;
         }
-        int left = MaterialPlanner.remaining(client.world, this.blocks);
         if (!Engine.isBuilding()) {
+            int left = MaterialPlanner.remaining(client.world, this.blocks);
+            if (left > 0 && this.retries < MAX_RETRIES) {
+                // Some blocks got missed (unreachable at the time, rejected, knocked out): go again
+                // for just those. Missing materials are fetched first by the normal start path.
+                this.retries++;
+                Map<BlockPos, BlockState> leftover = new LinkedHashMap<>();
+                for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
+                    BlockState now = client.world.getBlockState(e.getKey());
+                    boolean ok = e.getValue().isAir() ? now.isAir() || now.getBlock() instanceof net.minecraft.block.FluidBlock
+                            : now.getBlock() == e.getValue().getBlock();
+                    if (!ok) {
+                        leftover.put(e.getKey(), e.getValue());
+                    }
+                }
+                Messages.info(this.label + ": " + leftover.size() + " block(s) missed, going back for them");
+                Engine.build("rts-retry", leftover, RtsConfig.get().strictOrientation, RtsConfig.get().manageBaritoneSettings);
+                this.grace = START_GRACE_TICKS;
+                this.detail = "retrying " + leftover.size();
+                return Status.RUNNING;
+            }
             if (left > 0) {
-                Messages.warn(this.label + ": " + left + " block(s) left that Baritone couldn't do");
+                Messages.warn(this.label + ": " + left + " block(s) left that couldn't be done");
             } else {
                 Messages.success(this.label + " finished");
             }
+            if (this.clearing && RtsConfig.get().collectDrops) {
+                queue.pushFront(new CollectDropsTask(bounds()));
+            }
             return Status.DONE;
         }
-        this.detail = left + " / " + this.blocks.size() + " left";
+        // Counting is O(order size); once a second is plenty for the task list.
+        if (--this.countIn <= 0) {
+            this.countIn = 20;
+            this.detail = MaterialPlanner.remaining(client.world, this.blocks) + " / " + this.blocks.size() + " left";
+        }
         if (Engine.isBuilderPaused()) {
-            this.pausedTicks++;
+            if (this.pausedTicks++ % 20 != 0) {
+                return Status.RUNNING;
+            }
             Map<Item, Integer> missing = this.clearing ? Map.of() : MaterialPlanner.missing(client, this.blocks);
             if (!missing.isEmpty() && canFetch(missing)) {
                 // Builder can't continue without blocks: stop it, fetch, then this task restarts it.
@@ -106,7 +156,7 @@ public final class BuildTask implements RtsTask {
             }
             this.detail = missing.isEmpty() ? "stuck" : "missing " + MaterialPlanner.describe(missing, 2);
             // Every few seconds, nudge the builder in case the player sorted things out by hand.
-            if (this.pausedTicks % 100 == 0) {
+            if (this.pausedTicks > 20 && this.pausedTicks % 100 == 1) {
                 Engine.resumeBuilder();
             }
         } else {

@@ -3,9 +3,11 @@ package com.testrts.rtsclient.util;
 import com.testrts.rtsclient.camera.RtsCamera;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
+import com.testrts.rtsclient.render.CutView;
+import net.minecraft.block.BlockState;
+import net.minecraft.client.world.ClientWorld;
+import net.minecraft.world.BlockView;
 import org.jetbrains.annotations.Nullable;
 
 /** Turns a cursor position on screen into a world ray from the RTS camera. */
@@ -42,18 +44,23 @@ public final class MouseRay {
     @Nullable
     public static BlockHitResult pick(RtsCamera camera, double mouseX, double mouseY, int width, int height, boolean includeFluids) {
         MinecraftClient client = MinecraftClient.getInstance();
-        if (client.world == null || client.player == null || !camera.isEnabled()) {
+        ClientWorld world = client.world;
+        if (world == null || client.player == null || !camera.isEnabled()) {
             return null;
         }
         Vec3d start = camera.position();
         Vec3d end = start.add(direction(camera, mouseX, mouseY, width, height).multiply(MAX_DISTANCE));
-        BlockHitResult hit = client.world.raycast(new RaycastContext(start, end,
-                RaycastContext.ShapeType.OUTLINE,
-                includeFluids ? RaycastContext.FluidHandling.SOURCE_ONLY : RaycastContext.FluidHandling.NONE,
-                client.player));
-        if (hit == null || hit.getType() != HitResult.Type.BLOCK) {
-            return null;
-        }
-        return hit;
+        // Walk the blocks along the ray ourselves so blocks hidden by the cut view can't be clicked.
+        return BlockView.raycast(start, end, world, (w, pos) -> {
+            if (CutView.hides(pos.getY())) {
+                return null;
+            }
+            BlockState state = w.getBlockState(pos);
+            BlockHitResult hit = w.raycastBlock(start, end, pos, state.getOutlineShape(w, pos), state);
+            if (hit == null && includeFluids && !state.getFluidState().isEmpty() && state.getFluidState().isStill()) {
+                hit = w.raycastBlock(start, end, pos, state.getFluidState().getShape(w, pos), state);
+            }
+            return hit;
+        }, w -> null);
     }
 }

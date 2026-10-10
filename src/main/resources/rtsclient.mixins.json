@@ -7,7 +7,9 @@
     "ChatHudMixin",
     "ClientPlayerEntityMixin",
     "GameRendererMixin",
-    "MinecraftClientMixin"
+    "MinecraftClientMixin",
+    "RenderedChunkMixin",
+    "SodiumWorldSliceMixin"
   ],
   "injectors": {
     "defaultRequire": 1

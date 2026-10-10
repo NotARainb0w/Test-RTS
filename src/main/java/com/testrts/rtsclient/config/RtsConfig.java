@@ -26,8 +26,16 @@ public final class RtsConfig {
     public float rotateSensitivity = 0.35F;
     /** Blocks moved per scroll notch when zooming. */
     public double zoomStep = 2.5;
-    /** Upper bound for one shape order, so a misclick can't queue a million blocks. */
-    public int maxShapeBlocks = 16384;
+    /** Upper bound for one shape order, so a misclick can't queue millions of blocks. */
+    public int maxShapeBlocks = 262_144;
+    /** Shapes up to this many blocks are previewed as real (see-through) blocks; bigger ones as a tinted surface. */
+    public int ghostBlockLimit = 24_000;
+    /** Build one Y layer at a time (bottom-up; clearing goes top-down). */
+    public boolean buildInLayers = true;
+    /** After a clear order, walk over the dropped items to pick them up. */
+    public boolean collectDrops = true;
+    /** Stop the camera at solid blocks. Off: the camera flies through walls. */
+    public boolean cameraCollision = false;
     /** Radius used by "Scan nearby" when looking for containers. */
     public int scanRadius = 32;
     /** When false, Baritone may place oriented blocks (stairs, logs) in any direction it can manage. */

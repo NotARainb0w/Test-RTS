@@ -39,6 +39,7 @@ public final class ShapeGenerator {
             case CYLINDER -> cylinder(out, a, b, height, hollow);
             case SPHERE -> sphere(out, a, b, hollow);
             case VEIN -> vein(out, a);
+            case HOLE -> hole(out, a);
         }
         return new Result(out.positions, out.truncated);
     }
@@ -236,6 +237,49 @@ public final class ShapeGenerator {
                 }
             }
         }
+    }
+
+    /**
+     * Flood fill through air/fluid/replaceable blocks, sideways and down but never above the start,
+     * so clicking into a pit fills it up to that level. Gives up (empty result) if it leaks out of
+     * a 48-block radius, i.e. the "hole" isn't enclosed.
+     */
+    private static void hole(Collector out, BlockPos start) {
+        ClientWorld world = MinecraftClient.getInstance().world;
+        if (world == null || !fillable(world.getBlockState(start))) {
+            return;
+        }
+        final int radius = 48;
+        ArrayDeque<BlockPos> queue = new ArrayDeque<>();
+        Set<BlockPos> seen = new HashSet<>();
+        queue.add(start);
+        seen.add(start);
+        while (!queue.isEmpty()) {
+            BlockPos p = queue.poll();
+            if (Math.abs(p.getX() - start.getX()) > radius || Math.abs(p.getZ() - start.getZ()) > radius
+                    || p.getY() < world.getBottomY()) {
+                out.positions.clear();
+                out.truncated = false;
+                return;
+            }
+            if (!out.add(p.getX(), p.getY(), p.getZ())) {
+                return;
+            }
+            for (net.minecraft.util.math.Direction d : new net.minecraft.util.math.Direction[]{
+                    net.minecraft.util.math.Direction.NORTH, net.minecraft.util.math.Direction.SOUTH,
+                    net.minecraft.util.math.Direction.EAST, net.minecraft.util.math.Direction.WEST,
+                    net.minecraft.util.math.Direction.DOWN}) {
+                BlockPos n = p.offset(d);
+                if (seen.add(n) && world.isChunkLoaded(n) && fillable(world.getBlockState(n))) {
+                    queue.add(n);
+                }
+            }
+        }
+    }
+
+    private static boolean fillable(net.minecraft.block.BlockState s) {
+        // Water, lava, grass and snow layers are all "replaceable".
+        return s.isAir() || s.isReplaceable();
     }
 
     private static boolean insideBall(int x, int y, int z, double limit) {

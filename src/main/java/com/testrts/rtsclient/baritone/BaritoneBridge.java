@@ -98,8 +98,13 @@ public final class BaritoneBridge {
     }
 
     public static void applySettings(boolean strictOrientation) {
+        applySettings(strictOrientation, false, false);
+    }
+
+    /** @param topDown build layers from the top (used when clearing, so nothing collapses on the player) */
+    public static void applySettings(boolean strictOrientation, boolean layered, boolean topDown) {
         if (isAvailable()) {
-            BaritoneImpl.applySettings(strictOrientation);
+            BaritoneImpl.applySettings(strictOrientation, layered, topDown);
         }
     }
 }

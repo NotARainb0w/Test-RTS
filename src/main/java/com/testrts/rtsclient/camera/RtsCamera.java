@@ -169,8 +169,7 @@ public final class RtsCamera {
         if (world == null) {
             return;
         }
-        // Move one axis at a time and refuse to enter opaque blocks, so the camera can't be
-        // used to look through terrain.
+        // Move one axis at a time; with camera collision on, refuse to enter opaque blocks.
         if (dx != 0.0 && isFree(world, this.x + dx, this.y, this.z)) {
             this.x += dx;
         } else {
@@ -191,6 +190,9 @@ public final class RtsCamera {
     }
 
     private static boolean isFree(ClientWorld world, double px, double py, double pz) {
+        if (!RtsConfig.get().cameraCollision) {
+            return true;
+        }
         BlockPos pos = BlockPos.ofFloored(px, py, pz);
         return !world.getBlockState(pos).isOpaqueFullCube(world, pos);
     }

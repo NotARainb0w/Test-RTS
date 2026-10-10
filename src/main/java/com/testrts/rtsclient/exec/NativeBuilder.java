@@ -40,26 +40,52 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
- * Built-in replacement for Baritone's builder: places and mines blocks within reach, and walks
- * (with {@link PathFinder}) to the next block when nothing is in reach.
+ * Built-in replacement for Baritone's builder. Works one Y layer at a time (bottom-up when
+ * building, top-down when clearing), so every block has something under it to attach to and
+ * nothing falls on the player. Places and mines within reach, and walks to the next block when
+ * nothing is in reach. All per-tick work is bounded so large orders don't stutter.
  */
 public final class NativeBuilder {
     private static final int PLACE_DELAY_TICKS = 2;
     private static final int BREAK_TIMEOUT_TICKS = 20 * 20;
     private static final int MAX_WALK_FAILS = 3;
+    private static final int RESCAN_TICKS = 20;
+    /** A block is set aside after this many failed attempts in one pass. */
+    private static final int MAX_FAILURES = 3;
+    /** Extra passes over set-aside blocks once every layer is done. */
+    private static final int MAX_SWEEPS = 2;
+    /** Placements in a row that didn't show up before we try a different block. */
+    private static final int MAX_PLACE_ATTEMPTS = 4;
     private static final Direction[] SUPPORT_ORDER = {
             Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP};
     private static final float[] YAWS = {0F, 90F, 180F, 270F};
     private static final float[] PITCHES = {0F, 75F, -75F};
 
     private final Map<BlockPos, BlockState> order;
+    private final boolean clearing;
     private final boolean strict;
+    private final boolean layered;
+    /** Order positions grouped by Y, in the order layers are worked on. */
+    private final TreeMap<Integer, List<BlockPos>> layers = new TreeMap<>();
+    private final List<Integer> layerOrder = new ArrayList<>();
+    private int layerIndex;
+    /** Not-yet-done positions of the current layer (all positions when not layered). */
+    private final Set<BlockPos> todo = new LinkedHashSet<>();
+    /** Given up on for this pass (failed {@link #MAX_FAILURES} times); retried in the next sweep. */
     private final Set<BlockPos> skipped = new HashSet<>();
+    /** Can never be done (unbreakable, no item for it). */
+    private final Set<BlockPos> impossible = new HashSet<>();
+    private final Map<BlockPos, Integer> failures = new java.util.HashMap<>();
+    private final Map<BlockPos, Integer> placeAttempts = new java.util.HashMap<>();
+    private int sweeps;
+    private int rescanIn;
 
     private boolean paused;
     @Nullable
@@ -72,15 +98,23 @@ public final class NativeBuilder {
     private int breakTicks;
 
     @Nullable
+    private PathFinder.Search search;
+    @Nullable
     private PathFollower walk;
     @Nullable
     private BlockPos walkTarget;
     private int walkFails;
     private String status = "starting";
 
-    public NativeBuilder(Map<BlockPos, BlockState> order, boolean strict) {
+    public NativeBuilder(Map<BlockPos, BlockState> order, boolean strict, boolean layered) {
         this.order = new LinkedHashMap<>(order);
+        this.clearing = !order.isEmpty() && order.values().iterator().next().isAir();
         this.strict = strict;
+        this.layered = layered;
+        for (BlockPos p : this.order.keySet()) {
+            this.layers.computeIfAbsent(layered ? p.getY() : 0, y -> new ArrayList<>()).add(p);
+        }
+        this.layerOrder.addAll(this.clearing ? this.layers.descendingKeySet() : this.layers.keySet());
     }
 
     public boolean isPaused() {
@@ -99,6 +133,24 @@ public final class NativeBuilder {
     @Nullable
     public Item missingItem() {
         return this.missingItem;
+    }
+
+    public int skippedCount() {
+        return this.skipped.size() + this.impossible.size();
+    }
+
+    /** Couldn't do it right now (no route, no support, rejected): try again later. */
+    private void fail(BlockPos p) {
+        this.todo.remove(p);
+        if (this.failures.merge(p, 1, Integer::sum) >= MAX_FAILURES) {
+            this.skipped.add(p);
+        }
+    }
+
+    /** Can never be done. */
+    private void impossible(BlockPos p) {
+        this.todo.remove(p);
+        this.impossible.add(p);
     }
 
     /** @return false once there is nothing left it can do. */
@@ -121,61 +173,107 @@ public final class NativeBuilder {
             return true;
         }
 
-        List<BlockPos> pending = new ArrayList<>();
-        for (Map.Entry<BlockPos, BlockState> e : this.order.entrySet()) {
-            if (!this.skipped.contains(e.getKey()) && !done(world, e.getKey(), e.getValue())) {
-                pending.add(e.getKey());
-            }
-        }
-        if (pending.isEmpty()) {
+        if (!advanceLayer(world)) {
             MovementInput.restore(client);
-            this.status = this.skipped.isEmpty() ? "done" : "done, " + this.skipped.size() + " skipped";
+            int left = skippedCount();
+            this.status = left == 0 ? "done" : "done, " + left + " skipped";
             return false;
         }
+        String layerInfo = this.layered && this.layerOrder.size() > 1
+                ? " (layer " + (this.layerIndex + 1) + "/" + this.layerOrder.size() + ", " + this.todo.size() + " left)"
+                : " (" + this.todo.size() + " left)";
 
         // 1) Work on something within reach.
-        if (actInReach(client, pending)) {
+        if (actInReach(client)) {
             this.walk = null;
+            this.search = null;
             MovementInput.acquire(player).release();
+            this.status = (this.clearing ? "mining" : "placing") + layerInfo;
             return true;
         }
 
-        // 2) Otherwise walk toward the next target.
-        if (this.walk != null && this.walkTarget != null && pending.contains(this.walkTarget)) {
-            if (Reach.inReach(client, this.walkTarget) && !isClear()) {
-                // In reach but couldn't act on it (no support yet): don't stand around forever.
-                if (!placeable(world, player, this.walkTarget)) {
-                    this.skipped.add(this.walkTarget);
+        // 2) A path search in progress: advance it a bit.
+        if (this.search != null) {
+            this.status = "planning" + layerInfo;
+            PathFinder.Search.State s = this.search.step(PathFinder.NODES_PER_TICK);
+            if (s == PathFinder.Search.State.FOUND) {
+                this.walk = new PathFollower(this.search.result());
+                this.search = null;
+                if (this.walk.path().isEmpty()) {
+                    // Already standing where we'd go and still can't act: try other blocks first.
+                    fail(this.walkTarget);
                     this.walk = null;
-                    return true;
                 }
+            } else if (s == PathFinder.Search.State.FAILED) {
+                this.search = null;
+                fail(this.walkTarget);
             }
+            return true;
+        }
+
+        // 3) Walking toward a target.
+        if (this.walk != null && this.walkTarget != null && this.todo.contains(this.walkTarget)) {
             PathFollower.State s = this.walk.tick(client);
-            this.status = "walking (" + pending.size() + " left)";
+            this.status = "walking" + layerInfo;
             if (s == PathFollower.State.WALKING) {
                 return true;
             }
             this.walk = null;
             if (s == PathFollower.State.STUCK && ++this.walkFails >= MAX_WALK_FAILS) {
-                this.skipped.add(this.walkTarget);
+                fail(this.walkTarget);
                 this.walkFails = 0;
+            }
+            if (s == PathFollower.State.ARRIVED && Reach.inReach(client, this.walkTarget)
+                    && !this.clearing && !placeable(world, player, this.walkTarget)) {
+                // Got there but there's nothing to attach it to yet: its neighbours may fix that.
+                fail(this.walkTarget);
             }
             return true;
         }
 
-        BlockPos target = pickWalkTarget(world, player, pending);
-        List<BlockPos> path = PathFinder.find(world, player.getBlockPos(), feet -> canWorkFrom(client, feet, target),
-                Vec3d.ofCenter(target));
-        if (path == null) {
-            this.skipped.add(target);
+        // 4) Pick the next block and start planning a route to it.
+        BlockPos target = pickWalkTarget(world, player);
+        if (target == null) {
             return true;
         }
         this.walkTarget = target;
-        this.walk = new PathFollower(path);
-        if (path.isEmpty() && !actInReach(client, List.of(target))) {
-            // Already as close as we can get and still can't do it.
-            this.skipped.add(target);
-            this.walk = null;
+        this.search = PathFinder.start(world, player.getBlockPos(), feet -> canWorkFrom(client, feet, target),
+                Vec3d.ofCenter(target));
+        this.status = "planning" + layerInfo;
+        return true;
+    }
+
+    /**
+     * Make sure {@link #todo} holds the current layer's unfinished blocks, moving to the next layer
+     * when this one is finished. Rescans only every {@link #RESCAN_TICKS} ticks.
+     *
+     * @return false when every layer is finished
+     */
+    private boolean advanceLayer(ClientWorld world) {
+        if (--this.rescanIn <= 0 || this.todo.isEmpty()) {
+            this.rescanIn = RESCAN_TICKS;
+            while (this.layerIndex < this.layerOrder.size()) {
+                this.todo.clear();
+                for (BlockPos p : this.layers.get(this.layerOrder.get(this.layerIndex))) {
+                    if (!this.skipped.contains(p) && !this.impossible.contains(p) && !done(world, p, this.order.get(p))) {
+                        this.todo.add(p);
+                    }
+                }
+                if (!this.todo.isEmpty()) {
+                    return true;
+                }
+                this.layerIndex++;
+                this.walk = null;
+                this.search = null;
+                if (this.layerIndex >= this.layerOrder.size() && !this.skipped.isEmpty() && this.sweeps < MAX_SWEEPS) {
+                    // Everything else is done; blocks that failed earlier may work now (new supports, routes).
+                    this.sweeps++;
+                    this.skipped.clear();
+                    this.failures.clear();
+                    this.layerIndex = 0;
+                }
+            }
+            return false;
         }
         return true;
     }
@@ -186,19 +284,11 @@ public final class NativeBuilder {
         }
         this.breaking = null;
         this.walk = null;
+        this.search = null;
         MovementInput.restore(client);
     }
 
-    public int skippedCount() {
-        return this.skipped.size();
-    }
-
     // ------------------------------------------------------------------ decisions
-
-    private boolean isClear() {
-        BlockState any = this.order.values().iterator().next();
-        return any.isAir();
-    }
 
     private static boolean done(ClientWorld world, BlockPos pos, BlockState wanted) {
         if (!world.isChunkLoaded(pos)) {
@@ -211,20 +301,23 @@ public final class NativeBuilder {
         return current.getBlock() == wanted.getBlock();
     }
 
-    private BlockPos pickWalkTarget(ClientWorld world, ClientPlayerEntity player, List<BlockPos> pending) {
+    @Nullable
+    private BlockPos pickWalkTarget(ClientWorld world, ClientPlayerEntity player) {
         Vec3d eye = player.getEyePos();
-        Comparator<BlockPos> byDistance = Comparator.comparingDouble(p -> Vec3d.ofCenter(p).squaredDistanceTo(eye));
-        if (isClear()) {
-            // Mine top-down so nothing falls on us and we don't dig our own floor out first.
-            return pending.stream().max(Comparator.<BlockPos>comparingInt(BlockPos::getY).thenComparing(byDistance.reversed()))
-                    .orElse(pending.get(0));
+        BlockPos best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (BlockPos p : this.todo) {
+            double d = Vec3d.ofCenter(p).squaredDistanceTo(eye);
+            // Prefer blocks that already have something to attach to.
+            if (!this.clearing && !hasSupport(world, p)) {
+                d += 10_000;
+            }
+            if (d < bestScore) {
+                bestScore = d;
+                best = p;
+            }
         }
-        // Build bottom-up; prefer blocks that already have something to attach to.
-        return pending.stream()
-                .min(Comparator.<BlockPos>comparingInt(p -> hasSupport(world, p) ? 0 : 1)
-                        .thenComparingInt(BlockPos::getY)
-                        .thenComparing(byDistance))
-                .orElse(pending.get(0));
+        return best;
     }
 
     /** A spot to stand where the target is in reach and we're not standing inside it. */
@@ -237,29 +330,36 @@ public final class NativeBuilder {
         return eye.squaredDistanceTo(Vec3d.ofCenter(target)) <= reach * reach;
     }
 
-    private boolean actInReach(MinecraftClient client, List<BlockPos> pending) {
+    private boolean actInReach(MinecraftClient client) {
         ClientPlayerEntity player = client.player;
         ClientWorld world = client.world;
+        Vec3d eye = player.getEyePos();
+        double r = Reach.reach(client);
+        double r2 = r * r;
         List<BlockPos> inReach = new ArrayList<>();
-        for (BlockPos p : pending) {
-            if (Reach.inReach(client, p)) {
+        for (BlockPos p : this.todo) {
+            if (Vec3d.ofCenter(p).squaredDistanceTo(eye) <= r2) {
                 inReach.add(p);
             }
         }
         if (inReach.isEmpty()) {
             return false;
         }
-        if (isClear()) {
+        inReach.sort(Comparator.comparingDouble(p -> Vec3d.ofCenter(p).squaredDistanceTo(eye)));
+        if (this.clearing) {
             BlockPos below = player.getBlockPos().down();
-            inReach.sort(Comparator.<BlockPos>comparingInt(BlockPos::getY).reversed());
             for (BlockPos p : inReach) {
                 // Leave the block we're standing on for last.
                 if (p.equals(below) && inReach.size() > 1) {
                     continue;
                 }
                 BlockState state = world.getBlockState(p);
+                if (done(world, p, this.order.get(p))) {
+                    this.todo.remove(p);
+                    continue;
+                }
                 if (state.getHardness(world, p) < 0) {
-                    this.skipped.add(p);
+                    impossible(p);
                     continue;
                 }
                 startBreaking(client, p);
@@ -267,18 +367,20 @@ public final class NativeBuilder {
             }
             return false;
         }
-        inReach.sort(Comparator.<BlockPos>comparingInt(BlockPos::getY)
-                .thenComparingDouble(p -> Vec3d.ofCenter(p).squaredDistanceTo(player.getEyePos())));
         for (BlockPos p : inReach) {
+            BlockState wanted = this.order.get(p);
+            if (done(world, p, wanted)) {
+                this.todo.remove(p);
+                continue;
+            }
             if (!placeable(world, player, p)) {
                 continue;
             }
-            BlockState wanted = this.order.get(p);
             BlockState current = world.getBlockState(p);
             if (!current.isAir() && !current.isReplaceable()) {
                 // Something else is in the way: mine it first.
                 if (current.getHardness(world, p) < 0) {
-                    this.skipped.add(p);
+                    impossible(p);
                     continue;
                 }
                 startBreaking(client, p);
@@ -286,7 +388,7 @@ public final class NativeBuilder {
             }
             Item item = wanted.getBlock().asItem();
             if (item == Items.AIR) {
-                this.skipped.add(p);
+                impossible(p);
                 continue;
             }
             if (!Inventories.hold(client, item)) {
@@ -295,9 +397,14 @@ public final class NativeBuilder {
                 this.status = "missing " + item.getName().getString();
                 return true;
             }
+            if (this.placeAttempts.merge(p, 1, Integer::sum) > MAX_PLACE_ATTEMPTS) {
+                // The server keeps rejecting it (entity in the way, protection...): come back later.
+                this.placeAttempts.remove(p);
+                fail(p);
+                continue;
+            }
             if (place(client, p, wanted)) {
                 this.cooldown = PLACE_DELAY_TICKS;
-                this.status = "placing";
                 return true;
             }
         }
@@ -362,7 +469,7 @@ public final class NativeBuilder {
         float[] rotation = rotationFor(player, wanted, hit);
         if (rotation == null) {
             if (this.strict && !wanted.getBlock().getDefaultState().equals(wanted)) {
-                this.skipped.add(pos);
+                impossible(pos);
                 return false;
             }
             Reach.lookAt(player, hitVec);
@@ -412,7 +519,6 @@ public final class NativeBuilder {
                 this.breakingSide.getOffsetZ() * 0.5));
         this.breaking = pos.toImmutable();
         this.breakTicks = 0;
-        this.status = "mining";
         client.interactionManager.attackBlock(pos, this.breakingSide);
         player.swingHand(Hand.MAIN_HAND);
     }
@@ -422,12 +528,13 @@ public final class NativeBuilder {
         BlockState state = client.world.getBlockState(pos);
         if (state.isAir() || state.getBlock() instanceof FluidBlock) {
             this.breaking = null;
+            this.todo.remove(pos);
             return;
         }
         if (++this.breakTicks > BREAK_TIMEOUT_TICKS || !Reach.inReach(client, pos)) {
             client.interactionManager.cancelBlockBreaking();
-            this.skipped.add(pos);
             this.breaking = null;
+            fail(pos);
             return;
         }
         if (client.interactionManager.updateBlockBreakingProgress(pos, this.breakingSide)) {

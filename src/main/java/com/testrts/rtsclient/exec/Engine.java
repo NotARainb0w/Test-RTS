@@ -138,15 +138,17 @@ public final class Engine {
     }
 
     public static void build(String name, Map<BlockPos, BlockState> blocks, boolean strict, boolean manageSettings) {
+        boolean layered = RtsConfig.get().buildInLayers;
+        boolean clearing = !blocks.isEmpty() && blocks.values().iterator().next().isAir();
         if (baritone()) {
             if (manageSettings) {
-                BaritoneBridge.applySettings(strict);
+                BaritoneBridge.applySettings(strict, layered, clearing);
             }
-            fallback = () -> NativeEngine.get().build(blocks, strict);
+            fallback = () -> NativeEngine.get().build(blocks, strict, layered);
             idleTicks = 0;
             BaritoneBridge.build(name, blocks, strict);
         } else {
-            NativeEngine.get().build(blocks, strict);
+            NativeEngine.get().build(blocks, strict, layered);
         }
     }
 

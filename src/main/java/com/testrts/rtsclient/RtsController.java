@@ -24,6 +24,8 @@ public final class RtsController {
     private ClientPlayerEntity player;
     @Nullable
     private BlockHitResult hover;
+    @Nullable
+    private Integer cutY;
 
     public static RtsController get() {
         return INSTANCE;
@@ -49,6 +51,20 @@ public final class RtsController {
 
     public void setHover(@Nullable BlockHitResult hover) {
         this.hover = hover;
+    }
+
+    /** Y level above which the world is hidden ("cut view"), or null when off. */
+    @Nullable
+    public Integer cutY() {
+        return this.active ? this.cutY : null;
+    }
+
+    public void setCut(MinecraftClient client, @Nullable Integer y) {
+        if (java.util.Objects.equals(this.cutY, y)) {
+            return;
+        }
+        this.cutY = y;
+        com.testrts.rtsclient.render.CutView.set(client, this.active ? y : null);
     }
 
     public void toggle(MinecraftClient client) {
@@ -84,6 +100,8 @@ public final class RtsController {
             return;
         }
         this.active = false;
+        com.testrts.rtsclient.render.CutView.set(client, null);
+        this.cutY = null;
         this.camera.disable(client);
         this.session.clearSelection();
         if (client.currentScreen instanceof RtsScreen) {

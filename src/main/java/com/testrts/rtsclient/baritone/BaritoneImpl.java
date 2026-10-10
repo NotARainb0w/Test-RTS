@@ -81,8 +81,11 @@ final class BaritoneImpl {
         return b.getPathingBehavior().isPathing() ? "Pathing" : "Idle";
     }
 
-    static void applySettings(boolean strictOrientation) {
+    static void applySettings(boolean strictOrientation, boolean layered, boolean topDown) {
         Settings s = BaritoneAPI.getSettings();
+        s.buildInLayers.value = layered;
+        s.layerOrder.value = topDown;
+        s.layerHeight.value = 1;
         s.allowPlace.value = true;
         s.allowBreak.value = true;
         // Lets the builder pull blocks out of the main inventory instead of only the hotbar.

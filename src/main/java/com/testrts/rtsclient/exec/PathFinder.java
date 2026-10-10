@@ -45,44 +45,80 @@ public final class PathFinder {
         }
     }
 
+    /** Nodes expanded per {@link Search#step} call; keeps each tick's cost to a few milliseconds. */
+    public static final int NODES_PER_TICK = 2500;
+
     /**
-     * @param goal    accepts a feet position as "arrived"
-     * @param toward  point the search is drawn to (the heuristic)
-     * @return feet positions from start (exclusive) to goal (inclusive), or null if none found
+     * An A* search that can be advanced a little each tick, so a long or hopeless search never
+     * freezes the game.
      */
-    @Nullable
-    public static List<BlockPos> find(ClientWorld world, BlockPos start, Predicate<BlockPos> goal, Vec3d toward) {
-        if (goal.test(start)) {
-            return new ArrayList<>();
+    public static final class Search {
+        public enum State { RUNNING, FOUND, FAILED }
+
+        private final ClientWorld world;
+        private final Predicate<BlockPos> goal;
+        private final Vec3d toward;
+        private final PriorityQueue<Node> open = new PriorityQueue<>();
+        private final Map<Long, Double> best = new HashMap<>();
+        private int expanded;
+        private State state = State.RUNNING;
+        private List<BlockPos> result;
+
+        Search(ClientWorld world, BlockPos start, Predicate<BlockPos> goal, Vec3d toward) {
+            this.world = world;
+            this.goal = goal;
+            this.toward = toward;
+            if (goal.test(start)) {
+                this.state = State.FOUND;
+                this.result = new ArrayList<>();
+                return;
+            }
+            this.open.add(new Node(start, 0.0, h(start, toward), null));
+            this.best.put(start.asLong(), 0.0);
         }
-        PriorityQueue<Node> open = new PriorityQueue<>();
-        Map<Long, Double> best = new HashMap<>();
-        open.add(new Node(start, 0.0, h(start, toward), null));
-        best.put(start.asLong(), 0.0);
-        Node closest = null;
-        int expanded = 0;
-        while (!open.isEmpty() && expanded < MAX_NODES) {
-            Node cur = open.poll();
-            if (cur.g > best.getOrDefault(cur.pos.asLong(), Double.MAX_VALUE)) {
-                continue;
-            }
-            expanded++;
-            if (goal.test(cur.pos)) {
-                return unwind(cur);
-            }
-            if (closest == null || h(cur.pos, toward) < h(closest.pos, toward)) {
-                closest = cur;
-            }
-            for (Move m : moves(world, cur.pos)) {
-                double g = cur.g + m.cost;
-                long key = m.to.asLong();
-                if (g < best.getOrDefault(key, Double.MAX_VALUE)) {
-                    best.put(key, g);
-                    open.add(new Node(m.to, g, h(m.to, toward), cur));
+
+        public State state() {
+            return this.state;
+        }
+
+        /** The path once {@link State#FOUND}: feet positions, start excluded. */
+        public List<BlockPos> result() {
+            return this.result;
+        }
+
+        public State step(int budget) {
+            int done = 0;
+            while (this.state == State.RUNNING && done < budget) {
+                if (this.open.isEmpty() || this.expanded >= MAX_NODES) {
+                    this.state = State.FAILED;
+                    break;
+                }
+                Node cur = this.open.poll();
+                if (cur.g > this.best.getOrDefault(cur.pos.asLong(), Double.MAX_VALUE)) {
+                    continue;
+                }
+                this.expanded++;
+                done++;
+                if (this.goal.test(cur.pos)) {
+                    this.result = unwind(cur);
+                    this.state = State.FOUND;
+                    break;
+                }
+                for (Move m : moves(this.world, cur.pos)) {
+                    double g = cur.g + m.cost;
+                    long key = m.to.asLong();
+                    if (g < this.best.getOrDefault(key, Double.MAX_VALUE)) {
+                        this.best.put(key, g);
+                        this.open.add(new Node(m.to, g, h(m.to, this.toward), cur));
+                    }
                 }
             }
+            return this.state;
         }
-        return null;
+    }
+
+    public static Search start(ClientWorld world, BlockPos start, Predicate<BlockPos> goal, Vec3d toward) {
+        return new Search(world, start, goal, toward);
     }
 
     private record Move(BlockPos to, double cost) {

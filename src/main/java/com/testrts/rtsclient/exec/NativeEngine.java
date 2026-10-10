@@ -17,6 +17,8 @@ public final class NativeEngine {
     private static final NativeEngine INSTANCE = new NativeEngine();
 
     @Nullable
+    private PathFinder.Search search;
+    @Nullable
     private PathFollower walk;
     @Nullable
     private NativeBuilder builder;
@@ -29,7 +31,22 @@ public final class NativeEngine {
     public void tick(MinecraftClient client) {
         if (client.player == null || client.world == null) {
             this.walk = null;
+            this.search = null;
             this.builder = null;
+            return;
+        }
+        if (this.search != null) {
+            PathFinder.Search.State s = this.search.step(PathFinder.NODES_PER_TICK);
+            if (s == PathFinder.Search.State.FOUND) {
+                this.walk = new PathFollower(this.search.result());
+                this.search = null;
+            } else if (s == PathFinder.Search.State.FAILED) {
+                this.search = null;
+                this.status = "No path";
+                com.testrts.rtsclient.util.Messages.warn("No walkable path there (the built-in engine can't bridge or pillar)");
+            } else {
+                this.status = "Planning";
+            }
             return;
         }
         if (this.builder != null) {
@@ -77,24 +94,19 @@ public final class NativeEngine {
         if (player == null || client.world == null) {
             return false;
         }
-        List<BlockPos> path = PathFinder.find(client.world, player.getBlockPos(), goal, toward);
-        if (path == null) {
-            this.status = "No path";
-            return false;
-        }
-        this.walk = new PathFollower(path);
-        this.status = "Walking";
+        this.search = PathFinder.start(client.world, player.getBlockPos(), goal, toward);
+        this.status = "Planning";
         return true;
     }
 
-    public void build(Map<BlockPos, BlockState> order, boolean strict) {
+    public void build(Map<BlockPos, BlockState> order, boolean strict, boolean layered) {
         stop(MinecraftClient.getInstance());
-        this.builder = new NativeBuilder(order, strict);
+        this.builder = new NativeBuilder(order, strict, layered);
         this.status = "Building";
     }
 
     public boolean isMoving() {
-        return this.walk != null;
+        return this.walk != null || this.search != null;
     }
 
     public boolean isBuilding() {
@@ -112,7 +124,7 @@ public final class NativeEngine {
     }
 
     public boolean isBusy() {
-        return this.walk != null || this.builder != null;
+        return this.walk != null || this.search != null || this.builder != null;
     }
 
     public void stop(MinecraftClient client) {
@@ -121,6 +133,7 @@ public final class NativeEngine {
         }
         this.builder = null;
         this.walk = null;
+        this.search = null;
         MovementInput.restore(client);
     }
 

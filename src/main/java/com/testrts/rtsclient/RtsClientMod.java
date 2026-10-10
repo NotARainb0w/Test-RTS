@@ -40,6 +40,7 @@ public final class RtsClientMod implements ClientModInitializer {
                 "key.rtsclient.stop", InputUtil.Type.KEYSYM, InputUtil.UNKNOWN_KEY.getCode(), CATEGORY));
 
         ClientTickEvents.END_CLIENT_TICK.register(RtsClientMod::onTick);
+        WorldRenderEvents.AFTER_ENTITIES.register(WorldOverlay::renderPlayer);
         WorldRenderEvents.LAST.register(WorldOverlay::render);
         HudRenderCallback.EVENT.register((context, tickDelta) -> {
             MinecraftClient client = MinecraftClient.getInstance();

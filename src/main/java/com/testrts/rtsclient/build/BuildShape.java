@@ -10,7 +10,8 @@ public enum BuildShape {
     CIRCLE("Circle", "Disc centred on A through B", true, false),
     CYLINDER("Cylinder", "Disc centred on A, Height tall", true, true),
     SPHERE("Sphere", "Ball centred on A through B", true, false),
-    VEIN("Connected", "Every touching block of the clicked type (mine a vein, or replace it with the brush)", false, false);
+    VEIN("Vein", "Every touching block of the clicked type (mine a vein, or replace it with the brush)", false, false),
+    HOLE("Hole", "Every empty or water block in the enclosed hole you click, up to that level (fills pits, ponds)", false, false);
 
     private final String label;
     private final String description;
@@ -42,7 +43,7 @@ public enum BuildShape {
 
     /** Shapes placed with one click instead of two. */
     public boolean singleClick() {
-        return this == BLOCK || this == VEIN;
+        return this == BLOCK || this == VEIN || this == HOLE;
     }
 
     public BuildShape next() {
