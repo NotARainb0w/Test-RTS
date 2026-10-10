@@ -3,6 +3,8 @@ package com.testrts.rtsclient.util;
 import com.testrts.rtsclient.camera.RtsCamera;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 import com.testrts.rtsclient.render.CutView;
 import net.minecraft.block.BlockState;
@@ -62,5 +64,28 @@ public final class MouseRay {
             }
             return hit;
         }, w -> null);
+    }
+
+    /**
+     * Where the cursor ray crosses the block layer at {@code y} (through the middle of the layer),
+     * as a hit on that cell even when it's empty air. Null when the ray runs parallel or away from it.
+     */
+    @Nullable
+    public static BlockHitResult pickLayer(RtsCamera camera, double mouseX, double mouseY, int width, int height, int y) {
+        if (!camera.isEnabled()) {
+            return null;
+        }
+        Vec3d start = camera.position();
+        Vec3d dir = direction(camera, mouseX, mouseY, width, height);
+        if (Math.abs(dir.y) < 1.0e-4) {
+            return null;
+        }
+        double t = (y + 0.5 - start.y) / dir.y;
+        if (t <= 0.0 || t > MAX_DISTANCE) {
+            return null;
+        }
+        Vec3d at = start.add(dir.multiply(t));
+        BlockPos cell = BlockPos.ofFloored(at.x, y, at.z);
+        return new BlockHitResult(at, dir.y < 0 ? Direction.UP : Direction.DOWN, cell, false);
     }
 }

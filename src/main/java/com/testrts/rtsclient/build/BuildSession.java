@@ -40,6 +40,9 @@ public final class BuildSession {
     public TerrainMode terrainMode = TerrainMode.FLATTEN;
     /** How far above the level Flatten clears. */
     public int terrainClearHeight = 16;
+    /** Air placement: the cursor targets a flat layer at {@link #airY}, so blocks can go in mid-air. */
+    public boolean airPlace;
+    public int airY = 64;
 
     /** Saved camera positions (Ctrl+digit saves, Shift+digit jumps back). */
     public final java.util.Map<Integer, com.testrts.rtsclient.camera.RtsCamera.Pose> bookmarks = new java.util.HashMap<>();

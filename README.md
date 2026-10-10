@@ -38,6 +38,7 @@ implementation; no code or assets are taken from it.
 | M | Build mode (Fill / Replace / Replace type / Cover), or Terrain mode (Flatten / Light up) |
 | R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
 | N | Mirror the blueprint being pasted |
+| B, Alt+scroll | Air placement on/off, move its layer up/down |
 | Ctrl+scroll | Shape height (negative digs down); with Terrain, how high above the level to clear |
 | Arrow keys, Shift+Up/Down | Nudge the shape one block (camera-relative) / up and down |
 | Enter / X | Confirm / cancel a shape |
@@ -77,6 +78,9 @@ implementation; no code or assets are taken from it.
   - *Flatten* levels it to the height of the first corner: everything above (up to the "mine above" height,
     Ctrl+scroll) is mined and dips below are filled with the brush block (dirt if none is picked).
   - *Light up* places torches on every dark floor spot in the area (spaced out, so it doesn't need hundreds).
+- **Air placement** (B, or the Air button): the cursor targets a flat layer at a chosen height, so you can
+  click empty space to build floating blocks and shapes. Alt+scroll (or -/+) moves the layer; a grid and a drop
+  line to the ground show where it is. While drawing a shape, pointing at the sky uses the first corner's layer.
 - **Measure**: click two points to see the size, the distance and how many blocks are in the box. Nothing is
   changed.
 
@@ -137,7 +141,8 @@ The **Settings** button (top right in RTS mode) covers the engine, layered build
 pickup, camera collision and speed, the real-block preview limit and the max shape size. Everything is saved in
 `config/rtsclient/config.json` (which also has the scan radius and max camera distance).
 
-Cut view works with the vanilla renderer and with Sodium 0.5.
+Cut view works with the vanilla renderer and with Sodium 0.5. In RTS mode, underwater fog and distance haze are
+turned off so the view stays clear when the camera flies through water or looks down from high up.
 
 ## Building from source
 

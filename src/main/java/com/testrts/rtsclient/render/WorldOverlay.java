@@ -257,8 +257,42 @@ public final class WorldOverlay {
             WorldRenderer.drawBox(matrices, lines, new Box(target).expand(0.01), c[0], c[1], c[2], 1.0F);
         }
 
+        if (session.airPlace && hover != null) {
+            drawAirLayer(client, matrices, lines, targetFor(session, hover), session.airY);
+        }
+
         matrices.pop();
         immediate.draw();
+    }
+
+    /** A fading grid on the air layer around the cursor, and a drop line to the ground below it. */
+    private static void drawAirLayer(MinecraftClient client, MatrixStack matrices, VertexConsumer lines, BlockPos target, int y) {
+        if (target.getY() != y || client.world == null) {
+            return;
+        }
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dz = -3; dz <= 3; dz++) {
+                float fade = 1.0F - Math.max(Math.abs(dx), Math.abs(dz)) / 4.0F;
+                int x = target.getX() + dx;
+                int z = target.getZ() + dz;
+                WorldRenderer.drawBox(matrices, lines, new Box(x, y, z, x + 1, y, z + 1), 1.0F, 1.0F, 1.0F, 0.35F * fade);
+            }
+        }
+        BlockPos.Mutable p = target.mutableCopy();
+        int ground = y;
+        for (int i = 0; i < 128 && p.getY() > client.world.getBottomY(); i++) {
+            p.move(0, -1, 0);
+            if (!client.world.getBlockState(p).isAir()) {
+                ground = p.getY() + 1;
+                break;
+            }
+        }
+        if (ground < y) {
+            double cx = target.getX() + 0.5;
+            double cz = target.getZ() + 0.5;
+            WorldRenderer.drawBox(matrices, lines, new Box(cx - 0.04, ground, cz - 0.04, cx + 0.04, y, cz + 0.04), 1.0F, 1.0F, 1.0F, 0.6F);
+            WorldRenderer.drawBox(matrices, lines, new Box(cx - 0.3, ground, cz - 0.3, cx + 0.3, ground + 0.02, cz + 0.3), 1.0F, 1.0F, 1.0F, 0.6F);
+        }
     }
 
     /**
