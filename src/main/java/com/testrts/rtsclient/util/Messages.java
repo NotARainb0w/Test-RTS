@@ -15,41 +15,44 @@ public final class Messages {
     private static final long LIFETIME_MS = 6000L;
     private static final Deque<Entry> ENTRIES = new ArrayDeque<>();
 
-    public record Entry(Text text, long createdAt) {
+    /** {@code kind} picks the accent colour of the notification strip. */
+    public enum Kind { INFO, SUCCESS, WARN, ERROR, CHAT }
+
+    public record Entry(Text text, long createdAt, Kind kind) {
     }
 
     private Messages() {
     }
 
     public static void info(String message) {
-        push(Text.literal(message).formatted(Formatting.WHITE));
+        push(Text.literal(message).formatted(Formatting.WHITE), Kind.INFO);
     }
 
     public static void success(String message) {
-        push(Text.literal(message).formatted(Formatting.GREEN));
+        push(Text.literal(message).formatted(Formatting.GREEN), Kind.SUCCESS);
     }
 
     public static void warn(String message) {
-        push(Text.literal(message).formatted(Formatting.GOLD));
+        push(Text.literal(message).formatted(Formatting.GOLD), Kind.WARN);
     }
 
     public static void error(String message) {
-        push(Text.literal(message).formatted(Formatting.RED));
+        push(Text.literal(message).formatted(Formatting.RED), Kind.ERROR);
     }
 
     /** A chat line, shown in the RTS screen only (it's already in chat). */
     public static void chat(Text text) {
         synchronized (ENTRIES) {
-            ENTRIES.addLast(new Entry(text, System.currentTimeMillis()));
+            ENTRIES.addLast(new Entry(text, System.currentTimeMillis(), Kind.CHAT));
             while (ENTRIES.size() > MAX) {
                 ENTRIES.removeFirst();
             }
         }
     }
 
-    private static void push(Text text) {
+    private static void push(Text text, Kind kind) {
         synchronized (ENTRIES) {
-            ENTRIES.addLast(new Entry(text, System.currentTimeMillis()));
+            ENTRIES.addLast(new Entry(text, System.currentTimeMillis(), kind));
             while (ENTRIES.size() > MAX) {
                 ENTRIES.removeFirst();
             }

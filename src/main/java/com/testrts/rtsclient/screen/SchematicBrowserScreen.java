@@ -2,18 +2,20 @@ package com.testrts.rtsclient.screen;
 
 import com.testrts.rtsclient.RtsClientMod;
 import com.testrts.rtsclient.RtsController;
-import com.testrts.rtsclient.build.Blueprint;
 import com.testrts.rtsclient.build.BuildSession;
 import com.testrts.rtsclient.build.SchematicLoader;
 import com.testrts.rtsclient.build.ToolMode;
 import com.testrts.rtsclient.config.RtsConfig;
+import com.testrts.rtsclient.screen.ui.Glyphs;
+import com.testrts.rtsclient.screen.ui.RtsButton;
+import com.testrts.rtsclient.screen.ui.Theme;
 import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.tooltip.Tooltip;
-import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import net.minecraft.util.Util;
+import org.lwjgl.glfw.GLFW;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -29,13 +31,28 @@ import java.util.stream.Stream;
  * {@code schematics} folder and loads one into the Blueprint tool for placing.
  */
 public final class SchematicBrowserScreen extends Screen {
-    private static final int ROW_H = 20;
+    private static final int ROW_H = 18;
+    private static final int PAD = 8;
+
+    private record Entry(Path path, String name, String type, long kb) {
+    }
 
     private final Screen parent;
-    private final List<Path> files = new ArrayList<>();
-    private int page;
+    private final List<Entry> files = new ArrayList<>();
+    private final List<Entry> shown = new ArrayList<>();
+    private TextFieldWidget search;
+    private String filter = "";
+    private int scroll;
     private boolean loading;
     private String status = "";
+    private int statusColor = Theme.GOLD;
+
+    private int panelX0;
+    private int panelY0;
+    private int panelX1;
+    private int panelY1;
+    private int listY0;
+    private int listY1;
 
     public SchematicBrowserScreen(Screen parent) {
         super(Text.literal("Load schematic"));
@@ -54,15 +71,47 @@ public final class SchematicBrowserScreen extends Screen {
             try (Stream<Path> walk = Files.walk(dir, 4)) {
                 walk.filter(Files::isRegularFile).filter(SchematicLoader::supported)
                         .sorted((a, b) -> a.toString().compareToIgnoreCase(b.toString()))
-                        .forEach(this.files::add);
+                        .forEach(p -> {
+                            String name = dir.relativize(p).toString();
+                            int dot = name.lastIndexOf('.');
+                            String type = dot >= 0 ? name.substring(dot + 1).toLowerCase(Locale.ROOT) : "";
+                            long kb = 0;
+                            try {
+                                kb = Math.max(1, Files.size(p) / 1024);
+                            } catch (IOException ignored) {
+                                // size is only informational
+                            }
+                            this.files.add(new Entry(p, dot >= 0 ? name.substring(0, dot) : name, type, kb));
+                        });
             }
         } catch (IOException e) {
-            this.status = "Couldn't read " + dir + ": " + e.getMessage();
+            setStatus("Couldn't read " + dir + ": " + e.getMessage(), Theme.BAD);
         }
+        applyFilter();
     }
 
-    private int rowsPerPage() {
-        return Math.max(3, (this.height - 110) / ROW_H);
+    private void applyFilter() {
+        this.shown.clear();
+        String f = this.filter.toLowerCase(Locale.ROOT);
+        for (Entry e : this.files) {
+            if (f.isEmpty() || e.name().toLowerCase(Locale.ROOT).contains(f)) {
+                this.shown.add(e);
+            }
+        }
+        this.scroll = Math.max(0, Math.min(this.scroll, maxScroll()));
+    }
+
+    private int visibleRows() {
+        return Math.max(1, (this.listY1 - this.listY0) / ROW_H);
+    }
+
+    private int maxScroll() {
+        return Math.max(0, this.shown.size() - visibleRows());
+    }
+
+    private void setStatus(String text, int color) {
+        this.status = text;
+        this.statusColor = color;
     }
 
     @Override
@@ -70,47 +119,72 @@ public final class SchematicBrowserScreen extends Screen {
         if (this.files.isEmpty()) {
             scan();
         }
-        int w = Math.min(320, this.width - 40);
-        int x = this.width / 2 - w / 2;
-        int y = 36;
-        int perPage = rowsPerPage();
-        int pages = Math.max(1, (this.files.size() + perPage - 1) / perPage);
-        this.page = Math.min(this.page, pages - 1);
-        Path dir = folder();
-        for (int i = this.page * perPage; i < Math.min(this.files.size(), (this.page + 1) * perPage); i++) {
-            Path file = this.files.get(i);
-            String label = dir.relativize(file).toString();
-            long kb = 0;
-            try {
-                kb = Files.size(file) / 1024;
-            } catch (IOException ignored) {
-                // size is only informational
-            }
-            ButtonWidget b = ButtonWidget.builder(Text.literal(label), btn -> load(file))
-                    .dimensions(x, y, w, ROW_H - 2)
-                    .tooltip(Tooltip.of(Text.literal(label + " (" + kb + " KB)")))
-                    .build();
-            b.active = !this.loading;
-            addDrawableChild(b);
-            y += ROW_H;
-        }
-        int by = this.height - 30;
-        addDrawableChild(ButtonWidget.builder(Text.literal("<"), b -> {
-            this.page = Math.max(0, this.page - 1);
-            clearAndInit();
-        }).dimensions(x, by, 20, 20).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal(">"), b -> {
-            this.page = Math.min(pages - 1, this.page + 1);
-            clearAndInit();
-        }).dimensions(x + 22, by, 20, 20).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Open folder"), b -> Util.getOperatingSystem().open(folder().toFile()))
-                .dimensions(x + 46, by, 80, 20).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Refresh"), b -> {
+        int w = Math.min(340, this.width - 24);
+        int h = Math.min(this.height - 16, 300);
+        this.panelX0 = this.width / 2 - w / 2;
+        this.panelX1 = this.panelX0 + w;
+        this.panelY0 = this.height / 2 - h / 2;
+        this.panelY1 = this.panelY0 + h;
+        int x = this.panelX0 + PAD;
+        int inner = w - 2 * PAD;
+
+        int y = this.panelY0 + Theme.HEADER_H + 6;
+        this.search = new TextFieldWidget(this.textRenderer, x + 14, y + 2, inner - 16, 10, Text.literal("Search"));
+        this.search.setDrawsBackground(false);
+        this.search.setText(this.filter);
+        this.search.setPlaceholder(Text.literal("Search schematics...").styled(s -> s.withColor(Theme.TEXT_FAINT & 0xFFFFFF)));
+        this.search.setChangedListener(text -> {
+            this.filter = text;
+            this.scroll = 0;
+            applyFilter();
+        });
+        addDrawableChild(this.search);
+
+        this.listY0 = y + 18;
+        this.listY1 = this.panelY1 - PAD - ROW_H - 16;
+        applyFilter();
+
+        int by = this.panelY1 - PAD - ROW_H;
+        addDrawableChild(new RtsButton(x, by, 92, ROW_H, "Open folder",
+                () -> Util.getOperatingSystem().open(folder().toFile())).glyph(Glyphs.FOLDER, Theme.GOLD).left());
+        addDrawableChild(new RtsButton(x + 96, by, 70, ROW_H, "Refresh", () -> {
             scan();
-            clearAndInit();
-        }).dimensions(x + 130, by, 60, 20).build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Back"), b -> close())
-                .dimensions(x + w - 60, by, 60, 20).build());
+            setStatus("Found " + this.files.size() + " file(s)", Theme.TEXT_DIM);
+        }).glyph(Glyphs.ROTATE, Theme.ACCENT).left());
+        addDrawableChild(new RtsButton(this.panelX1 - PAD - 60, by, 60, ROW_H, "Back", this::close));
+    }
+
+    private int rowAt(double mouseX, double mouseY) {
+        if (mouseX < this.panelX0 + PAD || mouseX >= this.panelX1 - PAD - 4 || mouseY < this.listY0 || mouseY >= this.listY1) {
+            return -1;
+        }
+        int i = this.scroll + (int) ((mouseY - this.listY0) / ROW_H);
+        return i < this.shown.size() && (int) ((mouseY - this.listY0) / ROW_H) < visibleRows() ? i : -1;
+    }
+
+    @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        int row = rowAt(mouseX, mouseY);
+        if (button == 0 && row >= 0 && !this.loading) {
+            load(this.shown.get(row).path());
+            return true;
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
+        this.scroll = Math.max(0, Math.min(maxScroll(), this.scroll - (int) Math.signum(amount) * 3));
+        return true;
+    }
+
+    @Override
+    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        if ((keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) && this.shown.size() == 1 && !this.loading) {
+            load(this.shown.get(0).path());
+            return true;
+        }
+        return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     private void load(Path file) {
@@ -118,8 +192,7 @@ public final class SchematicBrowserScreen extends Screen {
             return;
         }
         this.loading = true;
-        this.status = "Loading " + file.getFileName() + "...";
-        clearAndInit();
+        setStatus("Loading " + file.getFileName() + "...", Theme.GOLD);
         int limit = RtsConfig.get().maxShapeBlocks;
         CompletableFuture.supplyAsync(() -> {
             try {
@@ -132,14 +205,14 @@ public final class SchematicBrowserScreen extends Screen {
             if (error != null) {
                 Throwable cause = error.getCause() != null ? error.getCause() : error;
                 RtsClientMod.LOGGER.warn("Loading schematic {} failed", file, cause);
-                this.status = "Couldn't load: " + cause.getMessage();
-                clearAndInit();
+                setStatus("Couldn't load: " + cause.getMessage(), Theme.BAD);
                 return;
             }
             BuildSession s = RtsController.get().session();
             s.tool = ToolMode.BLUEPRINT;
             s.clipboard = bp;
             s.pasteTurns = 0;
+            s.pasteMirror = false;
             s.pasteAnchor = null;
             s.clearSelection();
             Messages.success("Loaded " + bp.name() + " (" + bp.size(0) + ", " + String.format(Locale.ROOT, "%,d", bp.blockCount())
@@ -150,15 +223,67 @@ public final class SchematicBrowserScreen extends Screen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
-        renderBackground(ctx);
-        ctx.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFF);
-        String sub = this.files.isEmpty()
-                ? "No .litematic / .schem / .nbt files in " + folder()
-                : this.files.size() + " file(s) in .minecraft/schematics - page " + (this.page + 1);
-        ctx.drawCenteredTextWithShadow(this.textRenderer, sub, this.width / 2, 22, 0xA0A0A0);
-        if (!this.status.isEmpty()) {
-            ctx.drawCenteredTextWithShadow(this.textRenderer, this.status, this.width / 2, this.height - 44, 0xFFD54F);
+        ctx.fill(0, 0, this.width, this.height, 0x88000000);
+        Theme.panel(ctx, this.textRenderer, this.panelX0, this.panelY0, this.panelX1, this.panelY1, "LOAD SCHEMATIC");
+        int x0 = this.panelX0 + PAD;
+        int x1 = this.panelX1 - PAD;
+
+        // Search box
+        int sy = this.panelY0 + Theme.HEADER_H + 6;
+        Theme.round(ctx, x0, sy - 1, x1 - x0, 13, Theme.SLOT);
+        Theme.outline(ctx, x0, sy - 1, x1 - x0, 13, this.search.isFocused() ? Theme.withAlpha(Theme.ACCENT, 0.7F) : Theme.SLOT_EDGE);
+        Glyphs.EYE.draw(ctx, x0 + 4, sy + 2, Theme.TEXT_FAINT);
+
+        // File list
+        ctx.fill(x0, this.listY0, x1, this.listY1, 0x40000000);
+        if (this.shown.isEmpty()) {
+            String msg = this.files.isEmpty() ? "No .litematic / .schem / .nbt files yet" : "Nothing matches \"" + this.filter + "\"";
+            ctx.drawCenteredTextWithShadow(this.textRenderer, msg, this.width / 2, this.listY0 + 10, Theme.TEXT_DIM);
+            if (this.files.isEmpty()) {
+                String where = folder().toString();
+                ctx.drawCenteredTextWithShadow(this.textRenderer, this.textRenderer.trimToWidth("Put them in " + where, x1 - x0 - 8),
+                        this.width / 2, this.listY0 + 24, Theme.TEXT_FAINT);
+            }
         }
+        int hovered = rowAt(mouseX, mouseY);
+        int rows = visibleRows();
+        for (int r = 0; r < rows && this.scroll + r < this.shown.size(); r++) {
+            Entry e = this.shown.get(this.scroll + r);
+            int y = this.listY0 + r * ROW_H;
+            boolean hover = this.scroll + r == hovered && !this.loading;
+            if (hover) {
+                Theme.round(ctx, x0 + 1, y + 1, x1 - x0 - 6, ROW_H - 2, Theme.BTN_HOVER);
+            }
+            int typeColor = switch (e.type()) {
+                case "litematic" -> Theme.ACCENT;
+                case "schem", "schematic" -> Theme.GOLD;
+                default -> Theme.GOOD;
+            };
+            Glyphs.BOX.draw(ctx, x0 + 5, y + (ROW_H - Glyphs.SIZE) / 2, typeColor);
+            String size = e.kb() + " KB";
+            int sizeW = this.textRenderer.getWidth(size);
+            int typeW = this.textRenderer.getWidth(e.type());
+            int nameRoom = x1 - x0 - 30 - sizeW - typeW - 16;
+            String name = this.textRenderer.getWidth(e.name()) > nameRoom
+                    ? this.textRenderer.trimToWidth(e.name(), Math.max(0, nameRoom - 6)) + "..." : e.name();
+            ctx.drawText(this.textRenderer, name, x0 + 16, y + 5, hover ? 0xFFFFFFFF : Theme.TEXT, false);
+            ctx.drawText(this.textRenderer, e.type(), x1 - 10 - sizeW - typeW - 8, y + 5, typeColor, false);
+            ctx.drawText(this.textRenderer, size, x1 - 10 - sizeW, y + 5, Theme.TEXT_FAINT, false);
+        }
+        // Scrollbar
+        if (this.shown.size() > rows) {
+            int trackH = this.listY1 - this.listY0;
+            int thumbH = Math.max(10, trackH * rows / this.shown.size());
+            int thumbY = this.listY0 + (trackH - thumbH) * this.scroll / Math.max(1, maxScroll());
+            ctx.fill(x1 - 3, this.listY0, x1 - 1, this.listY1, 0x40FFFFFF);
+            ctx.fill(x1 - 3, thumbY, x1 - 1, thumbY + thumbH, Theme.ACCENT);
+        }
+
+        String footer = this.status.isEmpty()
+                ? this.shown.size() + " of " + this.files.size() + " file(s) - click one to load"
+                : this.status;
+        ctx.drawText(this.textRenderer, this.textRenderer.trimToWidth(footer, x1 - x0), x0, this.listY1 + 4,
+                this.status.isEmpty() ? Theme.TEXT_FAINT : this.statusColor, false);
         super.render(ctx, mouseX, mouseY, delta);
     }
 

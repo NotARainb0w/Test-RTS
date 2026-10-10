@@ -32,16 +32,19 @@ implementation; no code or assets are taken from it.
 | **Left click** | Act with the current tool (below) |
 | Right click | Walk your character to that spot |
 | Middle click | Pick that block as the brush |
-| 1-5 | Tools: Build, Destroy, Interact, Link storage, Blueprint |
+| 1-7 | Tools: Build, Destroy, Interact, Link storage, Blueprint, Terrain, Measure |
+| Ctrl+0-9 / Shift+0-9 | Save the camera position to a slot / jump back to it |
 | `[` `]` | Previous / next shape |
-| M | Build mode (Fill / Replace / Replace type / Cover) |
+| M | Build mode (Fill / Replace / Replace type / Cover), or Terrain mode (Flatten / Light up) |
 | R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
-| Ctrl+scroll | Shape height (negative digs down) |
+| N | Mirror the blueprint being pasted |
+| Ctrl+scroll | Shape height (negative digs down); with Terrain, how high above the level to clear |
 | Arrow keys, Shift+Up/Down | Nudge the shape one block (camera-relative) / up and down |
 | Enter / X | Confirm / cancel a shape |
 | V, PageUp/PageDown | Cut view: hide everything above a Y level to see inside builds; move the cut |
 | Ctrl+Z | Undo the last order (queues orders that put the old blocks back) |
 | F | Search items |
+| Ctrl+click an item | Fetch a stack of it from storage into your inventory |
 | E, T, / | Inventory, chat, command (RTS resumes when you close them) |
 
 ### Tools
@@ -58,17 +61,24 @@ implementation; no code or assets are taken from it.
 - **Interact**: click any block (chest, door, lever, crafting table...). Your character walks over and uses it.
 - **Link storage**: click containers to add them to your storage network.
 - **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
-  blueprints are listed on the left (Shift+click deletes).
+  blueprints are listed on the left (Shift+click deletes). Switch *Copy* to *Cut* and the source region is
+  mined out after copying, so you can move a build.
   - **Load schematic...** opens the files in `.minecraft/schematics/`: Litematica `.litematic`,
     WorldEdit/Sponge `.schem`, and vanilla structure `.nbt` files. Only blocks are imported (not chest
     contents or entities).
   - **Placing**: the blueprint follows the cursor, centred on it. Click to pin it, nudge it with the arrow keys
-    (Shift+Up/Down for height), R to rotate, then click again or press Enter to build. X lets it follow the
-    cursor again.
+    (Shift+Up/Down for height), R to rotate, N to mirror, then click again or press Enter to build. X lets it
+    follow the cursor again.
   - **Air: keep / clear**: *clear* also mines whatever is in the blueprint's empty spaces, so the result is an
     exact copy.
   - Building a schematic works like any order: layer by layer, fetching missing materials from storage, with
     the material list (need / have / stored) shown at the cursor.
+- **Terrain**: click two corners of an area.
+  - *Flatten* levels it to the height of the first corner: everything above (up to the "mine above" height,
+    Ctrl+scroll) is mined and dips below are filled with the brush block (dirt if none is picked).
+  - *Light up* places torches on every dark floor spot in the area (spaced out, so it doesn't need hundreds).
+- **Measure**: click two points to see the size, the distance and how many blocks are in the box. Nothing is
+  changed.
 
 While you draw a shape or paste, a label at the cursor shows its size (e.g. `5 x 5 x 1`), how many blocks it
 places or mines, and the materials it needs against what you carry and what's in storage (red when short).
@@ -97,6 +107,14 @@ The built-in engine also handles shapes that overhang or float, like spheres and
   layers would otherwise only touch at the edges, so every block can be placed. The outside looks the same.
 
 Keep a stack of dirt or cobblestone in your inventory or storage for big domes and floating builds.
+
+### Interface
+
+The top bar holds the tools (or press 1-7) and the settings. The left panel shows the options of the current
+tool: shapes, build mode, hollow, height, rotation and block state for Build/Destroy; copy/cut, rotate, mirror,
+air and saved blueprints for Blueprint; mode and clear height for Terrain. The right panel is the command
+panel: the engine, undo, store inventory and stop, every queued order with a progress bar (click the cross to
+cancel one) and the storage summary with Scan nearby / Re-index buttons. Messages appear as coloured toasts.
 
 ## Storage
 

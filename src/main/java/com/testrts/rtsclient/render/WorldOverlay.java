@@ -40,6 +40,8 @@ public final class WorldOverlay {
     private static final PreviewMesh SHAPE_GHOST = new PreviewMesh(PreviewMesh.Style.GHOST);
     private static final PreviewMesh SHAPE_CLEAR = new PreviewMesh(PreviewMesh.Style.CLEAR);
     private static final PreviewMesh PASTE = new PreviewMesh(PreviewMesh.Style.GHOST);
+    private static final PreviewMesh TERRAIN_CLEAR = new PreviewMesh(PreviewMesh.Style.CLEAR);
+    private static final PreviewMesh TERRAIN_FILL = new PreviewMesh(PreviewMesh.Style.GHOST);
     private static final Map<BuildTask, PreviewMesh> TASK_MESHES = new IdentityHashMap<>();
     private static final Map<BuildTask, Long> TASK_REFRESH = new IdentityHashMap<>();
     /** Clear orders are re-meshed now and then so mined blocks drop out of the red preview. */
@@ -131,10 +133,41 @@ public final class WorldOverlay {
                     : session.clipboard.originFor(targetFor(session, hover), session.pasteTurns);
             var bp = session.clipboard;
             int turns = session.pasteTurns;
-            PASTE.request(List.of(bp, origin, turns), () -> new PreviewMesh.Blocks(bp.placed(origin, turns), false), true);
+            boolean mirror = session.pasteMirror;
+            PASTE.request(List.of(bp, origin, turns, mirror), () -> new PreviewMesh.Blocks(bp.placed(origin, turns, mirror), false), true);
             PASTE.draw(matrices, projection, cam);
         } else {
             PASTE.clear();
+        }
+
+        // Terrain tool: what Flatten will mine (red) and fill, or where Light up puts torches.
+        if (session.tool == ToolMode.TERRAIN && session.anchorA != null && (session.anchorB != null || hover != null)) {
+            BlockPos a = session.anchorA;
+            BlockPos b = session.anchorB != null ? session.anchorB : hover.getBlockPos();
+            var world = client.world;
+            if (session.terrainMode == com.testrts.rtsclient.build.TerrainMode.FLATTEN) {
+                BlockState fill = com.testrts.rtsclient.screen.WorldActions.flattenFill(session);
+                int height = session.terrainClearHeight;
+                int limit = RtsConfig.get().maxShapeBlocks;
+                TERRAIN_CLEAR.request(List.of("clear", a, b, height), () -> {
+                    var plan = com.testrts.rtsclient.build.TerrainPlanner.flatten(world, a, b, fill, height, limit);
+                    return new PreviewMesh.Blocks(plan.clear(), plan.truncated());
+                }, true);
+                TERRAIN_FILL.request(List.of("fill", a, b, height, fill), () -> {
+                    var plan = com.testrts.rtsclient.build.TerrainPlanner.flatten(world, a, b, fill, height, limit);
+                    return new PreviewMesh.Blocks(plan.fill(), plan.truncated());
+                }, true);
+                TERRAIN_CLEAR.draw(matrices, projection, cam);
+            } else {
+                TERRAIN_CLEAR.clear();
+                TERRAIN_FILL.request(List.of("light", a, b), () -> PreviewMesh.Blocks.of(
+                        com.testrts.rtsclient.build.TerrainPlanner.lightUp(world, a, b),
+                        net.minecraft.block.Blocks.TORCH.getDefaultState(), false), true);
+            }
+            TERRAIN_FILL.draw(matrices, projection, cam);
+        } else {
+            TERRAIN_CLEAR.clear();
+            TERRAIN_FILL.clear();
         }
 
         VertexConsumerProvider.Immediate immediate = client.getBufferBuilders().getEntityVertexConsumers();
@@ -195,11 +228,16 @@ public final class WorldOverlay {
                 WorldRenderer.drawBox(matrices, lines, new Box(session.anchorB).expand(0.06), 1.0F, 0.85F, 0.2F, 1.0F);
             }
         }
-        if (session.tool == ToolMode.BLUEPRINT && session.clipboard == null && session.anchorA != null) {
+        boolean regionTool = session.tool == ToolMode.BLUEPRINT && session.clipboard == null
+                || session.tool == ToolMode.TERRAIN || session.tool == ToolMode.MEASURE;
+        if (regionTool && session.anchorA != null) {
             BlockPos a = session.anchorA;
             BlockPos b = session.anchorB != null ? session.anchorB : hover != null ? hover.getBlockPos() : a;
             Box sel = new Box(a).union(new Box(b)).expand(0.02);
-            WorldRenderer.drawBox(matrices, lines, sel, 1.0F, 0.84F, 0.3F, 1.0F);
+            float[] c = session.tool == ToolMode.MEASURE ? new float[]{0.85F, 0.55F, 1.0F}
+                    : session.tool == ToolMode.TERRAIN ? new float[]{0.55F, 0.85F, 0.35F} : new float[]{1.0F, 0.84F, 0.3F};
+            WorldRenderer.drawBox(matrices, lines, sel, c[0], c[1], c[2], 1.0F);
+            WorldRenderer.drawBox(matrices, lines, new Box(a).expand(0.06), 1.0F, 1.0F, 0.2F, 1.0F);
         }
         if (session.tool == ToolMode.BLUEPRINT && session.clipboard != null && PASTE.bounds() != null) {
             WorldRenderer.drawBox(matrices, lines, PASTE.bounds().expand(0.03), 1.0F, 0.84F, 0.3F,
@@ -213,6 +251,8 @@ public final class WorldOverlay {
                 case INTERACT -> new float[]{1.0F, 1.0F, 1.0F};
                 case LINK -> new float[]{1.0F, 0.75F, 0.1F};
                 case BLUEPRINT -> new float[]{1.0F, 0.84F, 0.3F};
+                case TERRAIN -> new float[]{0.55F, 0.85F, 0.35F};
+                case MEASURE -> new float[]{0.85F, 0.55F, 1.0F};
             };
             WorldRenderer.drawBox(matrices, lines, new Box(target).expand(0.01), c[0], c[1], c[2], 1.0F);
         }
@@ -260,6 +300,8 @@ public final class WorldOverlay {
         SHAPE_GHOST.clear();
         SHAPE_CLEAR.clear();
         PASTE.clear();
+        TERRAIN_CLEAR.clear();
+        TERRAIN_FILL.clear();
         closeTaskMeshes(List.of());
     }
 
@@ -290,6 +332,14 @@ public final class WorldOverlay {
             return -1;
         }
         return mesh.truncated() ? Integer.MAX_VALUE : mesh.blocks();
+    }
+
+    /** Blocks to clear and to fill in the terrain preview; -1 while still being worked out. */
+    public static int[] terrainCounts() {
+        return new int[]{
+                TERRAIN_CLEAR.isReady() ? TERRAIN_CLEAR.blocks() : -1,
+                TERRAIN_FILL.isReady() ? TERRAIN_FILL.blocks() : -1
+        };
     }
 
     private static void closeTaskMeshes(List<BuildTask> keep) {

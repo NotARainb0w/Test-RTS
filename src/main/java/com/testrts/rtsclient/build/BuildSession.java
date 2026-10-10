@@ -32,6 +32,17 @@ public final class BuildSession {
     public BlockPos pasteAnchor;
     /** Mine blocks inside the blueprint's box that are air in the blueprint, for an exact copy. */
     public boolean pasteClearsAir;
+    /** Paste the blueprint mirrored (left-right). */
+    public boolean pasteMirror;
+    /** Copying also mines the original (move instead of copy). */
+    public boolean cutOnCopy;
+
+    public TerrainMode terrainMode = TerrainMode.FLATTEN;
+    /** How far above the level Flatten clears. */
+    public int terrainClearHeight = 16;
+
+    /** Saved camera positions (Ctrl+digit saves, Shift+digit jumps back). */
+    public final java.util.Map<Integer, com.testrts.rtsclient.camera.RtsCamera.Pose> bookmarks = new java.util.HashMap<>();
 
     /** First click of a two-point shape. */
     @Nullable

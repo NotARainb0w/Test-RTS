@@ -2,38 +2,32 @@ package com.testrts.rtsclient.screen;
 
 import com.testrts.rtsclient.RtsClientMod;
 import com.testrts.rtsclient.RtsController;
-import com.testrts.rtsclient.baritone.BaritoneBridge;
-import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.build.Blueprint;
-import com.testrts.rtsclient.build.BuildMode;
 import com.testrts.rtsclient.build.BuildSession;
-import com.testrts.rtsclient.build.OrderPlanner;
 import com.testrts.rtsclient.build.BuildShape;
-import com.testrts.rtsclient.build.ShapeGenerator;
+import com.testrts.rtsclient.build.OrderPlanner;
+import com.testrts.rtsclient.build.TerrainMode;
 import com.testrts.rtsclient.build.ToolMode;
 import com.testrts.rtsclient.build.UndoHistory;
 import com.testrts.rtsclient.config.RtsConfig;
+import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.render.WorldOverlay;
+import com.testrts.rtsclient.screen.ui.Glyphs;
+import com.testrts.rtsclient.screen.ui.RtsButton;
+import com.testrts.rtsclient.screen.ui.Theme;
 import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.task.BuildTask;
 import com.testrts.rtsclient.task.DepositTask;
-import com.testrts.rtsclient.task.IndexStorageTask;
-import com.testrts.rtsclient.task.InteractTask;
-import com.testrts.rtsclient.task.MoveTask;
 import com.testrts.rtsclient.task.RtsTask;
 import com.testrts.rtsclient.task.TaskQueue;
 import com.testrts.rtsclient.util.Messages;
 import com.testrts.rtsclient.util.MouseRay;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.ChatScreen;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
-import net.minecraft.client.gui.tooltip.Tooltip;
-import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -41,7 +35,9 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.BlockItem;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
+import net.minecraft.state.property.Property;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
@@ -61,28 +57,20 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * The RTS command screen. It sits over the world (no background, no pause), gives the player a
- * cursor, and turns clicks into orders for the task queue.
+ * The RTS command screen: sits over the world (no background, no pause), gives the player a
+ * cursor, and turns clicks into orders. Layout and input live here; what clicks do lives in
+ * {@link WorldActions}.
  */
 public final class RtsScreen extends Screen {
     // Layout
-    private static final int TOP_H = 22;
-    private static final int LEFT_W = 104;
-    private static final int RIGHT_W = 156;
+    private static final int TOP_H = 24;
+    private static final int LEFT_W = 116;
+    private static final int RIGHT_W = 164;
     private static final int SLOT = 18;
     private static final int GRID_ROWS = 3;
     private static final int PAD = 4;
-
-    // Colours (ARGB)
-    private static final int PANEL = 0xB0101418;
-    private static final int PANEL_EDGE = 0xFF2A323C;
-    private static final int SLOT_BG = 0x60FFFFFF;
-    private static final int SLOT_HOVER = 0x90FFFFFF;
-    private static final int ACCENT = 0xFF4FC3F7;
-    private static final int GOLD = 0xFFFFC107;
-    private static final int TEXT = 0xFFE0E6EE;
-    private static final int TEXT_DIM = 0xFF8A96A3;
-
+    private static final int ROW = 15;
+    private static final int CARD_H = 26;
     private static final int DRAG_THRESHOLD = 3;
 
     private enum Tab { ALL, INVENTORY, STORAGE }
@@ -95,6 +83,7 @@ public final class RtsScreen extends Screen {
 
     private final RtsController controller;
     private final BuildSession session;
+    private WorldActions actions;
 
     private TextFieldWidget search;
     private String searchText = "";
@@ -104,14 +93,14 @@ public final class RtsScreen extends Screen {
     private int gridScroll;
     private int taskScroll;
 
-    private record Highlight(int x, int y, int w, int h, java.util.function.BooleanSupplier active) {
-    }
-
-    private final List<Highlight> highlights = new ArrayList<>();
     private int leftPanelBottom = TOP_H;
-    private int heightLabelY = -1;
-    private int clipboardLabelY = -1;
-    private int savedLabelY = -1;
+    private final List<int[]> leftSections = new ArrayList<>();
+    private final List<String> leftSectionNames = new ArrayList<>();
+    private int heightRowY = -1;
+    private int clipboardInfoY = -1;
+    private int ordersTop;
+    private int ordersBottom;
+    private int storageTop;
     private List<Blueprint> blueprints = new ArrayList<>();
     private boolean blueprintsLoaded;
 
@@ -127,19 +116,18 @@ public final class RtsScreen extends Screen {
         this.session = controller.session();
     }
 
-    // ------------------------------------------------------------------ layout helpers
+    // ------------------------------------------------------------------ layout
 
-    private int bottomH() {
-        // pinned row + header row + grid
-        return PAD + SLOT + PAD + 14 + PAD + GRID_ROWS * SLOT + PAD;
+    private int dockH() {
+        return PAD + SLOT + 4 + 14 + 4 + GRID_ROWS * SLOT + PAD;
     }
 
     private int bottomY() {
-        return this.height - bottomH();
+        return this.height - dockH();
     }
 
     private int gridCols() {
-        return Math.max(1, (this.width - 2 * PAD) / SLOT);
+        return Math.max(1, (this.width - 2 * PAD - 4) / SLOT);
     }
 
     private int pinnedY() {
@@ -147,291 +135,330 @@ public final class RtsScreen extends Screen {
     }
 
     private int headerY() {
-        return pinnedY() + SLOT + PAD;
+        return pinnedY() + SLOT + 4;
     }
 
     private int gridY() {
-        return headerY() + 14 + PAD;
+        return headerY() + 14 + 4;
+    }
+
+    private int gridX() {
+        return PAD + 2;
     }
 
     private int rightX() {
         return this.width - RIGHT_W - PAD;
     }
 
+    private int rightBottom() {
+        return Math.min(bottomY() - PAD - 14, TOP_H + PAD + 46 + 5 * (CARD_H + 2) + 70);
+    }
+
+    private boolean hasLeftPanel() {
+        ToolMode t = this.session.tool;
+        return t.usesShapes() || t == ToolMode.BLUEPRINT || t == ToolMode.TERRAIN;
+    }
+
     private boolean overUi(double mx, double my) {
         if (my < TOP_H || my >= bottomY()) {
             return true;
         }
-        if (hasLeftPanel() && mx < LEFT_W + PAD && my < this.leftPanelBottom) {
+        if (hasLeftPanel() && mx < PAD + LEFT_W && my < this.leftPanelBottom) {
             return true;
         }
-        return mx >= rightX() && my < TOP_H + rightPanelH();
-    }
-
-    private boolean hasLeftPanel() {
-        return this.session.tool.usesShapes() || this.session.tool == ToolMode.BLUEPRINT;
-    }
-
-    private int rightPanelH() {
-        return Math.min(bottomY() - TOP_H - PAD, 54 + 5 * 22 + 70);
+        return mx >= rightX() && my < rightBottom();
     }
 
     // ------------------------------------------------------------------ widgets
 
+    private RtsButton add(RtsButton button) {
+        return addDrawableChild(button);
+    }
+
+    private RtsButton button(String label, @Nullable String tip, int x, int y, int w, int h, Runnable action) {
+        return add(new RtsButton(x, y, w, h, label, action).tip(tip));
+    }
+
+    private static ItemStack toolIcon(ToolMode tool) {
+        return new ItemStack(switch (tool) {
+            case BUILD -> Items.BRICKS;
+            case DESTROY -> Items.IRON_PICKAXE;
+            case INTERACT -> Items.LEVER;
+            case LINK -> Items.CHEST;
+            case BLUEPRINT -> Items.MAP;
+            case TERRAIN -> Items.GRASS_BLOCK;
+            case MEASURE -> Items.SPYGLASS;
+        });
+    }
+
+    private static Glyphs shapeGlyph(BuildShape shape) {
+        return switch (shape) {
+            case BLOCK -> Glyphs.BLOCK;
+            case LINE -> Glyphs.LINE;
+            case FLOOR -> Glyphs.FLOOR;
+            case WALL -> Glyphs.WALL;
+            case BOX -> Glyphs.BOX;
+            case CIRCLE -> Glyphs.CIRCLE;
+            case CYLINDER -> Glyphs.CYLINDER;
+            case SPHERE -> Glyphs.SPHERE;
+            case VEIN -> Glyphs.VEIN;
+            case HOLE -> Glyphs.HOLE;
+        };
+    }
+
     @Override
     protected void init() {
         this.lastFrameNanos = System.nanoTime();
+        this.actions = new WorldActions(this.client, this.controller);
 
+        // Top bar: tools with icons (icons only when the window is narrow).
+        int toolsRoom = this.width - 2 * PAD - 26 - 120;
+        int fullWidth = 0;
+        for (ToolMode tool : ToolMode.values()) {
+            fullWidth += this.textRenderer.getWidth(tool.label()) + 26 + 2;
+        }
+        boolean compact = fullWidth > toolsRoom;
         int x = PAD;
         for (ToolMode tool : ToolMode.values()) {
-            int w = this.textRenderer.getWidth(tool.label()) + 12;
-            addDrawableChild(ButtonWidget.builder(Text.literal(tool.label()), b -> selectTool(tool))
-                    .dimensions(x, 2, w, 18)
-                    .tooltip(Tooltip.of(Text.literal(tool.description() + " [" + (tool.ordinal() + 1) + "]")))
-                    .build());
+            int w = compact ? 22 : this.textRenderer.getWidth(tool.label()) + 26;
+            RtsButton b = button(tool.label(), tool.label() + " - " + tool.description() + " [" + (tool.ordinal() + 1) + "]",
+                    x, 2, w, 20, () -> selectTool(tool)).icon(toolIcon(tool)).selected(() -> this.session.tool == tool);
+            if (compact) {
+                b.iconOnly();
+            }
             x += w + 2;
         }
+        button("Settings", "Settings: engine, layers, previews, camera...", this.width - PAD - 20, 2, 20, 20,
+                () -> this.client.setScreen(new RtsSettingsScreen(this))).glyph(Glyphs.GEAR, Theme.TEXT).iconOnly();
 
-        button("Settings", "Engine, layers, preview size, camera...", this.width - PAD - 52, 2, 52, 18,
-                () -> this.client.setScreen(new RtsSettingsScreen(this)));
-
-        int rx = rightX();
-        // Command buttons sit at the top of the right panel so the top bar never overflows.
-        int bx = rx + PAD;
-        int bw = RIGHT_W - 2 * PAD;
-        int half0 = (bw - 2) / 2;
-        addDrawableChild(ButtonWidget.builder(engineLabel(), b -> {
-                    Engine.cycle();
-                    b.setMessage(engineLabel());
-                    Messages.info("Engine: " + Engine.configured().label() + " (using " + Engine.activeName() + ")");
-                })
-                .dimensions(bx, TOP_H + 4, bw - 40, 16)
-                .tooltip(Tooltip.of(Text.literal("Who walks, builds and mines. Auto = Baritone when installed, otherwise the built-in engine. "
-                        + "Switch to Built-in if Baritone misbehaves.")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Undo"), b -> {
-                    if (this.client.world != null) {
-                        UndoHistory.undoLast(this.client.world);
-                    }
-                })
-                .dimensions(bx + bw - 38, TOP_H + 4, 38, 16)
-                .tooltip(Tooltip.of(Text.literal("Put back what your last order changed [Ctrl+Z]")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Store inv"), b -> queue(new DepositTask()))
-                .dimensions(bx, TOP_H + 22, half0, 16)
-                .tooltip(Tooltip.of(Text.literal("Walk to linked storage and put away everything outside your hotbar (pinned items stay)")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Stop all"), b -> {
-                    TaskQueue.get().clear(this.client);
-                    Messages.info("All orders cancelled");
-                })
-                .dimensions(bx + half0 + 2, TOP_H + 22, half0, 16)
-                .tooltip(Tooltip.of(Text.literal("Cancel every order and stop walking/building")))
-                .build());
-
+        initRightPanel();
         initLeftPanel();
-
-        // Storage actions live at the bottom of the right panel.
-        int sy = TOP_H + rightPanelH() - 4 - 2 * 18;
-        int half = (RIGHT_W - 2 * PAD - 2) / 2;
-        addDrawableChild(ButtonWidget.builder(Text.literal("Scan nearby"), b -> scanNearby())
-                .dimensions(rx + PAD, sy, half, 16)
-                .tooltip(Tooltip.of(Text.literal("Link every chest, barrel and shulker box within " + RtsConfig.get().scanRadius + " blocks, then open the new ones to read what they hold")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Index new"), b -> indexStorage(true))
-                .dimensions(rx + PAD + half + 2, sy, half, 16)
-                .tooltip(Tooltip.of(Text.literal("Open linked containers we haven't seen inside yet, to learn what they hold")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Re-index all"), b -> indexStorage(false))
-                .dimensions(rx + PAD, sy + 18, half, 16)
-                .tooltip(Tooltip.of(Text.literal("Visit every linked container again to refresh counts")))
-                .build());
-        addDrawableChild(ButtonWidget.builder(Text.literal("Unlink all"), b -> {
-                    StorageManager.get().unlinkAll();
-                    Messages.info("Storage links cleared");
-                })
-                .dimensions(rx + PAD + half + 2, sy + 18, half, 16)
-                .build());
-
-        int searchW = Math.min(160, this.width / 3);
-        this.search = new TextFieldWidget(this.textRenderer, PAD + 1, headerY() + 1, searchW, 12, Text.literal("Search"));
-        this.search.setMaxLength(50);
-        // init() runs again every time the screen comes back (after a chest, chat...), keep the query.
-        this.search.setText(this.searchText);
-        this.search.setPlaceholder(Text.literal("Search items...").formatted(Formatting.DARK_GRAY));
-        this.search.setChangedListener(s -> {
-            this.searchText = s;
-            this.gridScroll = 0;
-            refreshPalette();
-        });
-        addDrawableChild(this.search);
-
-        int tx = PAD + searchW + 6;
-        for (Tab t : Tab.values()) {
-            String label = switch (t) {
-                case ALL -> "All";
-                case INVENTORY -> "Inventory";
-                case STORAGE -> "Storage";
-            };
-            int w = this.textRenderer.getWidth(label) + 10;
-            addDrawableChild(ButtonWidget.builder(Text.literal(label), b -> {
-                        this.tab = t;
-                        this.gridScroll = 0;
-                        refreshPalette();
-                    })
-                    .dimensions(tx, headerY(), w, 14)
-                    .build());
-            tx += w + 2;
-        }
+        initDock();
         refreshPalette();
     }
 
-    private ButtonWidget button(String label, String tip, int x, int y, int w, int h, Runnable action) {
-        ButtonWidget.Builder b = ButtonWidget.builder(Text.literal(label), btn -> action.run()).dimensions(x, y, w, h);
-        if (tip != null) {
-            b.tooltip(Tooltip.of(Text.literal(tip)));
-        }
-        return addDrawableChild(b.build());
+    private void initRightPanel() {
+        int rx = rightX() + PAD;
+        int bw = RIGHT_W - 2 * PAD;
+        int half = (bw - 2) / 2;
+        int y = TOP_H + PAD + Theme.HEADER_H + 3;
+        button("Engine", "Who walks, builds and mines. Auto = Baritone when installed, otherwise the built-in engine.",
+                rx, y, bw - 22, 16, () -> {
+                    Engine.cycle();
+                    Messages.info("Engine: " + Engine.configured().label() + " (using " + Engine.activeName() + ")");
+                }).dynamic(() -> "Engine: " + Engine.configured().label()).left();
+        button("Undo", "Put back what your last order changed [Ctrl+Z]", rx + bw - 20, y, 20, 16, () -> {
+            if (this.client.world != null) {
+                UndoHistory.undoLast(this.client.world);
+            }
+        }).glyph(Glyphs.UNDO, Theme.TEXT).iconOnly();
+        y += 18;
+        button("Store inv", "Walk to linked storage and put away everything outside your hotbar (pinned items stay)",
+                rx, y, half, 16, () -> WorldActions.queue(new DepositTask())).icon(new ItemStack(Items.CHEST));
+        button("Stop all", "Cancel every order and stop walking/building", rx + half + 2, y, half, 16, () -> {
+            TaskQueue.get().clear(this.client);
+            Messages.info("All orders cancelled");
+        }).glyph(Glyphs.STOP, Theme.BAD);
+        y += 20;
+        this.ordersTop = y + 11;
+
+        int bottom = rightBottom();
+        int sy = bottom - PAD - 2 * 18;
+        this.storageTop = sy - 24;
+        this.ordersBottom = this.storageTop - 4;
+        button("Scan nearby", "Link every chest, barrel and shulker box within " + RtsConfig.get().scanRadius
+                + " blocks, then open the new ones to read what they hold", rx, sy, half, 16, () -> this.actions.scanNearby());
+        button("Index new", "Open linked containers we haven't seen inside yet", rx + half + 2, sy, half, 16,
+                () -> this.actions.indexStorage(true));
+        button("Re-index", "Visit every linked container again to refresh counts", rx, sy + 18, half, 16,
+                () -> this.actions.indexStorage(false));
+        button("Unlink all", "Forget every storage link", rx + half + 2, sy + 18, half, 16, () -> {
+            StorageManager.get().unlinkAll();
+            Messages.info("Storage links cleared");
+        });
+    }
+
+    private void section(int y, String name) {
+        this.leftSections.add(new int[]{y});
+        this.leftSectionNames.add(name);
     }
 
     private void initLeftPanel() {
-        this.highlights.clear();
-        this.heightLabelY = -1;
-        this.clipboardLabelY = -1;
-        this.savedLabelY = -1;
-        int y = TOP_H + PAD;
-        int full = LEFT_W - 4;
-        int col = (full - 2) / 2;
+        this.leftSections.clear();
+        this.leftSectionNames.clear();
+        this.heightRowY = -1;
+        this.clipboardInfoY = -1;
         BuildSession s = this.session;
-        if (s.tool.usesShapes()) {
-            BuildShape[] shapes = BuildShape.values();
-            for (int i = 0; i < shapes.length; i++) {
-                BuildShape shape = shapes[i];
-                int bx = PAD + (i % 2) * (col + 2);
-                int by = y + (i / 2) * 16;
-                button(shape.label(), shape.description() + " [ and ] cycle", bx, by, col, 15, () -> {
-                    s.shape = shape;
-                    s.clearSelection();
-                });
-                this.highlights.add(new Highlight(bx, by, col, 15, () -> s.shape == shape));
-            }
-            y += ((shapes.length + 1) / 2) * 16 + 2;
-            if (s.tool == ToolMode.BUILD) {
-                button("Mode: " + s.mode.label(), s.mode.description() + " [M]", PAD, y, full, 16, () -> {
-                    s.mode = s.mode.next();
-                    s.clearSelection();
-                    clearAndInit();
-                });
-                y += 18;
-            }
-            button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", PAD, y, full, 16,
-                    () -> s.hollow = !s.hollow);
-            this.highlights.add(new Highlight(PAD, y, full, 16, () -> s.hollow));
-            y += 18;
-            button("-", "Lower height", PAD, y, 16, 16, () -> s.adjustHeight(-1));
-            button("+", "Height for walls, boxes and cylinders. Negative digs down. [Ctrl+scroll]",
-                    PAD + full - 16, y, 16, 16, () -> s.adjustHeight(1));
-            this.heightLabelY = y;
-            y += 18;
-            if (s.tool == ToolMode.BUILD) {
-                button("Rotate", "Turn directional blocks (stairs, logs, furnaces) [R]", PAD, y, full, 16, s.orientation::cycle);
-                y += 18;
-                y = initStatePicker(y, full);
-            }
-        } else if (s.tool == ToolMode.BLUEPRINT) {
-            if (!this.blueprintsLoaded) {
-                this.blueprints = Blueprint.loadAll();
-                this.blueprintsLoaded = true;
-            }
-            button("New copy", "Select a region with two clicks to copy it", PAD, y, full, 16, () -> {
-                s.clipboard = null;
-                s.pasteAnchor = null;
-                s.clearSelection();
-                clearAndInit();
-            });
-            y += 18;
-            button("Rotate", "Turn the blueprint 90 degrees [R]", PAD, y, full, 16, () -> s.pasteTurns++);
-            y += 18;
-            button("Load schematic...", "Litematica .litematic, WorldEdit .schem or structure .nbt from .minecraft/schematics",
-                    PAD, y, full, 16, () -> this.client.setScreen(new SchematicBrowserScreen(this)));
-            y += 18;
-            button("Air: " + (s.pasteClearsAir ? "clear" : "keep"),
-                    "clear: also mine whatever is in the blueprint's empty spaces, for an exact copy. keep: only add blocks.",
-                    PAD, y, full, 16, () -> {
-                        s.pasteClearsAir = !s.pasteClearsAir;
-                        clearAndInit();
-                    });
-            y += 18;
-            this.clipboardLabelY = y + 2;
-            y += 24;
-            this.savedLabelY = y;
-            y += 11;
-            int shown = 0;
-            for (Blueprint bp : this.blueprints) {
-                if (shown++ >= 10) {
-                    break;
-                }
-                button(bp.name(), bp.size() + ", " + bp.blockCount() + " blocks. Click to paste, Shift+click to delete.",
-                        PAD, y, full, 14, () -> {
-                            if (hasShiftDown()) {
-                                bp.delete();
-                                if (s.clipboard == bp) {
-                                    s.clipboard = null;
-                                }
-                                this.blueprints = Blueprint.loadAll();
-                                Messages.info("Deleted " + bp.name());
-                            } else {
-                                s.clipboard = bp;
-                                s.pasteTurns = 0;
-                                s.pasteAnchor = null;
+        int x = PAD + 4;
+        int full = LEFT_W - 8;
+        int col = (full - 2) / 2;
+        int y = TOP_H + PAD + Theme.HEADER_H + 4;
+        switch (s.tool) {
+            case BUILD, DESTROY -> {
+                BuildShape[] shapes = BuildShape.values();
+                for (int i = 0; i < shapes.length; i++) {
+                    BuildShape shape = shapes[i];
+                    button(shape.label(), shape.description() + " [ and ] cycle", x + (i % 2) * (col + 2), y + (i / 2) * ROW, col, ROW - 1,
+                            () -> {
+                                s.shape = shape;
                                 s.clearSelection();
-                            }
-                            clearAndInit();
-                        });
-                this.highlights.add(new Highlight(PAD, y, full, 14, () -> s.clipboard == bp));
-                y += 15;
+                            }).glyph(shapeGlyph(shape), Theme.TEXT_DIM).selected(() -> s.shape == shape);
+                }
+                y += ((shapes.length + 1) / 2) * ROW + 4;
+                section(y, "OPTIONS");
+                y += 11;
+                if (s.tool == ToolMode.BUILD) {
+                    button("Mode", s.mode.description() + " [M]", x, y, full, ROW - 1, () -> {
+                        s.mode = s.mode.next();
+                        s.clearSelection();
+                        clearAndInit();
+                    }).dynamic(() -> "Mode: " + s.mode.label()).left();
+                    y += ROW;
+                }
+                button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, full, ROW - 1,
+                        () -> s.hollow = !s.hollow).selected(() -> s.hollow).dynamic(() -> s.hollow ? "Hollow: on" : "Hollow: off").left();
+                y += ROW;
+                button("-", "Lower", x, y, 16, ROW - 1, () -> s.adjustHeight(-1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                button("+", "Height for walls, boxes and cylinders. Negative digs down. [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
+                        () -> s.adjustHeight(1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                this.heightRowY = y;
+                y += ROW;
+                if (s.tool == ToolMode.BUILD) {
+                    button("Rotate", "Turn directional blocks (stairs, logs, furnaces) [R]", x, y, full, ROW - 1, s.orientation::cycle)
+                            .glyph(Glyphs.ROTATE, Theme.TEXT).left();
+                    y += ROW + 3;
+                    y = initStatePicker(x, y, full);
+                }
             }
-            if (this.blueprints.isEmpty()) {
-                y += 10;
+            case BLUEPRINT -> {
+                if (!this.blueprintsLoaded) {
+                    this.blueprints = Blueprint.loadAll();
+                    this.blueprintsLoaded = true;
+                }
+                button("Copy", "Select a region with two clicks to copy it", x, y, col, ROW - 1, () -> {
+                    s.cutOnCopy = false;
+                    s.clipboard = null;
+                    s.pasteAnchor = null;
+                    s.clearSelection();
+                }).selected(() -> s.clipboard == null && !s.cutOnCopy);
+                button("Cut", "Copy a region and mine the original: move a build", x + col + 2, y, col, ROW - 1, () -> {
+                    s.cutOnCopy = true;
+                    s.clipboard = null;
+                    s.pasteAnchor = null;
+                    s.clearSelection();
+                }).selected(() -> s.clipboard == null && s.cutOnCopy);
+                y += ROW;
+                button("Rotate", "Turn the blueprint 90 degrees [R]", x, y, col, ROW - 1, () -> s.pasteTurns++)
+                        .glyph(Glyphs.ROTATE, Theme.TEXT);
+                button("Mirror", "Flip the blueprint left-right [N]", x + col + 2, y, col, ROW - 1, () -> s.pasteMirror = !s.pasteMirror)
+                        .glyph(Glyphs.MIRROR, Theme.TEXT).selected(() -> s.pasteMirror);
+                y += ROW;
+                button("Air", "clear: also mine whatever is in the blueprint's empty spaces, for an exact copy. keep: only add blocks.",
+                        x, y, full, ROW - 1, () -> s.pasteClearsAir = !s.pasteClearsAir)
+                        .dynamic(() -> s.pasteClearsAir ? "Air: clear" : "Air: keep").left();
+                y += ROW;
+                button("Load schematic...", "Litematica .litematic, WorldEdit .schem or structure .nbt from .minecraft/schematics",
+                        x, y, full, ROW - 1, () -> this.client.setScreen(new SchematicBrowserScreen(this))).glyph(Glyphs.FOLDER, Theme.GOLD).left();
+                y += ROW + 3;
+                this.clipboardInfoY = y;
+                y += 22;
+                section(y, "SAVED");
+                y += 11;
+                int shown = 0;
+                for (Blueprint bp : this.blueprints) {
+                    if (shown++ >= 8 || y + ROW > bottomY() - 20) {
+                        break;
+                    }
+                    button(bp.name(), bp.size() + ", " + bp.blockCount() + " blocks. Click to place, Shift+click to delete.",
+                            x, y, full, ROW - 1, () -> {
+                                if (hasShiftDown()) {
+                                    bp.delete();
+                                    if (s.clipboard == bp) {
+                                        s.clipboard = null;
+                                    }
+                                    this.blueprints = Blueprint.loadAll();
+                                    Messages.info("Deleted " + bp.name());
+                                    clearAndInit();
+                                } else {
+                                    s.clipboard = bp;
+                                    s.pasteTurns = 0;
+                                    s.pasteAnchor = null;
+                                    s.clearSelection();
+                                }
+                            }).selected(() -> s.clipboard == bp).left();
+                    y += ROW;
+                }
+                if (this.blueprints.isEmpty()) {
+                    y += 10;
+                }
+            }
+            case TERRAIN -> {
+                for (TerrainMode mode : TerrainMode.values()) {
+                    int i = mode.ordinal();
+                    button(mode.label(), mode.description() + " [M]", x + (i % 2) * (col + 2), y, col, ROW + 3, () -> {
+                        s.terrainMode = mode;
+                        s.clearSelection();
+                        clearAndInit();
+                    }).selected(() -> s.terrainMode == mode)
+                            .icon(new ItemStack(mode == TerrainMode.FLATTEN ? Items.IRON_SHOVEL : Items.TORCH));
+                }
+                y += ROW + 7;
+                if (s.terrainMode == TerrainMode.FLATTEN) {
+                    section(y, "MINE ABOVE");
+                    y += 11;
+                    button("-", "Clear less above the level", x, y, 16, ROW - 1,
+                            () -> s.terrainClearHeight = Math.max(1, s.terrainClearHeight - 4)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                    button("+", "How far above the level to mine [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
+                            () -> s.terrainClearHeight = Math.min(64, s.terrainClearHeight + 4)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    this.heightRowY = y;
+                    y += ROW + 2;
+                }
+                this.clipboardInfoY = y;
+                y += 22;
+            }
+            default -> {
             }
         }
         this.leftPanelBottom = y + PAD;
     }
 
     /** One button per block-state property of the brush (slab half, stair shape...), cycling through values. */
-    private int initStatePicker(int y, int width) {
+    private int initStatePicker(int x, int y, int width) {
         BlockState state = this.session.brushState(this.controller.camera().yaw());
         if (state == null) {
             return y;
         }
+        boolean any = false;
         int shown = 0;
-        for (net.minecraft.state.property.Property<?> property : state.getProperties()) {
+        for (Property<?> property : state.getProperties()) {
             String name = property.getName();
             if (name.equals("waterlogged") || name.equals("powered") || name.equals("distance") || name.equals("persistent")) {
                 continue;
             }
-            if (shown++ >= 6) {
+            if (shown++ >= 6 || y + ROW > bottomY() - 20) {
                 break;
             }
-            String value = this.session.stateOverrides.getOrDefault(name, "auto");
-            button(name + ": " + value, "Click to change this block property (auto = decided by where you place it)",
-                    PAD, y, width, 14, () -> {
-                        cycleProperty(property);
-                        clearAndInit();
-                    });
-            y += 15;
+            if (!any) {
+                section(y, "BLOCK STATE");
+                y += 11;
+                any = true;
+            }
+            button(name, "Click to change this block property (auto = decided by where you place it)",
+                    x, y, width, ROW - 1, () -> cycleProperty(property))
+                    .dynamic(() -> name + ": " + this.session.stateOverrides.getOrDefault(name, "auto")).left();
+            y += ROW;
         }
         if (!this.session.stateOverrides.isEmpty()) {
-            button("Reset state", "Back to automatic block states", PAD, y, width, 14, () -> {
+            button("Reset state", "Back to automatic block states", x, y, width, ROW - 1, () -> {
                 this.session.stateOverrides.clear();
                 clearAndInit();
             });
-            y += 15;
+            y += ROW;
         }
         return y;
     }
 
-    private <T extends Comparable<T>> void cycleProperty(net.minecraft.state.property.Property<T> property) {
+    private <T extends Comparable<T>> void cycleProperty(Property<T> property) {
         List<String> values = new ArrayList<>();
         values.add("auto");
         for (T v : property.getValues()) {
@@ -446,8 +473,36 @@ public final class RtsScreen extends Screen {
         }
     }
 
-    private static Text engineLabel() {
-        return Text.literal("Engine: " + Engine.configured().label());
+    private void initDock() {
+        int searchW = Math.min(150, this.width / 3);
+        this.search = new TextFieldWidget(this.textRenderer, PAD + 6, headerY() + 3, searchW - 8, 10, Text.literal("Search"));
+        this.search.setMaxLength(50);
+        this.search.setDrawsBackground(false);
+        // init() runs again every time the screen comes back (after a chest, chat...), keep the query.
+        this.search.setText(this.searchText);
+        this.search.setPlaceholder(Text.literal("Search items...  [F]").formatted(Formatting.DARK_GRAY));
+        this.search.setChangedListener(text -> {
+            this.searchText = text;
+            this.gridScroll = 0;
+            refreshPalette();
+        });
+        addDrawableChild(this.search);
+
+        int tx = PAD + searchW + 6;
+        for (Tab t : Tab.values()) {
+            String label = switch (t) {
+                case ALL -> "All";
+                case INVENTORY -> "Inventory";
+                case STORAGE -> "Storage";
+            };
+            int w = this.textRenderer.getWidth(label) + 12;
+            button(label, null, tx, headerY(), w, 14, () -> {
+                this.tab = t;
+                this.gridScroll = 0;
+                refreshPalette();
+            }).selected(() -> this.tab == t);
+            tx += w + 2;
+        }
     }
 
     @Override
@@ -460,246 +515,27 @@ public final class RtsScreen extends Screen {
         this.controller.disable(this.client);
     }
 
-    // ------------------------------------------------------------------ actions
+    // ------------------------------------------------------------------ state changes
 
     private void selectTool(ToolMode tool) {
         if (this.session.tool != tool) {
             this.session.tool = tool;
             this.session.clearSelection();
-            // Shape panel buttons only exist for shape tools.
+            this.session.pasteAnchor = null;
             clearAndInit();
         }
     }
 
-    private void queue(RtsTask task) {
-        TaskQueue.get().add(task);
-        if (TaskQueue.get().size() > 1) {
-            Messages.info(task.label() + " queued (" + (TaskQueue.get().size() - 1) + " ahead)");
+    private void selectBrush(Item item) {
+        if (this.session.brush.getItem() != item) {
+            // Picked properties (slab half...) belong to the old block.
+            this.session.stateOverrides.clear();
         }
-    }
-
-    /** Link nearby containers, then queue a walk to open each unread one so the item panel fills up. */
-    private void scanNearby() {
-        if (this.client.world == null || this.client.player == null) {
-            return;
-        }
-        StorageManager.get().pruneMissing(this.client.world);
-        int added = StorageManager.get().scanNearby(this.client.world, this.client.player.getBlockPos(), RtsConfig.get().scanRadius);
-        int unread = StorageManager.get().unindexed().size();
-        if (unread == 0) {
-            Messages.info(added == 0 ? "No new containers nearby" : "Linked " + added + " container(s)");
-            return;
-        }
-        Messages.info("Linked " + added + " container(s), reading " + unread + "...");
-        boolean alreadyQueued = TaskQueue.get().snapshot().stream().anyMatch(t -> t instanceof IndexStorageTask);
-        if (!alreadyQueued) {
-            queue(new IndexStorageTask(this.client.player.getBlockPos(), true));
-        }
-    }
-
-    private void indexStorage(boolean onlyNew) {
-        if (this.client.player == null) {
-            return;
-        }
-        if (StorageManager.get().linked().isEmpty()) {
-            Messages.warn("No linked storage. Use Link storage mode or Scan nearby first");
-            return;
-        }
-        IndexStorageTask task = new IndexStorageTask(this.client.player.getBlockPos(), onlyNew);
-        if (onlyNew && StorageManager.get().unindexed().isEmpty()) {
-            Messages.info("Every linked container is already indexed");
-            return;
-        }
-        queue(task);
-    }
-
-    private void worldPrimary(double mx, double my) {
-        BlockHitResult hit = pick(mx, my);
-        if (hit == null || this.client.world == null) {
-            return;
-        }
-        switch (this.session.tool) {
-            case BUILD -> {
-                if (!(this.session.brush.getItem() instanceof BlockItem)) {
-                    Messages.warn("Pick a block from the bar below first (or middle-click a block in the world)");
-                    return;
-                }
-                boolean onExisting = this.session.shape == BuildShape.VEIN || this.session.mode.targetsExisting();
-                if (this.session.mode == BuildMode.REPLACE_TYPE && this.session.anchorA == null) {
-                    this.session.replaceTarget = this.client.world.getBlockState(hit.getBlockPos()).getBlock();
-                    Messages.info("Replacing " + this.session.replaceTarget.getName().getString());
-                }
-                shapeClick(onExisting ? hit.getBlockPos() : WorldOverlay.targetFor(this.session, hit));
-            }
-            case DESTROY -> shapeClick(hit.getBlockPos());
-            case INTERACT -> {
-                BlockState state = this.client.world.getBlockState(hit.getBlockPos());
-                queue(new InteractTask(hit, state.getBlock().getName().getString()));
-            }
-            case LINK -> {
-                if (!StorageManager.isContainer(this.client.world, hit.getBlockPos())) {
-                    Messages.warn("That's not a container");
-                    return;
-                }
-                boolean linked = StorageManager.get().toggle(this.client.world, hit.getBlockPos());
-                Messages.info((linked ? "Linked " : "Unlinked ") + hit.getBlockPos().toShortString());
-            }
-            case BLUEPRINT -> blueprintClick(hit);
-        }
-    }
-
-    private void blueprintClick(BlockHitResult hit) {
-        BuildSession s = this.session;
-        if (s.clipboard != null) {
-            if (s.pasteAnchor == null) {
-                // First click pins it; arrows nudge it; click again or Enter builds it.
-                s.pasteAnchor = s.clipboard.originFor(WorldOverlay.targetFor(s, hit), s.pasteTurns);
-                Messages.info("Placed - arrows to nudge, R to rotate, click or Enter to build, X to move it again");
-            } else {
-                confirmPaste();
-            }
-            return;
-        }
-        // Copy: two corners.
-        BlockPos p = hit.getBlockPos();
-        if (s.anchorA == null) {
-            s.anchorA = p;
-            Messages.info("Copy: first corner set - click the opposite corner");
-            return;
-        }
-        BlockPos a = s.anchorA;
-        s.clearSelection();
-        String name = "Blueprint " + (this.blueprints.size() + 1);
-        Blueprint bp = Blueprint.capture(this.client.world, a, p, name, RtsConfig.get().maxShapeBlocks);
-        if (bp.blockCount() == 0) {
-            Messages.warn("Nothing to copy there");
-            return;
-        }
-        bp.save();
-        s.clipboard = bp;
-        s.pasteTurns = 0;
-        this.blueprints = Blueprint.loadAll();
-        Messages.success("Copied " + bp.blockCount() + " blocks (" + bp.size() + ") as \"" + name + "\" - click to paste, R to rotate");
-        clearAndInit();
-    }
-
-    private void confirmPaste() {
-        BuildSession s = this.session;
-        if (s.clipboard == null || s.pasteAnchor == null || this.client.world == null) {
-            return;
-        }
-        Blueprint bp = s.clipboard;
-        Map<BlockPos, BlockState> build = new LinkedHashMap<>();
-        for (Map.Entry<BlockPos, BlockState> e : bp.placed(s.pasteAnchor, s.pasteTurns).entrySet()) {
-            if (this.client.world.getBlockState(e.getKey()).getBlock() != e.getValue().getBlock()) {
-                build.put(e.getKey(), e.getValue());
-            }
-        }
-        Map<BlockPos, BlockState> clear = new LinkedHashMap<>();
-        if (s.pasteClearsAir) {
-            if (bp.volume() > RtsConfig.get().maxShapeBlocks) {
-                Messages.warn("Too big to clear the air inside; pasting blocks only");
-            } else {
-                for (BlockPos p : bp.placedAir(s.pasteAnchor, s.pasteTurns)) {
-                    BlockState now = this.client.world.getBlockState(p);
-                    if (!now.isAir() && !(now.getBlock() instanceof net.minecraft.block.FluidBlock)
-                            && now.getHardness(this.client.world, p) >= 0) {
-                        clear.put(p, Blocks.AIR.getDefaultState());
-                    }
-                }
-            }
-        }
-        s.pasteAnchor = null;
-        if (build.isEmpty() && clear.isEmpty()) {
-            Messages.info("Already built there");
-            return;
-        }
-        Map<BlockPos, BlockState> all = new LinkedHashMap<>(clear);
-        all.putAll(build);
-        pushUndo("Paste " + bp.name(), all);
-        if (!clear.isEmpty()) {
-            queue(new BuildTask("Clear for " + bp.name() + " (" + clear.size() + ")", clear, true));
-        }
-        if (!build.isEmpty()) {
-            queue(new BuildTask("Build " + bp.name() + " (" + build.size() + ")", build, false));
-        }
-    }
-
-    private void shapeClick(BlockPos target) {
-        if (this.session.shape.singleClick()) {
-            this.session.anchorA = target;
-            this.session.anchorB = target;
-            confirmOrder();
-            return;
-        }
-        if (this.session.anchorA == null) {
-            this.session.anchorA = target;
-            Messages.info("First point set - click the second point");
-        } else if (this.session.anchorB == null) {
-            this.session.anchorB = target;
-            Messages.info("Click again or press Enter to confirm, X to cancel, arrows to nudge");
-        } else {
-            confirmOrder();
-        }
-    }
-
-    private void confirmOrder() {
-        if (!this.session.hasPendingOrder() || this.client.world == null) {
-            return;
-        }
-        BuildSession s = this.session;
-        OrderPlanner.Request request = OrderPlanner.request(s, s.anchorA, s.anchorB, this.controller.camera().yaw(),
-                RtsConfig.get().maxShapeBlocks);
-        OrderPlanner.Plan plan = OrderPlanner.plan(this.client.world, request);
-        if (plan.truncated()) {
-            Messages.error("Shape is larger than " + RtsConfig.get().maxShapeBlocks + " blocks (raise it in Settings)");
-            return;
-        }
-        if (s.shape == BuildShape.HOLE && plan.shapeSize() == 0) {
-            Messages.warn("That hole isn't enclosed (or is too big) - nothing to fill");
-            s.clearSelection();
-            return;
-        }
-        boolean clearing = s.tool == ToolMode.DESTROY;
-        String label = OrderPlanner.label(request, plan.changes().size());
-        s.clearSelection();
-        if (plan.changes().isEmpty()) {
-            Messages.info("Nothing to do there");
-            return;
-        }
-        pushUndo(label, plan.changes());
-        queue(new BuildTask(label, plan.changes(), clearing));
-    }
-
-    private void pushUndo(String label, Map<BlockPos, BlockState> order) {
-        Map<BlockPos, BlockState> before = new LinkedHashMap<>();
-        for (BlockPos p : order.keySet()) {
-            before.put(p, this.client.world.getBlockState(p));
-        }
-        UndoHistory.push(label, before);
-    }
-
-    private void moveTo(double mx, double my) {
-        BlockHitResult hit = pick(mx, my);
-        if (hit == null) {
-            return;
-        }
-        BlockPos feet = hit.getSide() == Direction.UP || hit.getSide() == Direction.DOWN
-                ? hit.getBlockPos().up()
-                : hit.getBlockPos().offset(hit.getSide());
-        queue(new MoveTask(feet));
-    }
-
-    private void pickBlock(double mx, double my) {
-        BlockHitResult hit = pick(mx, my);
-        if (hit == null || this.client.world == null) {
-            return;
-        }
-        Item item = this.client.world.getBlockState(hit.getBlockPos()).getBlock().asItem();
-        if (item instanceof BlockItem) {
-            selectBrush(item);
+        this.session.brush = new ItemStack(item);
+        if (item instanceof BlockItem && !this.session.tool.usesShapes() && this.session.tool != ToolMode.TERRAIN) {
             selectTool(ToolMode.BUILD);
-            Messages.info("Selected " + item.getName().getString());
+        } else {
+            clearAndInit();
         }
     }
 
@@ -718,8 +554,7 @@ public final class RtsScreen extends Screen {
         }
         Map<Item, Integer> inv = new HashMap<>();
         PlayerInventory pi = this.client.player.getInventory();
-        for (int i = 0; i < pi.main.size(); i++) {
-            ItemStack st = pi.main.get(i);
+        for (ItemStack st : pi.main) {
             if (!st.isEmpty()) {
                 inv.merge(st.getItem(), st.getCount(), Integer::sum);
             }
@@ -730,7 +565,6 @@ public final class RtsScreen extends Screen {
             }
         }
         Map<Item, Integer> stored = StorageManager.get().totals();
-
         Map<Item, PaletteEntry> entries = new LinkedHashMap<>();
         if (this.tab != Tab.STORAGE) {
             inv.forEach((item, n) -> entries.put(item, new PaletteEntry(item, new ItemStack(item), n, stored.getOrDefault(item, 0))));
@@ -747,17 +581,11 @@ public final class RtsScreen extends Screen {
             }
         }
         // Blocks first (they're what you build with), then by name.
-        list.sort(Comparator
-                .comparing((PaletteEntry e) -> !(e.item() instanceof BlockItem))
+        list.sort(Comparator.comparing((PaletteEntry e) -> !(e.item() instanceof BlockItem))
                 .thenComparing(e -> e.display().getName().getString()));
         this.palette = list;
         int maxScroll = Math.max(0, (list.size() + gridCols() - 1) / gridCols() - GRID_ROWS);
         this.gridScroll = MathHelper.clamp(this.gridScroll, 0, maxScroll);
-    }
-
-    private int countOf(Item item) {
-        int inv = this.client.player == null ? 0 : this.client.player.getInventory().count(item);
-        return inv + StorageManager.get().total(item);
     }
 
     private void togglePin(Item item) {
@@ -773,29 +601,15 @@ public final class RtsScreen extends Screen {
         RtsConfig.save();
     }
 
-    private void selectBrush(Item item) {
-        if (this.session.brush.getItem() != item) {
-            // Picked properties (slab half...) belong to the old block.
-            this.session.stateOverrides.clear();
-        }
-        this.session.brush = new ItemStack(item);
-        if (item instanceof BlockItem && !this.session.tool.usesShapes()) {
-            selectTool(ToolMode.BUILD);
-        } else {
-            // The block-state buttons depend on the brush.
-            clearAndInit();
-        }
-    }
-
     @Nullable
     private Item pinnedAt(double mx, double my) {
         int y = pinnedY();
-        if (my < y || my >= y + SLOT) {
+        if (my < y || my >= y + SLOT || mx < gridX()) {
             return null;
         }
-        int idx = (int) ((mx - PAD) / SLOT);
+        int idx = (int) ((mx - gridX()) / SLOT);
         List<String> pinned = RtsConfig.get().pinned;
-        if (mx < PAD || idx < 0 || idx >= pinned.size()) {
+        if (idx < 0 || idx >= pinned.size()) {
             return null;
         }
         Identifier id = Identifier.tryParse(pinned.get(idx));
@@ -805,10 +619,10 @@ public final class RtsScreen extends Screen {
     @Nullable
     private PaletteEntry gridAt(double mx, double my) {
         int y0 = gridY();
-        if (my < y0 || my >= y0 + GRID_ROWS * SLOT || mx < PAD || mx >= PAD + gridCols() * SLOT) {
+        if (my < y0 || my >= y0 + GRID_ROWS * SLOT || mx < gridX() || mx >= gridX() + gridCols() * SLOT) {
             return null;
         }
-        int col = (int) ((mx - PAD) / SLOT);
+        int col = (int) ((mx - gridX()) / SLOT);
         int row = (int) ((my - y0) / SLOT);
         int idx = (row + this.gridScroll) * gridCols() + col;
         return idx >= 0 && idx < this.palette.size() ? this.palette.get(idx) : null;
@@ -827,7 +641,9 @@ public final class RtsScreen extends Screen {
         }
         Item pinned = pinnedAt(mx, my);
         if (pinned != null) {
-            if (button == 0) {
+            if (button == 0 && hasControlDown()) {
+                this.actions.fetch(pinned);
+            } else if (button == 0) {
                 selectBrush(pinned);
             } else if (button == 1) {
                 togglePin(pinned);
@@ -836,17 +652,16 @@ public final class RtsScreen extends Screen {
         }
         PaletteEntry entry = gridAt(mx, my);
         if (entry != null) {
-            if (button == 0) {
+            if (button == 0 && hasControlDown()) {
+                this.actions.fetch(entry.item());
+            } else if (button == 0) {
                 selectBrush(entry.item());
-            } else if (button == 1 || button == 2) {
+            } else {
                 togglePin(entry.item());
             }
             return true;
         }
-        if (clickTaskList(mx, my)) {
-            return true;
-        }
-        if (overUi(mx, my)) {
+        if (clickOrders(mx, my) || overUi(mx, my)) {
             return true;
         }
         this.pressedButton = button;
@@ -854,7 +669,10 @@ public final class RtsScreen extends Screen {
         this.pressY = my;
         this.dragging = false;
         if (button == 0) {
-            worldPrimary(mx, my);
+            BlockHitResult hit = pick(mx, my);
+            if (hit != null) {
+                this.actions.primary(hit);
+            }
         }
         return true;
     }
@@ -882,10 +700,16 @@ public final class RtsScreen extends Screen {
         if (button == this.pressedButton) {
             this.pressedButton = -1;
             if (!this.dragging) {
-                if (button == 1) {
-                    moveTo(mx, my);
-                } else if (button == 2) {
-                    pickBlock(mx, my);
+                BlockHitResult hit = pick(mx, my);
+                if (hit != null && button == 1) {
+                    this.actions.moveTo(hit);
+                } else if (hit != null && button == 2) {
+                    Item item = this.actions.pickBlock(hit);
+                    if (item != null) {
+                        selectBrush(item);
+                        selectTool(ToolMode.BUILD);
+                        Messages.info("Selected " + item.getName().getString());
+                    }
                 }
             }
             this.dragging = false;
@@ -901,12 +725,16 @@ public final class RtsScreen extends Screen {
             this.gridScroll = MathHelper.clamp(this.gridScroll - (int) Math.signum(amount), 0, Math.max(0, rows - GRID_ROWS));
             return true;
         }
-        if (mx >= rightX() && my < TOP_H + rightPanelH()) {
+        if (mx >= rightX() && my < rightBottom()) {
             this.taskScroll = Math.max(0, this.taskScroll - (int) Math.signum(amount));
             return true;
         }
         if (hasControlDown()) {
-            this.session.adjustHeight(amount > 0 ? 1 : -1);
+            if (this.session.tool == ToolMode.TERRAIN) {
+                this.session.terrainClearHeight = MathHelper.clamp(this.session.terrainClearHeight + (amount > 0 ? 1 : -1), 1, 64);
+            } else {
+                this.session.adjustHeight(amount > 0 ? 1 : -1);
+            }
             return true;
         }
         this.controller.camera().zoom(this.client, amount);
@@ -915,13 +743,14 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
+        BuildSession s = this.session;
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             if (this.search.isFocused()) {
                 this.search.setFocused(false);
                 setFocused(null);
-            } else if (this.session.anchorA != null || this.session.pasteAnchor != null) {
-                this.session.clearSelection();
-                this.session.pasteAnchor = null;
+            } else if (s.anchorA != null || s.pasteAnchor != null) {
+                s.clearSelection();
+                s.pasteAnchor = null;
             } else {
                 close();
             }
@@ -951,113 +780,77 @@ public final class RtsScreen extends Screen {
             this.client.setScreen(new InventoryScreen(this.client.player));
             return true;
         }
-        switch (keyCode) {
-            case GLFW.GLFW_KEY_1, GLFW.GLFW_KEY_2, GLFW.GLFW_KEY_3, GLFW.GLFW_KEY_4, GLFW.GLFW_KEY_5 -> {
-                selectTool(ToolMode.values()[keyCode - GLFW.GLFW_KEY_1]);
-                return true;
+        if (keyCode >= GLFW.GLFW_KEY_0 && keyCode <= GLFW.GLFW_KEY_9) {
+            int digit = keyCode - GLFW.GLFW_KEY_0;
+            if (hasControlDown()) {
+                this.actions.saveBookmark(digit);
+            } else if (hasShiftDown()) {
+                this.actions.gotoBookmark(digit);
+            } else if (digit >= 1 && digit <= ToolMode.values().length) {
+                selectTool(ToolMode.values()[digit - 1]);
             }
+            return true;
+        }
+        switch (keyCode) {
             case GLFW.GLFW_KEY_R -> {
-                if (this.session.tool == ToolMode.BLUEPRINT) {
-                    this.session.pasteTurns++;
+                if (s.tool == ToolMode.BLUEPRINT) {
+                    s.pasteTurns++;
                 } else {
-                    this.session.orientation.cycle();
+                    s.orientation.cycle();
                 }
-                return true;
+            }
+            case GLFW.GLFW_KEY_N -> {
+                if (s.tool == ToolMode.BLUEPRINT) {
+                    s.pasteMirror = !s.pasteMirror;
+                }
             }
             case GLFW.GLFW_KEY_M -> {
-                if (this.session.tool == ToolMode.BUILD) {
-                    this.session.mode = this.session.mode.next();
-                    this.session.clearSelection();
-                    Messages.info("Build mode: " + this.session.mode.label() + " - " + this.session.mode.description());
+                if (s.tool == ToolMode.BUILD) {
+                    s.mode = s.mode.next();
+                    s.clearSelection();
+                    Messages.info("Build mode: " + s.mode.label() + " - " + s.mode.description());
+                    clearAndInit();
+                } else if (s.tool == ToolMode.TERRAIN) {
+                    s.terrainMode = s.terrainMode.next();
+                    s.clearSelection();
                     clearAndInit();
                 }
-                return true;
             }
-            case GLFW.GLFW_KEY_V -> {
-                toggleCut();
-                return true;
-            }
-            case GLFW.GLFW_KEY_PAGE_UP, GLFW.GLFW_KEY_PAGE_DOWN -> {
-                Integer cut = this.controller.cutY();
-                int base = cut != null ? cut : (this.client.player != null ? this.client.player.getBlockY() + 2 : 64);
-                this.controller.setCut(this.client, base + (keyCode == GLFW.GLFW_KEY_PAGE_UP ? 1 : -1));
-                return true;
-            }
-            case GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN, GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_RIGHT -> {
-                nudge(keyCode);
-                return true;
-            }
-            case GLFW.GLFW_KEY_H -> {
-                this.session.hollow = !this.session.hollow;
-                return true;
-            }
-            case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
-                if (this.session.tool == ToolMode.BLUEPRINT) {
-                    confirmPaste();
-                } else {
-                    confirmOrder();
-                }
-                return true;
-            }
+            case GLFW.GLFW_KEY_H -> s.hollow = !s.hollow;
+            case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> this.actions.confirm();
             case GLFW.GLFW_KEY_Z -> {
                 if (hasControlDown() && this.client.world != null) {
                     UndoHistory.undoLast(this.client.world);
                 }
-                return true;
             }
             case GLFW.GLFW_KEY_X, GLFW.GLFW_KEY_BACKSPACE -> {
-                this.session.clearSelection();
-                this.session.pasteAnchor = null;
-                return true;
+                s.clearSelection();
+                s.pasteAnchor = null;
             }
             case GLFW.GLFW_KEY_LEFT_BRACKET -> {
-                this.session.shape = this.session.shape.previous();
-                this.session.clearSelection();
-                return true;
+                s.shape = s.shape.previous();
+                s.clearSelection();
             }
             case GLFW.GLFW_KEY_RIGHT_BRACKET -> {
-                this.session.shape = this.session.shape.next();
-                this.session.clearSelection();
-                return true;
+                s.shape = s.shape.next();
+                s.clearSelection();
             }
-            case GLFW.GLFW_KEY_Q -> {
-                this.controller.camera().rotateYaw(-45.0F);
-                return true;
-            }
-            case GLFW.GLFW_KEY_E -> {
-                this.controller.camera().rotateYaw(45.0F);
-                return true;
-            }
+            case GLFW.GLFW_KEY_Q -> this.controller.camera().rotateYaw(-45.0F);
+            case GLFW.GLFW_KEY_V -> this.actions.toggleCut(this.controller.hover());
+            case GLFW.GLFW_KEY_PAGE_UP -> this.actions.moveCut(1);
+            case GLFW.GLFW_KEY_PAGE_DOWN -> this.actions.moveCut(-1);
+            case GLFW.GLFW_KEY_UP, GLFW.GLFW_KEY_DOWN, GLFW.GLFW_KEY_LEFT, GLFW.GLFW_KEY_RIGHT -> nudge(keyCode);
             case GLFW.GLFW_KEY_F -> {
                 this.search.setFocused(true);
                 setFocused(this.search);
-                return true;
             }
             default -> {
-                return true;
             }
         }
+        return true;
     }
 
-    /** V: hide everything above the block under the cursor (or above the player), or turn it off. */
-    private void toggleCut() {
-        if (this.controller.cutY() != null) {
-            this.controller.setCut(this.client, null);
-            Messages.info("Cut view off");
-            return;
-        }
-        BlockHitResult hover = this.controller.hover();
-        int y = hover != null ? hover.getBlockPos().getY() : (this.client.player != null ? this.client.player.getBlockY() + 2 : 64);
-        this.controller.setCut(this.client, y);
-        Messages.info("Cut view at Y=" + y + " - PageUp/PageDown to move, V to turn off");
-    }
-
-    /** Arrow keys move the shape's points one block (relative to the camera); Shift+Up/Down moves them vertically. */
     private void nudge(int keyCode) {
-        BuildSession s = this.session;
-        if (s.anchorA == null && s.pasteAnchor == null) {
-            return;
-        }
         Direction forward = Direction.fromRotation(this.controller.camera().yaw());
         Direction d;
         if (hasShiftDown() && (keyCode == GLFW.GLFW_KEY_UP || keyCode == GLFW.GLFW_KEY_DOWN)) {
@@ -1070,15 +863,7 @@ public final class RtsScreen extends Screen {
                 default -> forward.rotateYClockwise();
             };
         }
-        if (s.pasteAnchor != null) {
-            s.pasteAnchor = s.pasteAnchor.offset(d);
-        }
-        if (s.anchorA != null) {
-            s.anchorA = s.anchorA.offset(d);
-        }
-        if (s.anchorB != null) {
-            s.anchorB = s.anchorB.offset(d);
-        }
+        this.actions.nudge(d);
     }
 
     private boolean held(KeyBinding binding) {
@@ -1118,45 +903,37 @@ public final class RtsScreen extends Screen {
         moveCamera();
         this.controller.setHover(overUi(mouseX, mouseY) ? null : pick(mouseX, mouseY));
 
-        // Panels
-        panel(ctx, 0, 0, this.width, TOP_H);
-        panel(ctx, 0, bottomY(), this.width, this.height);
+        // Panels first, widgets on top.
+        Theme.panel(ctx, this.textRenderer, 0, 0, this.width, TOP_H, null);
+        Theme.panel(ctx, this.textRenderer, 0, bottomY(), this.width, this.height, null);
         if (hasLeftPanel()) {
-            panel(ctx, 0, TOP_H, LEFT_W + PAD, this.leftPanelBottom);
+            String title = switch (this.session.tool) {
+                case BUILD -> "BUILD";
+                case DESTROY -> "DESTROY";
+                case BLUEPRINT -> "BLUEPRINT";
+                case TERRAIN -> "TERRAIN";
+                default -> "";
+            };
+            Theme.panel(ctx, this.textRenderer, PAD, TOP_H + PAD, PAD + LEFT_W, this.leftPanelBottom, title);
         }
-        panel(ctx, rightX(), TOP_H, this.width, TOP_H + rightPanelH());
+        Theme.panel(ctx, this.textRenderer, rightX(), TOP_H + PAD, this.width - PAD, rightBottom(), "COMMAND");
+        drawDockBackgrounds(ctx);
 
         super.render(ctx, mouseX, mouseY, delta);
 
-        drawToolHighlight(ctx);
         drawStatus(ctx);
         if (hasLeftPanel()) {
             drawLeftPanel(ctx);
         }
-        drawRightPanel(ctx, mouseX, mouseY);
+        drawOrders(ctx, mouseX, mouseY);
+        drawStorage(ctx);
         drawPinned(ctx, mouseX, mouseY);
         drawGrid(ctx, mouseX, mouseY);
         drawHints(ctx);
-        drawMessages(ctx);
-        drawTooltips(ctx, mouseX, mouseY);
+        drawToasts(ctx);
+        drawItemTooltip(ctx, mouseX, mouseY);
         if (!overUi(mouseX, mouseY)) {
-            drawOrderInfo(ctx, mouseX, mouseY);
-        }
-    }
-
-    private static void panel(DrawContext ctx, int x0, int y0, int x1, int y1) {
-        ctx.fill(x0, y0, x1, y1, PANEL);
-        ctx.drawBorder(x0, y0, x1 - x0, y1 - y0, PANEL_EDGE);
-    }
-
-    private void drawToolHighlight(DrawContext ctx) {
-        int x = PAD;
-        for (ToolMode tool : ToolMode.values()) {
-            int w = this.textRenderer.getWidth(tool.label()) + 12;
-            if (tool == this.session.tool) {
-                ctx.fill(x + 1, 19, x + w - 1, 21, ACCENT);
-            }
-            x += w + 2;
+            drawCursorInfo(ctx, mouseX, mouseY);
         }
     }
 
@@ -1165,137 +942,174 @@ public final class RtsScreen extends Screen {
             return;
         }
         int x = PAD;
-        for (ToolMode tool : ToolMode.values()) {
-            x += this.textRenderer.getWidth(tool.label()) + 14;
+        for (var child : children()) {
+            if (child instanceof RtsButton b && b.getY() == 2 && b.getX() < this.width - 40) {
+                x = Math.max(x, b.getX() + b.getWidth());
+            }
         }
-        x += 6;
+        x += 10;
+        int limit = this.width - PAD - 26;
         float hp = this.client.player.getHealth();
         int food = this.client.player.getHungerManager().getFoodLevel();
-        String vitals = String.format(Locale.ROOT, "HP %.0f  Food %d", hp, food);
-        ctx.drawTextWithShadow(this.textRenderer, vitals, x, 7, hp <= 6 ? 0xFFFF5555 : TEXT);
-        x += this.textRenderer.getWidth(vitals) + 10;
+        if (x + 70 > limit) {
+            return;
+        }
+        Glyphs.HEART.draw(ctx, x, 9, hp <= 6 ? 0xFFFF5252 : 0xFFE53935);
+        String hpText = String.format(Locale.ROOT, "%.0f", hp);
+        ctx.drawText(this.textRenderer, hpText, x + 10, 8, Theme.TEXT, false);
+        x += 14 + this.textRenderer.getWidth(hpText);
+        Glyphs.FOOD.draw(ctx, x, 9, 0xFFC68A3C);
+        String foodText = Integer.toString(food);
+        ctx.drawText(this.textRenderer, foodText, x + 10, 8, Theme.TEXT, false);
+        x += 18 + this.textRenderer.getWidth(foodText);
 
         Integer cut = this.controller.cutY();
-        String bar = (cut != null ? "Cut Y" + cut + "  " : "") + Engine.activeName() + ": " + Engine.status();
-        int limit = this.width - PAD - 58;
-        if (x + this.textRenderer.getWidth(bar) < limit) {
-            ctx.drawTextWithShadow(this.textRenderer, bar, x, 7, TEXT_DIM);
+        if (cut != null && x + 60 < limit) {
+            x += Theme.chip(ctx, this.textRenderer, "CUT Y" + cut, x, 7, 0xFF3A2E10, Theme.GOLD) + 4;
+        }
+        String engine = Engine.activeName() + ": " + Engine.status();
+        if (x + this.textRenderer.getWidth(engine) < limit) {
+            ctx.drawText(this.textRenderer, engine, x, 8, Theme.TEXT_DIM, false);
         }
     }
 
     private void drawLeftPanel(DrawContext ctx) {
-        for (Highlight h : this.highlights) {
-            if (h.active().getAsBoolean()) {
-                ctx.fill(h.x() - 2, h.y(), h.x(), h.y() + h.h(), ACCENT);
+        int x0 = PAD + 4;
+        int x1 = PAD + LEFT_W - 4;
+        for (int i = 0; i < this.leftSections.size(); i++) {
+            Theme.section(ctx, this.textRenderer, x0, x1, this.leftSections.get(i)[0], this.leftSectionNames.get(i));
+        }
+        BuildSession s = this.session;
+        if (this.heightRowY >= 0) {
+            boolean terrain = s.tool == ToolMode.TERRAIN;
+            String h = terrain ? s.terrainClearHeight + " blocks" : "Height " + s.height;
+            boolean active = terrain || s.shape.usesHeight();
+            ctx.drawCenteredTextWithShadow(this.textRenderer, h, (x0 + x1) / 2, this.heightRowY + 3, active ? Theme.TEXT : Theme.TEXT_FAINT);
+        }
+        if (this.clipboardInfoY >= 0) {
+            if (s.tool == ToolMode.BLUEPRINT) {
+                Blueprint bp = s.clipboard;
+                String line1 = bp == null ? (s.cutOnCopy ? "Cut: click two corners" : "Copy: click two corners") : bp.name();
+                String line2 = bp == null ? "of the region" : bp.size(s.pasteTurns) + ", " + bp.blockCount() + " blocks";
+                ctx.drawText(this.textRenderer, trim(line1, x1 - x0), x0, this.clipboardInfoY, bp == null ? Theme.TEXT_DIM : Theme.GOLD, false);
+                ctx.drawText(this.textRenderer, trim(line2, x1 - x0), x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
+            } else if (s.tool == ToolMode.TERRAIN) {
+                String fill = s.terrainMode == TerrainMode.FLATTEN
+                        ? "Fill: " + WorldActions.flattenFill(s).getBlock().getName().getString()
+                        : "Uses torches";
+                ctx.drawText(this.textRenderer, trim(fill, x1 - x0), x0, this.clipboardInfoY, Theme.TEXT_DIM, false);
+                ctx.drawText(this.textRenderer, "Click two corners", x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
             }
         }
-        if (this.heightLabelY >= 0) {
-            String h = "Height " + this.session.height;
-            ctx.drawCenteredTextWithShadow(this.textRenderer, h, PAD + (LEFT_W - 4) / 2, this.heightLabelY + 4,
-                    this.session.shape.usesHeight() ? TEXT : TEXT_DIM);
-        }
-        if (this.clipboardLabelY >= 0) {
-            Blueprint bp = this.session.clipboard;
-            String line1 = bp == null ? "Click two corners" : trim(bp.name(), LEFT_W - 6);
-            String line2 = bp == null ? "to copy a region" : bp.size() + ", " + bp.blockCount() + " blocks";
-            ctx.drawTextWithShadow(this.textRenderer, line1, PAD, this.clipboardLabelY, bp == null ? TEXT_DIM : GOLD);
-            ctx.drawTextWithShadow(this.textRenderer, line2, PAD, this.clipboardLabelY + 10, TEXT_DIM);
-        }
-        if (this.savedLabelY >= 0) {
-            ctx.drawTextWithShadow(this.textRenderer, this.blueprints.isEmpty() ? "No saved blueprints" : "Saved blueprints:",
-                    PAD, this.savedLabelY + 1, TEXT_DIM);
-        }
     }
 
-    private int taskRowsTop() {
-        return TOP_H + 54;
+    private int visibleCards() {
+        return Math.max(1, (this.ordersBottom - this.ordersTop) / (CARD_H + 2));
     }
 
-    private int taskRowsVisible() {
-        int bottom = TOP_H + rightPanelH() - 4 - 2 * 18 - 26;
-        return Math.max(1, (bottom - taskRowsTop()) / 22);
-    }
-
-    private void drawRightPanel(DrawContext ctx, int mx, int my) {
-        int x = rightX() + PAD;
+    private void drawOrders(DrawContext ctx, int mx, int my) {
+        int x0 = rightX() + PAD;
+        int x1 = this.width - 2 * PAD;
         List<RtsTask> tasks = TaskQueue.get().snapshot();
-        ctx.drawTextWithShadow(this.textRenderer, "Orders (" + tasks.size() + ")", x, TOP_H + 43, ACCENT);
-        int visible = taskRowsVisible();
+        Theme.section(ctx, this.textRenderer, x0, x1, this.ordersTop - 11, "ORDERS" + (tasks.isEmpty() ? "" : " (" + tasks.size() + ")"));
+        int visible = visibleCards();
         this.taskScroll = MathHelper.clamp(this.taskScroll, 0, Math.max(0, tasks.size() - visible));
-        int y = taskRowsTop();
+        int y = this.ordersTop;
         if (tasks.isEmpty()) {
-            ctx.drawTextWithShadow(this.textRenderer, "Nothing queued", x, y + 2, TEXT_DIM);
+            ctx.drawText(this.textRenderer, "Nothing queued", x0 + 2, y + 2, Theme.TEXT_FAINT, false);
+            ctx.drawText(this.textRenderer, "Left-click the world to start", x0 + 2, y + 12, Theme.TEXT_FAINT, false);
         }
         for (int i = this.taskScroll; i < tasks.size() && i < this.taskScroll + visible; i++) {
             RtsTask task = tasks.get(i);
             boolean running = i == 0;
-            ctx.fill(x - 1, y, rightX() + RIGHT_W - PAD, y + 20, running ? 0x402E7D32 : 0x30FFFFFF);
-            ctx.drawTextWithShadow(this.textRenderer, trim(task.label(), RIGHT_W - 24), x + 2, y + 2, running ? 0xFFA5D6A7 : TEXT);
-            ctx.drawTextWithShadow(this.textRenderer, trim(task.detail(), RIGHT_W - 24), x + 2, y + 11, TEXT_DIM);
-            int bx = rightX() + RIGHT_W - PAD - 11;
-            boolean hot = mx >= bx && mx < bx + 10 && my >= y + 1 && my < y + 11;
-            ctx.drawTextWithShadow(this.textRenderer, "x", bx + 2, y + 2, hot ? 0xFFFF5555 : TEXT_DIM);
-            y += 22;
+            Theme.round(ctx, x0, y, x1 - x0, CARD_H, running ? 0xFF16283A : 0xFF19212B);
+            Theme.outline(ctx, x0, y, x1 - x0, CARD_H, running ? Theme.withAlpha(Theme.ACCENT, 0.5F) : Theme.BORDER);
+            if (running) {
+                ctx.fill(x0, y + 2, x0 + 2, y + CARD_H - 2, Theme.ACCENT);
+            }
+            ctx.drawText(this.textRenderer, trim(task.label(), x1 - x0 - 18), x0 + 5, y + 3, running ? Theme.TEXT : 0xFFC9D3DD, false);
+            ctx.drawText(this.textRenderer, trim(task.detail(), x1 - x0 - 10), x0 + 5, y + 13, Theme.TEXT_DIM, false);
+            if (task instanceof BuildTask build && build.progress() >= 0) {
+                Theme.bar(ctx, x0 + 4, y + CARD_H - 4, x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD);
+            }
+            int bx = x1 - 11;
+            boolean hot = mx >= bx && mx < bx + 9 && my >= y + 2 && my < y + 11;
+            Glyphs.CROSS.draw(ctx, bx + 1, y + 3, hot ? Theme.BAD : Theme.TEXT_FAINT);
+            y += CARD_H + 2;
         }
-
-        int sy = TOP_H + rightPanelH() - 4 - 2 * 18 - 22;
-        int linked = StorageManager.get().linked().size();
-        int indexed = linked - StorageManager.get().unindexed().size();
-        ctx.drawTextWithShadow(this.textRenderer, "Storage", x, sy, GOLD);
-        ctx.drawTextWithShadow(this.textRenderer, linked + " linked, " + indexed + " indexed", x, sy + 10, TEXT_DIM);
+        if (tasks.size() > visible) {
+            String more = (this.taskScroll + 1) + "-" + Math.min(tasks.size(), this.taskScroll + visible) + " of " + tasks.size();
+            ctx.drawText(this.textRenderer, more, x1 - this.textRenderer.getWidth(more), this.ordersTop - 11, Theme.TEXT_FAINT, false);
+        }
     }
 
-    private boolean clickTaskList(double mx, double my) {
-        if (mx < rightX() || my < taskRowsTop() || my >= TOP_H + rightPanelH()) {
+    private boolean clickOrders(double mx, double my) {
+        if (mx < rightX() || my < this.ordersTop || my >= this.ordersBottom) {
             return false;
         }
         List<RtsTask> tasks = TaskQueue.get().snapshot();
-        int row = (int) ((my - taskRowsTop()) / 22);
-        if (row >= taskRowsVisible()) {
-            return false;
-        }
+        int row = (int) ((my - this.ordersTop) / (CARD_H + 2));
         int idx = this.taskScroll + row;
-        if (idx < 0 || idx >= tasks.size()) {
+        if (row >= visibleCards() || idx < 0 || idx >= tasks.size()) {
             return false;
         }
-        int bx = rightX() + RIGHT_W - PAD - 11;
-        double rowY = taskRowsTop() + row * 22;
-        if (mx >= bx && mx < bx + 10 && my >= rowY + 1 && my < rowY + 11) {
+        int x1 = this.width - 2 * PAD;
+        int bx = x1 - 11;
+        double cardY = this.ordersTop + row * (CARD_H + 2);
+        if (mx >= bx && mx < bx + 9 && my >= cardY + 2 && my < cardY + 11) {
             TaskQueue.get().remove(this.client, tasks.get(idx));
             return true;
         }
         return false;
     }
 
+    private void drawStorage(DrawContext ctx) {
+        int x0 = rightX() + PAD;
+        int x1 = this.width - 2 * PAD;
+        Theme.section(ctx, this.textRenderer, x0, x1, this.storageTop, "STORAGE");
+        int linked = StorageManager.get().linked().size();
+        int indexed = linked - StorageManager.get().unindexed().size();
+        int kinds = StorageManager.get().totals().size();
+        ctx.drawText(this.textRenderer, linked + " linked, " + indexed + " read, " + kinds + " item types", x0 + 2,
+                this.storageTop + 11, Theme.TEXT_DIM, false);
+    }
+
+    private void drawDockBackgrounds(DrawContext ctx) {
+        // Search box.
+        int searchW = Math.min(150, this.width / 3);
+        Theme.round(ctx, PAD, headerY(), searchW, 14, Theme.SLOT);
+        Theme.outline(ctx, PAD, headerY(), searchW, 14, this.search != null && this.search.isFocused() ? Theme.ACCENT : Theme.SLOT_EDGE);
+    }
+
+    private void slot(DrawContext ctx, int x, int y, boolean hover, boolean selected) {
+        Theme.round(ctx, x + 1, y + 1, SLOT - 2, SLOT - 2, hover ? Theme.SLOT_HOVER : Theme.SLOT);
+        Theme.outline(ctx, x + 1, y + 1, SLOT - 2, SLOT - 2, selected ? Theme.ACCENT : Theme.SLOT_EDGE);
+    }
+
     private void drawPinned(DrawContext ctx, int mx, int my) {
         int y = pinnedY();
-        int cols = gridCols();
         List<String> pinned = RtsConfig.get().pinned;
-        for (int i = 0; i < cols; i++) {
-            int x = PAD + i * SLOT;
-            ctx.fill(x + 1, y + 1, x + SLOT - 1, y + SLOT - 1, 0x40000000);
-            if (i >= pinned.size()) {
-                continue;
+        for (int i = 0; i < gridCols(); i++) {
+            int x = gridX() + i * SLOT;
+            Item item = null;
+            if (i < pinned.size()) {
+                Identifier id = Identifier.tryParse(pinned.get(i));
+                if (id != null && Registries.ITEM.containsId(id)) {
+                    item = Registries.ITEM.get(id);
+                }
             }
-            Identifier id = Identifier.tryParse(pinned.get(i));
-            if (id == null || !Registries.ITEM.containsId(id)) {
-                continue;
-            }
-            Item item = Registries.ITEM.get(id);
-            ItemStack stack = new ItemStack(item);
             boolean hot = mx >= x && mx < x + SLOT && my >= y && my < y + SLOT;
-            if (hot) {
-                ctx.fill(x + 1, y + 1, x + SLOT - 1, y + SLOT - 1, SLOT_HOVER);
+            slot(ctx, x, y, hot && item != null, item != null && this.session.brush.getItem() == item);
+            if (item == null) {
+                continue;
             }
-            if (this.session.brush.getItem() == item) {
-                ctx.drawBorder(x, y, SLOT, SLOT, ACCENT);
-            }
+            ItemStack stack = new ItemStack(item);
             ctx.drawItem(stack, x + 1, y + 1);
-            int count = countOf(item);
+            int count = (this.client.player == null ? 0 : this.client.player.getInventory().count(item)) + StorageManager.get().total(item);
             ctx.drawItemInSlot(this.textRenderer, stack, x + 1, y + 1, count == 0 ? "§c0" : shortCount(count));
         }
         if (pinned.isEmpty()) {
-            ctx.drawTextWithShadow(this.textRenderer, "Quick bar - right-click items below to pin them here", PAD + 4, y + 5, TEXT_DIM);
+            ctx.drawText(this.textRenderer, "Quick bar - right-click items below to pin them here", gridX() + 6, y + 5, Theme.TEXT_FAINT, false);
         }
     }
 
@@ -1304,85 +1118,164 @@ public final class RtsScreen extends Screen {
         int y0 = gridY();
         for (int row = 0; row < GRID_ROWS; row++) {
             for (int col = 0; col < cols; col++) {
-                int x = PAD + col * SLOT;
+                int x = gridX() + col * SLOT;
                 int y = y0 + row * SLOT;
-                ctx.fill(x + 1, y + 1, x + SLOT - 1, y + SLOT - 1, SLOT_BG & 0x30FFFFFF);
                 int idx = (row + this.gridScroll) * cols + col;
-                if (idx >= this.palette.size()) {
+                PaletteEntry e = idx < this.palette.size() ? this.palette.get(idx) : null;
+                boolean hot = e != null && mx >= x && mx < x + SLOT && my >= y && my < y + SLOT;
+                slot(ctx, x, y, hot, e != null && this.session.brush.getItem() == e.item());
+                if (e == null) {
                     continue;
-                }
-                PaletteEntry e = this.palette.get(idx);
-                if (mx >= x && mx < x + SLOT && my >= y && my < y + SLOT) {
-                    ctx.fill(x + 1, y + 1, x + SLOT - 1, y + SLOT - 1, SLOT_HOVER);
-                }
-                if (this.session.brush.getItem() == e.item()) {
-                    ctx.drawBorder(x, y, SLOT, SLOT, ACCENT);
                 }
                 ctx.drawItem(e.display(), x + 1, y + 1);
                 String count = shortCount(e.total());
-                // Gold count: only in storage, the build will fetch it.
+                // Gold count: only in storage, a build will fetch it.
                 ctx.drawItemInSlot(this.textRenderer, e.display(), x + 1, y + 1, e.inventory() == 0 ? "§6" + count : count);
             }
         }
         if (this.palette.isEmpty()) {
-            ctx.drawTextWithShadow(this.textRenderer,
-                    this.tab == Tab.STORAGE ? "No indexed storage yet - link containers and press Index new" : "No items",
-                    PAD + 4, y0 + 5, TEXT_DIM);
+            ctx.drawText(this.textRenderer,
+                    this.tab == Tab.STORAGE ? "No storage read yet - link containers and press Scan nearby" : "No items",
+                    gridX() + 6, y0 + 5, Theme.TEXT_FAINT, false);
         }
         int rows = (this.palette.size() + cols - 1) / cols;
         if (rows > GRID_ROWS) {
-            String s = (this.gridScroll + 1) + "/" + (rows - GRID_ROWS + 1);
-            ctx.drawTextWithShadow(this.textRenderer, s, this.width - PAD - this.textRenderer.getWidth(s), headerY() + 3, TEXT_DIM);
+            String page = (this.gridScroll + 1) + "/" + (rows - GRID_ROWS + 1);
+            ctx.drawText(this.textRenderer, page, this.width - PAD - 4 - this.textRenderer.getWidth(page), headerY() + 3, Theme.TEXT_FAINT, false);
         }
     }
 
     private void drawHints(DrawContext ctx) {
-        int y = bottomY() - 12;
-        String brush = this.session.brush.isEmpty() ? "none" : this.session.brush.getName().getString();
-        String line;
-        switch (this.session.tool) {
+        BuildSession s = this.session;
+        int y = bottomY() - 13;
+        int x = hasLeftPanel() ? PAD + LEFT_W + 6 : PAD + 2;
+        String brush = s.brush.isEmpty() ? "no block" : s.brush.getName().getString();
+        List<String> chips = new ArrayList<>();
+        switch (s.tool) {
             case BUILD -> {
-                String orient = "";
-                if (this.session.brush.getItem() instanceof BlockItem bi) {
-                    String d = this.session.orientation.describe(bi.getBlock(), this.controller.camera().yaw());
-                    orient = d.isEmpty() ? "" : " (" + d + ")";
+                chips.add(brush);
+                if (s.brush.getItem() instanceof BlockItem bi) {
+                    String d = s.orientation.describe(bi.getBlock(), this.controller.camera().yaw());
+                    if (!d.isEmpty()) {
+                        chips.add(d);
+                    }
                 }
-                line = "Build: " + brush + orient + " | " + this.session.mode.label() + " | " + this.session.shape.label()
-                        + (this.session.hollow && this.session.shape.supportsHollow() ? " hollow" : "")
-                        + (this.session.shape.usesHeight() ? " h" + this.session.height : "");
+                chips.add(s.mode.label());
+                chips.add(s.shape.label() + (s.hollow && s.shape.supportsHollow() ? " hollow" : ""));
+                if (s.shape.usesHeight()) {
+                    chips.add("h" + s.height);
+                }
             }
-            case DESTROY -> line = "Destroy | " + this.session.shape.label()
-                    + (this.session.hollow && this.session.shape.supportsHollow() ? " hollow" : "")
-                    + (this.session.shape.usesHeight() ? " h" + this.session.height : "");
-            case INTERACT -> line = "Interact: click a block to walk over and use it";
-            case LINK -> line = "Link storage: click containers to link/unlink";
-            case BLUEPRINT -> line = this.session.clipboard == null
-                    ? "Blueprint: click two corners to copy a region"
-                    : this.session.pasteAnchor == null
-                    ? "Blueprint: click to place " + this.session.clipboard.name() + " | R rotate"
-                    : "Blueprint: arrows nudge, R rotate, click/Enter to build, X to move";
-            default -> line = "";
+            case DESTROY -> {
+                chips.add(s.shape.label() + (s.hollow && s.shape.supportsHollow() ? " hollow" : ""));
+                if (s.shape.usesHeight()) {
+                    chips.add("h" + s.height);
+                }
+            }
+            case INTERACT -> chips.add("Click a block to walk over and use it");
+            case LINK -> chips.add("Click containers to link / unlink");
+            case BLUEPRINT -> {
+                if (s.clipboard == null) {
+                    chips.add((s.cutOnCopy ? "Cut" : "Copy") + ": click two corners");
+                } else {
+                    chips.add(s.clipboard.name());
+                    chips.add(s.pasteAnchor == null ? "click to place" : "arrows nudge, click/Enter builds");
+                    if (s.pasteMirror) {
+                        chips.add("mirrored");
+                    }
+                }
+            }
+            case TERRAIN -> chips.add(s.terrainMode.label() + ": click two corners");
+            case MEASURE -> chips.add("Click two points");
         }
-        ctx.drawTextWithShadow(this.textRenderer, line, PAD, y, TEXT);
-        String help = "LMB act | RMB move / drag rotate | MMB pick / drag pan | WASD fly | Scroll zoom | V cut view | Esc exit";
-        int hw = this.textRenderer.getWidth(help);
-        if (PAD + this.textRenderer.getWidth(line) + 12 + hw < this.width) {
-            ctx.drawTextWithShadow(this.textRenderer, help, this.width - PAD - hw, y, TEXT_DIM);
+        for (String c : chips) {
+            int w = this.textRenderer.getWidth(c) + 6;
+            if (x + w > rightX() - 4) {
+                break;
+            }
+            x += Theme.chip(ctx, this.textRenderer, c, x, y, 0xC0121820, Theme.TEXT) + 3;
         }
     }
 
-    /**
-     * Next to the cursor while drawing a shape or pasting: its size, block count and the materials
-     * it needs against what you carry and what's in linked storage (red when short).
-     */
-    private void drawOrderInfo(DrawContext ctx, int mx, int my) {
-        BuildSession s = this.session;
+    private void drawToasts(DrawContext ctx) {
+        List<Messages.Entry> lines = Messages.visible();
+        int left = hasLeftPanel() ? PAD + LEFT_W + 6 : PAD + 2;
+        int y = bottomY() - 30 - lines.size() * 14;
+        for (Messages.Entry e : lines) {
+            float alpha = Messages.alpha(e);
+            if (alpha < 0.03F) {
+                y += 14;
+                continue;
+            }
+            int stripe = switch (e.kind()) {
+                case SUCCESS -> Theme.GOOD;
+                case WARN -> Theme.GOLD;
+                case ERROR -> Theme.BAD;
+                case CHAT -> Theme.TEXT_FAINT;
+                default -> Theme.ACCENT;
+            };
+            int w = Math.min(rightX() - left - 6, this.textRenderer.getWidth(e.text()) + 12);
+            Theme.round(ctx, left, y, w, 12, Theme.withAlpha(0xE0101820, alpha));
+            ctx.fill(left, y + 1, left + 2, y + 11, Theme.withAlpha(stripe, alpha));
+            ctx.enableScissor(left, y, left + w - 2, y + 12);
+            ctx.drawText(this.textRenderer, e.text(), left + 6, y + 2, Theme.withAlpha(0xFFFFFFFF, alpha), false);
+            ctx.disableScissor();
+            y += 14;
+        }
+    }
+
+    private void drawItemTooltip(DrawContext ctx, int mx, int my) {
+        PaletteEntry e = gridAt(mx, my);
+        Item item = e != null ? e.item() : pinnedAt(mx, my);
+        if (item == null) {
+            return;
+        }
+        int inv = this.client.player == null ? 0 : this.client.player.getInventory().count(item);
+        int stored = StorageManager.get().total(item);
         List<Text> lines = new ArrayList<>();
-        Map<Item, Integer> materials;
-        if (s.tool == ToolMode.BLUEPRINT && s.clipboard != null) {
+        lines.add(new ItemStack(item).getName());
+        lines.add(Text.literal("Inventory: " + inv).formatted(Formatting.GRAY));
+        lines.add(Text.literal("Storage: " + stored).formatted(Formatting.GOLD));
+        lines.add(Text.literal("Click: use  Right-click: " + (e != null ? "pin" : "unpin")).formatted(Formatting.DARK_GRAY));
+        if (stored > 0) {
+            lines.add(Text.literal("Ctrl+click: fetch a stack from storage").formatted(Formatting.DARK_GRAY));
+        }
+        ctx.drawTooltip(this.textRenderer, lines, mx, my);
+    }
+
+    /**
+     * Next to the cursor: size, block count and materials for the shape/paste being placed,
+     * measurements, or what the Terrain tool will do.
+     */
+    private void drawCursorInfo(DrawContext ctx, int mx, int my) {
+        BuildSession s = this.session;
+        BlockHitResult hover = this.controller.hover();
+        List<Text> lines = new ArrayList<>();
+        Map<Item, Integer> materials = Map.of();
+        if (s.tool == ToolMode.MEASURE && s.anchorA != null) {
+            BlockPos b = s.anchorB != null ? s.anchorB : hover != null ? hover.getBlockPos() : null;
+            if (b == null) {
+                return;
+            }
+            lines.add(Text.literal(WorldActions.describeMeasure(s.anchorA, b)).formatted(Formatting.LIGHT_PURPLE));
+        } else if (s.tool == ToolMode.BLUEPRINT && s.clipboard != null) {
             lines.add(Text.literal(s.clipboard.name() + "  " + s.clipboard.size(s.pasteTurns) + "  |  "
-                    + s.clipboard.blockCount() + " blocks").formatted(Formatting.GOLD));
+                    + String.format(Locale.ROOT, "%,d", s.clipboard.blockCount()) + " blocks").formatted(Formatting.GOLD));
             materials = s.clipboard.materials();
+        } else if (s.tool == ToolMode.TERRAIN && s.anchorA != null && (s.anchorB != null || hover != null)) {
+            BlockPos b = s.anchorB != null ? s.anchorB : hover.getBlockPos();
+            int w = Math.abs(s.anchorA.getX() - b.getX()) + 1;
+            int l = Math.abs(s.anchorA.getZ() - b.getZ()) + 1;
+            int[] counts = WorldOverlay.terrainCounts();
+            String what = s.terrainMode == TerrainMode.FLATTEN
+                    ? (counts[0] < 0 ? "planning..." : "mine " + counts[0] + ", fill " + counts[1] + " at Y" + s.anchorA.getY())
+                    : (counts[1] < 0 ? "planning..." : counts[1] + " torches");
+            lines.add(Text.literal(s.terrainMode.label() + " " + w + " x " + l + "  |  " + what).formatted(Formatting.GREEN));
+            if (s.terrainMode == TerrainMode.LIGHT_UP && counts[1] > 0) {
+                materials = Map.of(Items.TORCH, counts[1]);
+            } else if (counts[1] > 0) {
+                materials = Map.of(WorldActions.flattenFill(s).getBlock().asItem(), counts[1]);
+            }
         } else if (s.tool.usesShapes() && s.anchorA != null) {
             OrderPlanner.Plan plan = WorldOverlay.lastPlan();
             if (plan == null) {
@@ -1390,13 +1283,12 @@ public final class RtsScreen extends Screen {
             }
             if (plan.truncated()) {
                 lines.add(Text.literal("Too big: over " + RtsConfig.get().maxShapeBlocks + " blocks").formatted(Formatting.RED));
-                ctx.drawTooltip(this.textRenderer, lines, mx + 8, my + 18);
-                return;
+            } else {
+                String verb = s.tool == ToolMode.DESTROY ? " to mine" : " to place";
+                lines.add(Text.literal(plan.dimensions() + "  |  " + plan.changes().size() + verb)
+                        .formatted(s.tool == ToolMode.DESTROY ? Formatting.RED : Formatting.AQUA));
+                materials = plan.materials();
             }
-            String verb = s.tool == ToolMode.DESTROY ? " to mine" : " to place";
-            lines.add(Text.literal(plan.dimensions() + "  |  " + plan.changes().size() + verb)
-                    .formatted(s.tool == ToolMode.DESTROY ? Formatting.RED : Formatting.AQUA));
-            materials = plan.materials();
         } else {
             return;
         }
@@ -1416,40 +1308,11 @@ public final class RtsScreen extends Screen {
         ctx.drawTooltip(this.textRenderer, lines, mx + 8, my + 18);
     }
 
-    private void drawMessages(DrawContext ctx) {
-        List<Messages.Entry> lines = Messages.visible();
-        int left = hasLeftPanel() ? LEFT_W + PAD * 3 : PAD * 2;
-        int y = bottomY() - 26 - lines.size() * 10;
-        for (Messages.Entry e : lines) {
-            int alpha = (int) (Messages.alpha(e) * 255) << 24;
-            if ((alpha >>> 24) > 8) {
-                ctx.drawTextWithShadow(this.textRenderer, e.text(), left, y, 0x00FFFFFF | alpha);
-            }
-            y += 10;
-        }
-    }
-
-    private void drawTooltips(DrawContext ctx, int mx, int my) {
-        PaletteEntry e = gridAt(mx, my);
-        Item item = e != null ? e.item() : pinnedAt(mx, my);
-        if (item == null) {
-            return;
-        }
-        int inv = this.client.player == null ? 0 : this.client.player.getInventory().count(item);
-        int stored = StorageManager.get().total(item);
-        List<Text> lines = new ArrayList<>();
-        lines.add(new ItemStack(item).getName());
-        lines.add(Text.literal("Inventory: " + inv).formatted(Formatting.GRAY));
-        lines.add(Text.literal("Storage: " + stored).formatted(Formatting.GOLD));
-        lines.add(Text.literal(e != null ? "Left: select  Right: pin" : "Left: select  Right: unpin").formatted(Formatting.DARK_GRAY));
-        ctx.drawTooltip(this.textRenderer, lines, mx, my);
-    }
-
     private String trim(String s, int width) {
         if (this.textRenderer.getWidth(s) <= width) {
             return s;
         }
-        return this.textRenderer.trimToWidth(s, width - this.textRenderer.getWidth("...")) + "...";
+        return this.textRenderer.trimToWidth(s, Math.max(0, width - this.textRenderer.getWidth("..."))) + "...";
     }
 
     private static String shortCount(int n) {

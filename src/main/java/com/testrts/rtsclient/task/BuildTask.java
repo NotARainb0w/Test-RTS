@@ -32,6 +32,8 @@ public final class BuildTask implements RtsTask {
     private boolean stallReported;
     private int pausedTicks;
     private int countIn;
+    /** Blocks still to do at the last count, or -1 before the first count. */
+    private int left = -1;
     private int retries;
     private net.minecraft.util.math.Box bounds;
     private String detail = "waiting";
@@ -44,6 +46,14 @@ public final class BuildTask implements RtsTask {
 
     public Map<BlockPos, BlockState> blocks() {
         return Collections.unmodifiableMap(this.blocks);
+    }
+
+    /** 0..1 done, or -1 while unknown (not started yet). */
+    public float progress() {
+        if (this.left < 0 || this.blocks.isEmpty()) {
+            return -1F;
+        }
+        return 1F - (float) this.left / this.blocks.size();
     }
 
     /** Bounding box of the order, computed once (used for drawing every frame). */
@@ -136,7 +146,8 @@ public final class BuildTask implements RtsTask {
         // Counting is O(order size); once a second is plenty for the task list.
         if (--this.countIn <= 0) {
             this.countIn = 20;
-            this.detail = MaterialPlanner.remaining(client.world, this.blocks) + " / " + this.blocks.size() + " left";
+            this.left = MaterialPlanner.remaining(client.world, this.blocks);
+            this.detail = this.left + " / " + this.blocks.size() + " left";
         }
         if (Engine.isBuilderPaused()) {
             if (this.pausedTicks++ % 20 != 0) {

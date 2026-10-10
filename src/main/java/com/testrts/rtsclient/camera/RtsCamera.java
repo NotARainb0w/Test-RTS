@@ -244,6 +244,25 @@ public final class RtsCamera {
         this.entity.prevPitch = this.pitch;
     }
 
+    /** A saved camera position. */
+    public record Pose(double x, double y, double z, float yaw, float pitch) {
+    }
+
+    public Pose pose() {
+        return new Pose(this.x, this.y, this.z, this.yaw, this.pitch);
+    }
+
+    public void setPose(MinecraftClient client, Pose pose) {
+        this.x = pose.x();
+        this.y = pose.y();
+        this.z = pose.z();
+        this.yaw = pose.yaw();
+        this.pitch = pose.pitch();
+        this.velX = this.velY = this.velZ = 0.0;
+        clampToPlayer(client);
+        apply();
+    }
+
     public Vec3d position() {
         return new Vec3d(this.x, this.y, this.z);
     }

@@ -127,6 +127,10 @@ public final class Blueprint {
      * mines whatever is there so the result matches the original exactly.
      */
     public java.util.List<BlockPos> placedAir(BlockPos origin, int quarterTurns) {
+        return placedAir(origin, quarterTurns, false);
+    }
+
+    public java.util.List<BlockPos> placedAir(BlockPos origin, int quarterTurns, boolean mirror) {
         int r = Math.floorMod(quarterTurns, 4);
         java.util.List<BlockPos> out = new java.util.ArrayList<>();
         BlockPos.Mutable m = new BlockPos.Mutable();
@@ -136,7 +140,8 @@ public final class Blueprint {
                     if (this.blocks.containsKey(m.set(x, y, z))) {
                         continue;
                     }
-                    out.add(origin.add(rotX(x, z, r), y, rotZ(x, z, r)));
+                    int mx = mirror ? this.sizeX - 1 - x : x;
+                    out.add(origin.add(rotX(mx, z, r), y, rotZ(mx, z, r)));
                 }
             }
         }
@@ -166,6 +171,11 @@ public final class Blueprint {
      * {@code quarterTurns} times clockwise (seen from above).
      */
     public Map<BlockPos, BlockState> placed(BlockPos origin, int quarterTurns) {
+        return placed(origin, quarterTurns, false);
+    }
+
+    /** @param mirror flip left-right (along X) before rotating */
+    public Map<BlockPos, BlockState> placed(BlockPos origin, int quarterTurns, boolean mirror) {
         int r = Math.floorMod(quarterTurns, 4);
         BlockRotation rotation = switch (r) {
             case 1 -> BlockRotation.CLOCKWISE_90;
@@ -176,7 +186,9 @@ public final class Blueprint {
         Map<BlockPos, BlockState> out = new LinkedHashMap<>(this.blocks.size() * 2);
         for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
             BlockPos p = e.getKey();
-            out.put(origin.add(rotX(p.getX(), p.getZ(), r), p.getY(), rotZ(p.getX(), p.getZ(), r)), e.getValue().rotate(rotation));
+            int x = mirror ? this.sizeX - 1 - p.getX() : p.getX();
+            BlockState state = mirror ? e.getValue().mirror(net.minecraft.util.BlockMirror.FRONT_BACK) : e.getValue();
+            out.put(origin.add(rotX(x, p.getZ(), r), p.getY(), rotZ(x, p.getZ(), r)), state.rotate(rotation));
         }
         return out;
     }
