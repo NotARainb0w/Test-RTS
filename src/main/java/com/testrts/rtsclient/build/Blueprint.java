@@ -110,6 +110,57 @@ public final class Blueprint {
         return new Blueprint(name, x1 - x0 + 1, y1 - y0 + 1, z1 - z0 + 1, out);
     }
 
+    /** Where the minimum corner goes so the blueprint is centred on {@code cursor} (bottom on its level). */
+    public BlockPos originFor(BlockPos cursor, int quarterTurns) {
+        boolean swapped = Math.floorMod(quarterTurns, 2) == 1;
+        int w = swapped ? this.sizeZ : this.sizeX;
+        int l = swapped ? this.sizeX : this.sizeZ;
+        return cursor.add(-(w - 1) / 2, 0, -(l - 1) / 2);
+    }
+
+    public long volume() {
+        return (long) this.sizeX * this.sizeY * this.sizeZ;
+    }
+
+    /**
+     * The empty cells inside the blueprint's box, placed like {@link #placed}: pasting with "clear air"
+     * mines whatever is there so the result matches the original exactly.
+     */
+    public java.util.List<BlockPos> placedAir(BlockPos origin, int quarterTurns) {
+        int r = Math.floorMod(quarterTurns, 4);
+        java.util.List<BlockPos> out = new java.util.ArrayList<>();
+        BlockPos.Mutable m = new BlockPos.Mutable();
+        for (int y = 0; y < this.sizeY; y++) {
+            for (int x = 0; x < this.sizeX; x++) {
+                for (int z = 0; z < this.sizeZ; z++) {
+                    if (this.blocks.containsKey(m.set(x, y, z))) {
+                        continue;
+                    }
+                    out.add(origin.add(rotX(x, z, r), y, rotZ(x, z, r)));
+                }
+            }
+        }
+        return out;
+    }
+
+    private int rotX(int x, int z, int r) {
+        return switch (r) {
+            case 1 -> this.sizeZ - 1 - z;
+            case 2 -> this.sizeX - 1 - x;
+            case 3 -> z;
+            default -> x;
+        };
+    }
+
+    private int rotZ(int x, int z, int r) {
+        return switch (r) {
+            case 1 -> x;
+            case 2 -> this.sizeZ - 1 - z;
+            case 3 -> this.sizeX - 1 - x;
+            default -> z;
+        };
+    }
+
     /**
      * World positions and states when pasted with its minimum corner at {@code origin}, turned
      * {@code quarterTurns} times clockwise (seen from above).
@@ -125,29 +176,7 @@ public final class Blueprint {
         Map<BlockPos, BlockState> out = new LinkedHashMap<>(this.blocks.size() * 2);
         for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
             BlockPos p = e.getKey();
-            int x = p.getX();
-            int z = p.getZ();
-            int rx;
-            int rz;
-            switch (r) {
-                case 1 -> {
-                    rx = this.sizeZ - 1 - z;
-                    rz = x;
-                }
-                case 2 -> {
-                    rx = this.sizeX - 1 - x;
-                    rz = this.sizeZ - 1 - z;
-                }
-                case 3 -> {
-                    rx = z;
-                    rz = this.sizeX - 1 - x;
-                }
-                default -> {
-                    rx = x;
-                    rz = z;
-                }
-            }
-            out.put(origin.add(rx, p.getY(), rz), e.getValue().rotate(rotation));
+            out.put(origin.add(rotX(p.getX(), p.getZ(), r), p.getY(), rotZ(p.getX(), p.getZ(), r)), e.getValue().rotate(rotation));
         }
         return out;
     }

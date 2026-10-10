@@ -124,8 +124,9 @@ public final class WorldOverlay {
             SHAPE_CLEAR.clear();
         }
 
-        if (session.tool == ToolMode.BLUEPRINT && session.clipboard != null && hover != null) {
-            BlockPos origin = targetFor(session, hover);
+        if (session.tool == ToolMode.BLUEPRINT && session.clipboard != null && (hover != null || session.pasteAnchor != null)) {
+            BlockPos origin = session.pasteAnchor != null ? session.pasteAnchor
+                    : session.clipboard.originFor(targetFor(session, hover), session.pasteTurns);
             var bp = session.clipboard;
             int turns = session.pasteTurns;
             PASTE.request(List.of(bp, origin, turns), () -> new PreviewMesh.Blocks(bp.placed(origin, turns), false), true);
@@ -195,6 +196,10 @@ public final class WorldOverlay {
             BlockPos b = session.anchorB != null ? session.anchorB : hover != null ? hover.getBlockPos() : a;
             Box sel = new Box(a).union(new Box(b)).expand(0.02);
             WorldRenderer.drawBox(matrices, lines, sel, 1.0F, 0.84F, 0.3F, 1.0F);
+        }
+        if (session.tool == ToolMode.BLUEPRINT && session.clipboard != null && PASTE.bounds() != null) {
+            WorldRenderer.drawBox(matrices, lines, PASTE.bounds().expand(0.03), 1.0F, 0.84F, 0.3F,
+                    session.pasteAnchor != null ? 1.0F : 0.5F);
         }
         if (hover != null && !showShape) {
             BlockPos target = targetFor(session, hover);

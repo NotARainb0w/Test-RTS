@@ -57,8 +57,18 @@ implementation; no code or assets are taken from it.
 - **Destroy**: the same shapes, but mines the blocks. Afterwards the character picks up the drops.
 - **Interact**: click any block (chest, door, lever, crafting table...). Your character walks over and uses it.
 - **Link storage**: click containers to add them to your storage network.
-- **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`), then click to
-  paste it, R to rotate. Saved blueprints are listed on the left (Shift+click deletes).
+- **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
+  blueprints are listed on the left (Shift+click deletes).
+  - **Load schematic...** opens the files in `.minecraft/schematics/`: Litematica `.litematic`,
+    WorldEdit/Sponge `.schem`, and vanilla structure `.nbt` files. Only blocks are imported (not chest
+    contents or entities).
+  - **Placing**: the blueprint follows the cursor, centred on it. Click to pin it, nudge it with the arrow keys
+    (Shift+Up/Down for height), R to rotate, then click again or press Enter to build. X lets it follow the
+    cursor again.
+  - **Air: keep / clear**: *clear* also mines whatever is in the blueprint's empty spaces, so the result is an
+    exact copy.
+  - Building a schematic works like any order: layer by layer, fetching missing materials from storage, with
+    the material list (need / have / stored) shown at the cursor.
 
 While you draw a shape or paste, a label at the cursor shows its size (e.g. `5 x 5 x 1`), how many blocks it
 places or mines, and the materials it needs against what you carry and what's in storage (red when short).

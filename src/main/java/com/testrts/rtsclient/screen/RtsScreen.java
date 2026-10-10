@@ -345,11 +345,22 @@ public final class RtsScreen extends Screen {
             }
             button("New copy", "Select a region with two clicks to copy it", PAD, y, full, 16, () -> {
                 s.clipboard = null;
+                s.pasteAnchor = null;
                 s.clearSelection();
                 clearAndInit();
             });
             y += 18;
             button("Rotate", "Turn the blueprint 90 degrees [R]", PAD, y, full, 16, () -> s.pasteTurns++);
+            y += 18;
+            button("Load schematic...", "Litematica .litematic, WorldEdit .schem or structure .nbt from .minecraft/schematics",
+                    PAD, y, full, 16, () -> this.client.setScreen(new SchematicBrowserScreen(this)));
+            y += 18;
+            button("Air: " + (s.pasteClearsAir ? "clear" : "keep"),
+                    "clear: also mine whatever is in the blueprint's empty spaces, for an exact copy. keep: only add blocks.",
+                    PAD, y, full, 16, () -> {
+                        s.pasteClearsAir = !s.pasteClearsAir;
+                        clearAndInit();
+                    });
             y += 18;
             this.clipboardLabelY = y + 2;
             y += 24;
@@ -372,6 +383,7 @@ public final class RtsScreen extends Screen {
                             } else {
                                 s.clipboard = bp;
                                 s.pasteTurns = 0;
+                                s.pasteAnchor = null;
                                 s.clearSelection();
                             }
                             clearAndInit();
@@ -539,22 +551,13 @@ public final class RtsScreen extends Screen {
     private void blueprintClick(BlockHitResult hit) {
         BuildSession s = this.session;
         if (s.clipboard != null) {
-            // Paste.
-            BlockPos origin = WorldOverlay.targetFor(s, hit);
-            Map<BlockPos, BlockState> placed = s.clipboard.placed(origin, s.pasteTurns);
-            Map<BlockPos, BlockState> order = new LinkedHashMap<>();
-            for (Map.Entry<BlockPos, BlockState> e : placed.entrySet()) {
-                if (this.client.world.getBlockState(e.getKey()).getBlock() != e.getValue().getBlock()) {
-                    order.put(e.getKey(), e.getValue());
-                }
+            if (s.pasteAnchor == null) {
+                // First click pins it; arrows nudge it; click again or Enter builds it.
+                s.pasteAnchor = s.clipboard.originFor(WorldOverlay.targetFor(s, hit), s.pasteTurns);
+                Messages.info("Placed - arrows to nudge, R to rotate, click or Enter to build, X to move it again");
+            } else {
+                confirmPaste();
             }
-            if (order.isEmpty()) {
-                Messages.info("Already built there");
-                return;
-            }
-            String label = "Paste " + s.clipboard.name() + " (" + order.size() + ")";
-            pushUndo(label, order);
-            queue(new BuildTask(label, order, false));
             return;
         }
         // Copy: two corners.
@@ -578,6 +581,48 @@ public final class RtsScreen extends Screen {
         this.blueprints = Blueprint.loadAll();
         Messages.success("Copied " + bp.blockCount() + " blocks (" + bp.size() + ") as \"" + name + "\" - click to paste, R to rotate");
         clearAndInit();
+    }
+
+    private void confirmPaste() {
+        BuildSession s = this.session;
+        if (s.clipboard == null || s.pasteAnchor == null || this.client.world == null) {
+            return;
+        }
+        Blueprint bp = s.clipboard;
+        Map<BlockPos, BlockState> build = new LinkedHashMap<>();
+        for (Map.Entry<BlockPos, BlockState> e : bp.placed(s.pasteAnchor, s.pasteTurns).entrySet()) {
+            if (this.client.world.getBlockState(e.getKey()).getBlock() != e.getValue().getBlock()) {
+                build.put(e.getKey(), e.getValue());
+            }
+        }
+        Map<BlockPos, BlockState> clear = new LinkedHashMap<>();
+        if (s.pasteClearsAir) {
+            if (bp.volume() > RtsConfig.get().maxShapeBlocks) {
+                Messages.warn("Too big to clear the air inside; pasting blocks only");
+            } else {
+                for (BlockPos p : bp.placedAir(s.pasteAnchor, s.pasteTurns)) {
+                    BlockState now = this.client.world.getBlockState(p);
+                    if (!now.isAir() && !(now.getBlock() instanceof net.minecraft.block.FluidBlock)
+                            && now.getHardness(this.client.world, p) >= 0) {
+                        clear.put(p, Blocks.AIR.getDefaultState());
+                    }
+                }
+            }
+        }
+        s.pasteAnchor = null;
+        if (build.isEmpty() && clear.isEmpty()) {
+            Messages.info("Already built there");
+            return;
+        }
+        Map<BlockPos, BlockState> all = new LinkedHashMap<>(clear);
+        all.putAll(build);
+        pushUndo("Paste " + bp.name(), all);
+        if (!clear.isEmpty()) {
+            queue(new BuildTask("Clear for " + bp.name() + " (" + clear.size() + ")", clear, true));
+        }
+        if (!build.isEmpty()) {
+            queue(new BuildTask("Build " + bp.name() + " (" + build.size() + ")", build, false));
+        }
     }
 
     private void shapeClick(BlockPos target) {
@@ -874,8 +919,9 @@ public final class RtsScreen extends Screen {
             if (this.search.isFocused()) {
                 this.search.setFocused(false);
                 setFocused(null);
-            } else if (this.session.anchorA != null) {
+            } else if (this.session.anchorA != null || this.session.pasteAnchor != null) {
                 this.session.clearSelection();
+                this.session.pasteAnchor = null;
             } else {
                 close();
             }
@@ -946,7 +992,11 @@ public final class RtsScreen extends Screen {
                 return true;
             }
             case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
-                confirmOrder();
+                if (this.session.tool == ToolMode.BLUEPRINT) {
+                    confirmPaste();
+                } else {
+                    confirmOrder();
+                }
                 return true;
             }
             case GLFW.GLFW_KEY_Z -> {
@@ -957,6 +1007,7 @@ public final class RtsScreen extends Screen {
             }
             case GLFW.GLFW_KEY_X, GLFW.GLFW_KEY_BACKSPACE -> {
                 this.session.clearSelection();
+                this.session.pasteAnchor = null;
                 return true;
             }
             case GLFW.GLFW_KEY_LEFT_BRACKET -> {
@@ -1004,7 +1055,7 @@ public final class RtsScreen extends Screen {
     /** Arrow keys move the shape's points one block (relative to the camera); Shift+Up/Down moves them vertically. */
     private void nudge(int keyCode) {
         BuildSession s = this.session;
-        if (s.anchorA == null) {
+        if (s.anchorA == null && s.pasteAnchor == null) {
             return;
         }
         Direction forward = Direction.fromRotation(this.controller.camera().yaw());
@@ -1019,7 +1070,12 @@ public final class RtsScreen extends Screen {
                 default -> forward.rotateYClockwise();
             };
         }
-        s.anchorA = s.anchorA.offset(d);
+        if (s.pasteAnchor != null) {
+            s.pasteAnchor = s.pasteAnchor.offset(d);
+        }
+        if (s.anchorA != null) {
+            s.anchorA = s.anchorA.offset(d);
+        }
         if (s.anchorB != null) {
             s.anchorB = s.anchorB.offset(d);
         }
@@ -1302,7 +1358,9 @@ public final class RtsScreen extends Screen {
             case LINK -> line = "Link storage: click containers to link/unlink";
             case BLUEPRINT -> line = this.session.clipboard == null
                     ? "Blueprint: click two corners to copy a region"
-                    : "Blueprint: click to paste " + this.session.clipboard.name() + " | R rotate | New copy to select again";
+                    : this.session.pasteAnchor == null
+                    ? "Blueprint: click to place " + this.session.clipboard.name() + " | R rotate"
+                    : "Blueprint: arrows nudge, R rotate, click/Enter to build, X to move";
             default -> line = "";
         }
         ctx.drawTextWithShadow(this.textRenderer, line, PAD, y, TEXT);

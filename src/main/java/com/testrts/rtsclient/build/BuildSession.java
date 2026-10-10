@@ -27,6 +27,11 @@ public final class BuildSession {
     public Blueprint clipboard;
     /** Quarter turns clockwise applied to the pasted blueprint. */
     public int pasteTurns;
+    /** Where the blueprint's minimum corner is pinned after the first click (null: follows the cursor). */
+    @Nullable
+    public BlockPos pasteAnchor;
+    /** Mine blocks inside the blueprint's box that are air in the blueprint, for an exact copy. */
+    public boolean pasteClearsAir;
 
     /** First click of a two-point shape. */
     @Nullable
