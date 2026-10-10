@@ -81,15 +81,53 @@ public final class ShapeGenerator {
             out.add(a.getX(), a.getY(), a.getZ());
             return;
         }
+        boolean connect = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        int px = a.getX();
+        int py = a.getY();
+        int pz = a.getZ();
         for (int i = 0; i <= steps; i++) {
             double t = (double) i / steps;
-            if (!out.add(
-                    (int) Math.round(a.getX() + dx * t),
-                    (int) Math.round(a.getY() + dy * t),
-                    (int) Math.round(a.getZ() + dz * t))) {
+            int x = (int) Math.round(a.getX() + dx * t);
+            int y = (int) Math.round(a.getY() + dy * t);
+            int z = (int) Math.round(a.getZ() + dz * t);
+            if (connect && i > 0 && !connectStep(out, px, py, pz, x, y, z)) {
                 return;
             }
+            if (!out.add(x, y, z)) {
+                return;
+            }
+            px = x;
+            py = y;
+            pz = z;
         }
+    }
+
+    /**
+     * Diagonal steps leave blocks touching only at an edge or corner, so a block can't be placed
+     * against the previous one (over water or air there is nothing else to click). Fill in the step:
+     * sideways first, then up, so a rising line becomes a walkable staircase.
+     */
+    private static boolean connectStep(Collector out, int px, int py, int pz, int x, int y, int z) {
+        int cx = px;
+        int cy = py;
+        int cz = pz;
+        int changed = (x != px ? 1 : 0) + (y != py ? 1 : 0) + (z != pz ? 1 : 0);
+        if (changed <= 1) {
+            return true;
+        }
+        if (x != cx) {
+            cx = x;
+            if (--changed > 0 && !out.add(cx, cy, cz)) {
+                return false;
+            }
+        }
+        if (z != cz) {
+            cz = z;
+            if (--changed > 0 && !out.add(cx, cy, cz)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void floor(Collector out, BlockPos a, BlockPos b, boolean hollow) {
@@ -114,16 +152,28 @@ public final class ShapeGenerator {
         int steps = Math.max(Math.abs(dx), Math.abs(dz));
         int y0 = minY(a.getY(), height);
         int y1 = maxY(a.getY(), height);
+        boolean connect = com.testrts.rtsclient.config.RtsConfig.get().buildableShells;
+        int px = a.getX();
+        int pz = a.getZ();
         for (int i = 0; i <= steps; i++) {
             double t = steps == 0 ? 0.0 : (double) i / steps;
             int x = (int) Math.round(a.getX() + dx * t);
             int z = (int) Math.round(a.getZ() + dz * t);
+            // A diagonal wall's columns only touch at their edges; add the corner column so it's solid.
+            boolean corner = connect && i > 0 && x != px && z != pz;
             for (int y = y0; y <= y1; y++) {
                 boolean edge = i == 0 || i == steps || y == y0 || y == y1;
-                if ((!hollow || edge) && !out.add(x, y, z)) {
-                    return;
+                if (!hollow || edge) {
+                    if (corner && !out.add(x, y, pz)) {
+                        return;
+                    }
+                    if (!out.add(x, y, z)) {
+                        return;
+                    }
                 }
             }
+            px = x;
+            pz = z;
         }
     }
 

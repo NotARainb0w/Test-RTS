@@ -729,6 +729,7 @@ public final class NativeBuilder {
             return false;
         }
         BlockPos unsupported = null;
+        boolean supportedInReach = false;
         for (BlockPos p : inReach) {
             BlockState wanted = this.order.get(p);
             if (done(world, p, wanted)) {
@@ -741,6 +742,7 @@ public final class NativeBuilder {
                 }
                 continue;
             }
+            supportedInReach = true;
             BlockState current = world.getBlockState(p);
             if (!current.isAir() && !current.canBeReplaced()) {
                 // Something else is in the way: mine it first.
@@ -773,13 +775,25 @@ public final class NativeBuilder {
                 return true;
             }
         }
-        // Nothing here can be attached to anything. If that's true of the whole layer, scaffold.
-        if (unsupported != null && !anySupported(world)) {
+        // Nothing here can be attached to anything. Scaffold when the whole layer is stuck, or right
+        // away when nothing in reach can be placed and no planned neighbour will give it support
+        // (e.g. a block floating over water), instead of walking off and coming back.
+        if (unsupported != null && (!anySupported(world) || !supportedInReach && !neighbourPending(unsupported))) {
             if (planScaffold(world, player, unsupported)) {
                 this.status = "planning scaffolding";
                 return true;
             }
             fail(unsupported);
+        }
+        return false;
+    }
+
+    /** Whether a block of this order still to be placed shares a face with {@code pos}. */
+    private boolean neighbourPending(BlockPos pos) {
+        for (Direction d : Direction.values()) {
+            if (this.todo.contains(pos.relative(d))) {
+                return true;
+            }
         }
         return false;
     }
