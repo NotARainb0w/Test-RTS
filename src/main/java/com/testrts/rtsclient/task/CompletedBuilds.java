@@ -24,7 +24,7 @@ public final class CompletedBuilds {
     private CompletedBuilds() {
     }
 
-    static void record(String label, Map<BlockPos, BlockState> blocks) {
+    public static void record(String label, Map<BlockPos, BlockState> blocks) {
         String name = label.replaceFirst(" \\(\\d+\\)$", "");
         ENTRIES.removeIf(e -> e.label().equals(name) && e.blocks().keySet().equals(blocks.keySet()));
         ENTRIES.addFirst(new Entry(name, new LinkedHashMap<>(blocks)));

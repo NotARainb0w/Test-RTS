@@ -68,6 +68,69 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 | [x] | Build blocks fetched from chests | `-Pautotest=storage-box` | Scan nearby linked and read 2 chests; every brick placed came from them (192 fetched, 146 placed) |
 | [x] | Scaffolding fetched from chests | `-Pautotest=storage-box,storage-dome` | Fetches dirt when it has to build its way up, removes it after |
 
+## Applied Energistics 2 (dev clients: Fabric AE2 15.4.11 + ae2wtlib 15.2.1, NeoForge AE2 19.2.17 + ae2wtlib 19.5.1)
+
+NeoForge live tests build a real network next to the arena (controller, creative energy cell, drive with a 64k
+cell, boosted access point, terminal on a cable) and fill it with 448 stone bricks and 128 dirt:
+`cd neoforge && ./gradlew runClient -Pautotest=me-wireless,me-terminal -Pautoquit`.
+
+| Done | What | How | Result |
+|---|---|---|---|
+| [x] | Wireless terminal fetch | `me-wireless` (NeoForge) | PASS 146/146 in 48-64s; 191 bricks out of the network = 146 placed + 45 carried, client count matches the server |
+| [x] | ae2wtlib terminal | `me-wtlib` (NeoForge): only an ae2wtlib wireless pattern encoding terminal | PASS 146/146 in 50s; AE2's own hotkey can't open it, ae2wtlib's does. Still to try: universal terminal, Curios/Trinkets slot |
+| [ ] | Out of range | Wireless terminal out of range of the access point | Gives up quickly, falls back to a linked ME terminal or chests, no loop |
+| [x] | Link an ME terminal | Link tool on a terminal or crafting terminal; `me-terminal` links a crafting terminal from a click on its rim | AE2 picks the part at the clicked point, so the rim counts (was: only the exact face, crafting terminals often failed). Cyan plate not checked yet |
+| [x] | Walk to ME terminal | `me-terminal` (NeoForge) | PASS 146/146 in 57s; walks to the linked terminal, takes bricks, and later dirt for scaffolding |
+| [ ] | Network + chests | Network has some of the bricks, a linked chest the rest | Takes from the network first, then the chest |
+| [x] | Never opened | Every ME scenario starts with the network forgotten | Builds still go to the network first and then know its contents |
+| [ ] | Item bar counts | Open any terminal by hand | Item bar and Materials screen include the network's counts; storage panel says "ME (wireless): N item types" |
+| [x] | Scaffolding from ME | `me-terminal` (no dirt carried) | Fetched dirt from the network to climb to the roof centre, removed it after |
+| [ ] | Inventory full | Nearly full inventory | Only asks for as many stacks as there are free slots |
+| [ ] | Setting off | Settings > Use AE2 for materials off | Network ignored, chests only, no ME line in the storage panel |
+| [ ] | No AE2 | Run without AE2 installed | Nothing changes, no errors in the log |
+| [x] | Full inventory + Baritone | `me-terminal-full` (hotbar full of stone, tools in the main inventory) | Was stuck: Baritone's allowInventory keeps the pickaxe in hotbar slot 1 and the builder swapped blocks into that same slot, so they fought over it. Builder now swaps into slots 2-8. PASS 146/146 in 50s |
+| [ ] | Terminal closed on first open | Seen once in `me-terminal-full`: "The ME terminal was closed early" right as the first fetch opened it | Retry got the items; find out what closes it |
+| [ ] | NeoForge (ATM10) | Wireless terminal fetch in ATM10 | Same as the dev client |
+| [ ] | Fabric | Same scenarios on Fabric (harness not ported yet) | Same as NeoForge |
+
+## Modded storage (ATM10)
+
+| Done | What | How | Result |
+|---|---|---|---|
+| [ ] | Link modded storage | Link tool on Sophisticated Storage chest/barrel, Iron Chests, crates | Links; reading/fetching/storing works through its screen |
+| [ ] | Scan nearby | Scan in a base with modded chests, drawers and machines | Links chests/barrels/crates, not drawers, furnaces, pipes or AE2 blocks |
+| [ ] | Drawers refused | Link tool on a Storage Drawers / Functional Storage drawer | "That's not a storage block" (a click would insert the held item) |
+
+## Start / Pause, hologram, controls panel
+
+| Done | What | How | Result |
+|---|---|---|---|
+| [ ] | Orders wait | Queue a shape (Enter or click) | "queued - press Start", ORDERS says "Waiting - press Start", the character doesn't move |
+| [ ] | Start | Press Start | The queue runs; button shows "Running" |
+| [ ] | Pause | Press Pause mid-build | The character stops at once (no half-mined block, no walking); Start carries on from there |
+| [ ] | Queue empties | Let the queue finish, queue another order | It waits for Start again |
+| [ ] | Start right away | Setting on | Orders start as soon as they're queued (old behaviour) |
+| [ ] | Fetch / helpers | A build that has to fetch materials | The fetch runs inside the started queue, no extra Start needed |
+| [ ] | Auto-repair | Auto-repair on, break a block of a finished build | The repair order starts by itself |
+| [ ] | Hologram | Queue a build, leave RTS mode | Ghost blocks stay visible in normal play; H hides/shows them |
+| [ ] | Manual placing | Place a few of the ghost's blocks by hand | They drop out of the ghost within a second |
+| [ ] | ATM10 render | Hologram on in ATM10 (Embeddium / Oculus) | No player, mob or portal drawn in the wrong place (the old bug) |
+| [ ] | Next to a chest / crafting table | Hologram block whose only neighbour is a chest, crafting table, smithing table, modded machine; hold Z | Block placed, no screen opens (sneak-click). Same for the builder |
+| [ ] | Screen opens anyway | A modded block that ignores sneaking | Screen closes at once, that spot is skipped, no getting stuck |
+| [ ] | Hold-Z range | Settings > Hold-Z place range = 2 blocks, hold Z beside a big hologram | Only blocks within 2 blocks of your eyes go in; Full reach goes back to normal |
+| [ ] | Hold X (aimed) | Look at a ghost block, hold X; sweep the crosshair over a wall of ghosts | Places only the ghost under the crosshair; real blocks stop the look |
+| [ ] | Hold Z to place | Queue a build, leave RTS mode, stand near it and hold Z | Blocks in reach go in, lowest first, about 5 a second; the view doesn't move |
+| [ ] | Facing | Order with stairs / logs / furnaces, hold Z looking elsewhere | They come out facing the way the order wants |
+| [ ] | Hand back | Let go of Z | The slot you had selected is selected again |
+| [ ] | Queue running | Start the queue, hold Z | "Pause the queue to place blocks by hand", nothing placed |
+| [ ] | Missing blocks | Hold Z without the order's block in the inventory | "Nothing to place: no X in your inventory" every few seconds |
+| [ ] | Finished | Place the last block by hand | The order comes off the queue as finished |
+| [ ] | Server-safe Z | Server-safe on: hold Z beside a hologram with stairs and a floating block | No view snaps sent, the floating block and wrong-facing stairs are skipped ("would face the wrong way"), max 5/s |
+| [ ] | Server-safe X | Server-safe on: look at a block face next to a ghost, hold X | Places like a normal right-click into the ghost cell; nothing when the crosshair isn't next to a ghost |
+| [ ] | Anti-cheat server | Hold Z / X on a server with Grim or NCP, server-safe on | No flags or rubber-banding |
+| [ ] | Speed | Server-safe off, Hold-Z place speed 20 | About 20 blocks a second; with server-safe on, 5 |
+| [ ] | Controls panel | F1, or the ? button in RTS mode | Panel with every control, two columns on small screens; click or F1/Esc closes it |
+
 ## Patterns
 
 - [ ] Mix 3 blocks, cycle Pattern: Random, Clusters, Gradient, Layers, Stripes, Checker each look right in the preview
@@ -83,8 +146,8 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 
 ## Schematics
 
-- [ ] Blueprint > Export... writes `.minecraft/schematics/<name>.schem`; Shift+click writes `.nbt`
-- [ ] Exported file loads back with Load schematic... and matches
+- [x] Blueprint > Export... writes `.minecraft/schematics/<name>.schem` (dev client: copy_1.schem); Shift+click writes `.nbt` (not tried)
+- [x] Exported file loads back with Load schematic... and matches (23 x 34 x 12, 1,605 blocks)
 - [ ] `.schem` opens in WorldEdit (`//schem load`) or Litematica; `.nbt` in a structure block
 - [ ] Exporting twice with the same name makes `<name>-2`, nothing overwritten
 
@@ -97,6 +160,19 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 - [ ] Quit the game with orders queued: "Last session" is there next time
 - [ ] Shift+click deletes a saved queue; saving with an existing name replaces it
 - [ ] Other dimension / other world: their own saved queues, not this one's
+
+## Camera (rebuilt: RTS mode changes no game settings)
+
+| Done | What | How | Expect |
+|---|---|---|---|
+| [ ] | Leaving RTS restores the view | First person, G in and out; then F5 back view, G in and out; then front view | Always back in the same view as before, HUD and hand as before |
+| [x] | Normal third person after RTS | Use RTS, leave, F5 and walk/turn around | Fine in the NeoForge dev client; confirm in ATM10 (the player model was drawn in the wrong place by the old render hook) |
+| [ ] | F1 untouched | F1 (HUD off), G in and out | HUD still off after; with HUD on, still on |
+| [ ] | RTS view itself | WASD, scroll, right-drag, middle-drag, Q | Moves as before; your character visible, no block outline where it looks |
+| [ ] | Through other screens | E / T / chest from RTS mode, close it | Back in RTS view where you were |
+| [ ] | Death / dimension change in RTS mode | Die, or go through a portal | RTS closes, normal view, nothing stuck |
+| [ ] | Packs with Leawind's Third Person / Blur | Prominence II | Camera moves, no blur, normal third person fine after |
+| [ ] | Baritone mining in RTS mode | Destroy order with Engine: Baritone | Still mines (it reads what the player looks at) |
 
 ## Interact with items (Fabric)
 

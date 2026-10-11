@@ -235,7 +235,7 @@ public final class RtsScreen extends Screen {
         this.actions = new WorldActions(this.minecraft, this.controller);
 
         // Top bar: tools with icons (icons only when the window is narrow).
-        int toolsRoom = this.width - 2 * PAD - 26 - 120;
+        int toolsRoom = this.width - 2 * PAD - 48 - 120;
         int fullWidth = 0;
         for (ToolMode tool : ToolMode.values()) {
             fullWidth += this.font.width(tool.label()) + 26 + 2;
@@ -253,6 +253,9 @@ public final class RtsScreen extends Screen {
         }
         button("Settings", "Settings: engine, layers, previews, camera...", this.width - PAD - 20, 2, 20, 20,
                 () -> this.minecraft.setScreen(new RtsSettingsScreen(this))).glyph(Glyphs.GEAR, Theme.TEXT).iconOnly();
+        button("Controls", "Every key and mouse control [F1]", this.width - PAD - 42, 2, 20, 20,
+                () -> this.showControls = !this.showControls).glyph(Glyphs.HELP, Theme.TEXT).iconOnly()
+                .selected(() -> this.showControls);
 
         initRightPanel();
         initLeftPanel();
@@ -316,14 +319,30 @@ public final class RtsScreen extends Screen {
         }).glyph(Glyphs.FOLDER, Theme.GOOD);
         button("Load queue", "Add the orders of a saved queue to the end of this one", rx + half + 2, y, half, 16,
                 () -> this.minecraft.setScreen(new QueueScreen(this))).glyph(Glyphs.LIST, Theme.ACCENT);
+        y += 18;
+        button("Start", "Run the queued orders (they wait until you press this)", rx, y, half, 16, () -> {
+            if (TaskQueue.get().isEmpty()) {
+                Messages.info("Nothing queued yet");
+            } else if (!TaskQueue.get().isStarted()) {
+                TaskQueue.get().start();
+                Messages.info("Orders started");
+            }
+        }).glyph(Glyphs.PLAY, Theme.GOOD).selected(() -> TaskQueue.get().isStarted())
+                .dynamic(() -> TaskQueue.get().isStarted() ? "Running" : "Start");
+        button("Pause", "Stop every order right where it is; Start carries on", rx + half + 2, y, half, 16, () -> {
+            if (TaskQueue.get().isStarted()) {
+                TaskQueue.get().pauseAll(this.minecraft);
+                Messages.info("Orders paused - Start to carry on");
+            }
+        }).glyph(Glyphs.PAUSE, Theme.GOLD).selected(() -> !TaskQueue.get().isStarted() && !TaskQueue.get().isEmpty());
         y += 20;
         this.ordersTop = y + 22;
 
         int bottom = rightBottom();
         int sy = bottom - PAD - 3 * 18;
-        this.storageTop = sy - 24;
+        this.storageTop = sy - (meStatus() != null ? 34 : 24); // room for the AE2 line
         this.ordersBottom = this.storageTop - 4;
-        button("Scan nearby", "Link every chest, barrel and shulker box within " + RtsConfig.get().scanRadius
+        button("Scan nearby", "Link every chest, barrel, shulker box and modded storage block within " + RtsConfig.get().scanRadius
                 + " blocks, then open the new ones to read what they hold", rx, sy, half, 16, () -> this.actions.scanNearby());
         button("Index new", "Open linked containers we haven't seen inside yet", rx + half + 2, sy, half, 16,
                 () -> this.actions.indexStorage(true));
@@ -337,6 +356,7 @@ public final class RtsScreen extends Screen {
                 .icon(new ItemStack(Items.FURNACE));
         button("Unlink all", "Forget every storage link", rx + half + 2, sy + 18, half, 16, () -> {
             StorageManager.get().unlinkAll();
+            com.testrts.rtsclient.storage.MeNetwork.get().unlinkAll();
             Messages.info("Storage links cleared");
         });
     }
@@ -874,6 +894,10 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
+        if (this.showControls && !(my < TOP_H && mx >= this.width - PAD - 42 && mx < this.width - PAD - 20)) {
+            this.showControls = false;
+            return true;
+        }
         if (super.mouseClicked(mx, my, button)) {
             return true;
         }
@@ -1022,6 +1046,10 @@ public final class RtsScreen extends Screen {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         BuildSession s = this.session;
+        if (keyCode == GLFW.GLFW_KEY_F1 || this.showControls && keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            this.showControls = keyCode == GLFW.GLFW_KEY_F1 && !this.showControls;
+            return true;
+        }
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
             if (this.search.isFocused()) {
                 this.search.setFocused(false);
@@ -1230,6 +1258,77 @@ public final class RtsScreen extends Screen {
         if (!overUi(mouseX, mouseY)) {
             drawCursorInfo(ctx, mouseX, mouseY);
         }
+        if (this.showControls) {
+            drawControls(ctx);
+        }
+    }
+
+    // ------------------------------------------------------------------ controls panel (F1 / ?)
+
+    /** The controls panel is open (F1 or the ? button; any click or Esc closes it). */
+    private boolean showControls;
+
+    private static final String[][] CONTROLS = {
+            {"G / Esc", "Leave RTS mode"},
+            {"WASD, Space, Shift", "Fly the camera (Ctrl = faster)"},
+            {"Scroll", "Zoom toward the cursor"},
+            {"Right-drag / Q", "Rotate the camera"},
+            {"Middle-drag", "Pan the camera"},
+            {"Left click", "Use the current tool"},
+            {"Right click", "Walk your character there"},
+            {"Middle click", "Pick that block as the brush"},
+            {"1-7", "Build, Destroy, Interact, Link, Blueprint, Terrain, Measure"},
+            {"[  ]", "Previous / next shape"},
+            {"M", "Build mode / terrain mode"},
+            {"R / H", "Rotate / hollow on-off"},
+            {"N", "Mirror the blueprint being pasted"},
+            {"B, Alt+scroll", "Mid-air placing, move its layer"},
+            {"Ctrl+scroll", "Shape height"},
+            {"Arrows, Shift+Up/Down", "Nudge the shape"},
+            {"Enter / X", "Confirm / cancel a shape"},
+            {"V, PgUp / PgDn", "Cut view, move the cut"},
+            {"P", "Preset buildings"},
+            {"F", "Search items"},
+            {"Ctrl+click an item", "Fetch a stack from storage"},
+            {"Ctrl+0-9 / Shift+0-9", "Save / jump to a camera spot"},
+            {"Ctrl+Z", "Undo the last order"},
+            {"E, T, /", "Inventory, chat, command"},
+            {"Start / Pause", "Run the queue / stop everything (right panel)"},
+            {"H (outside RTS)", "Show / hide the build hologram"},
+            {"Hold Z (outside RTS)", "Place the hologram's blocks in reach"},
+            {"Hold X (outside RTS)", "Place the hologram block you look at"},
+            {"F1", "Show / hide these controls"},
+    };
+
+    private void drawControls(GuiGraphics ctx) {
+        int row = 11;
+        int keyW = 0;
+        int actW = 0;
+        for (String[] c : CONTROLS) {
+            keyW = Math.max(keyW, this.font.width(c[0]));
+            actW = Math.max(actW, this.font.width(c[1]));
+        }
+        int colW = keyW + 10 + actW;
+        // One column if it fits the height, otherwise two side by side.
+        int cols = CONTROLS.length * row + 40 <= this.height - 20 ? 1 : 2;
+        int perCol = (CONTROLS.length + cols - 1) / cols;
+        int w = Math.min(this.width - 16, cols * colW + (cols - 1) * 16 + 20);
+        int h = perCol * row + 34;
+        int x0 = (this.width - w) / 2;
+        int y0 = Math.max(4, (this.height - h) / 2);
+        ctx.pose().pushPose();
+        ctx.pose().translate(0, 0, 400);
+        Theme.panel(ctx, this.font, x0, y0, x0 + w, y0 + h, "CONTROLS");
+        for (int i = 0; i < CONTROLS.length; i++) {
+            int col = i / perCol;
+            int x = x0 + 10 + col * (colW + 16);
+            int y = y0 + Theme.HEADER_H + 8 + (i % perCol) * row;
+            ctx.drawString(this.font, CONTROLS[i][0], x, y, Theme.ACCENT, false);
+            ctx.drawString(this.font, CONTROLS[i][1], x + keyW + 10, y, Theme.TEXT, false);
+        }
+        String close = "Click anywhere or press F1 to close";
+        ctx.drawString(this.font, close, x0 + (w - this.font.width(close)) / 2, y0 + h - 12, Theme.TEXT_FAINT, false);
+        ctx.pose().popPose();
     }
 
     private void drawStatus(GuiGraphics ctx) {
@@ -1393,8 +1492,9 @@ public final class RtsScreen extends Screen {
         List<RtsTask> tasks = TaskQueue.get().snapshot();
         Theme.section(ctx, this.font, x0, x1, this.ordersTop - 22, "ORDERS" + (tasks.isEmpty() ? "" : " (" + tasks.size() + ")"));
         // What the character is doing right now.
-        boolean working = !tasks.isEmpty();
-        String activity = working ? Engine.activeName() + ": " + Engine.status() : "Idle";
+        boolean working = !tasks.isEmpty() && TaskQueue.get().isStarted();
+        String activity = working ? Engine.activeName() + ": " + Engine.status()
+                : tasks.isEmpty() ? "Idle" : "Waiting - press Start";
         Theme.light(ctx, x0 + 3, this.ordersTop - 7, working ? Theme.GOOD : Theme.TEXT_FAINT, working);
         ctx.drawString(this.font, trim(activity, x1 - x0 - 12), x0 + 9, this.ordersTop - 11, working ? Theme.TEXT_DIM : Theme.TEXT_FAINT, false);
         int visible = visibleCards();
@@ -1402,7 +1502,7 @@ public final class RtsScreen extends Screen {
         int y = this.ordersTop;
         if (tasks.isEmpty()) {
             ctx.drawString(this.font, "Nothing queued", x0 + 2, y + 2, Theme.TEXT_FAINT, false);
-            ctx.drawString(this.font, "Left-click the world to start", x0 + 2, y + 12, Theme.TEXT_FAINT, false);
+            ctx.drawString(this.font, "Left-click the world to queue orders", x0 + 2, y + 12, Theme.TEXT_FAINT, false);
         }
         TaskQueue queue = TaskQueue.get();
         RtsTask active = null;
@@ -1514,6 +1614,25 @@ public final class RtsScreen extends Screen {
         int kinds = StorageManager.get().totals().size();
         ctx.drawString(this.font, linked + " linked, " + indexed + " read, " + kinds + " item types", x0 + 2,
                 this.storageTop + 11, Theme.TEXT_DIM, false);
+        String me = meStatus();
+        if (me != null) {
+            ctx.drawString(this.font, me, x0 + 2, this.storageTop + 21, Theme.TEXT_DIM, false);
+        }
+    }
+
+    /** One line about the AE2 network, or null without AE2 (or with it turned off). */
+    private String meStatus() {
+        com.testrts.rtsclient.storage.MeNetwork me = com.testrts.rtsclient.storage.MeNetwork.get();
+        if (!com.testrts.rtsclient.storage.MeNetwork.enabled() || this.minecraft == null || this.minecraft.player == null) {
+            return null;
+        }
+        boolean wireless = me.wirelessUsable(this.minecraft);
+        int terminals = me.terminals().size();
+        if (!wireless && terminals == 0) {
+            return "ME: carry a wireless terminal or link an ME terminal";
+        }
+        String how = wireless ? "wireless" : terminals + " terminal" + (terminals == 1 ? "" : "s");
+        return "ME (" + how + "): " + (me.indexed() ? me.items().size() + " item types" : "not opened yet");
     }
 
     private void drawDockBackgrounds(GuiGraphics ctx) {

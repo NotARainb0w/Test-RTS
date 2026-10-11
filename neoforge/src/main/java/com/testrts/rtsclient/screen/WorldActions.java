@@ -61,7 +61,9 @@ public final class WorldActions {
 
     public static void queue(RtsTask task) {
         TaskQueue.get().add(task);
-        if (TaskQueue.get().size() > 1) {
+        if (!TaskQueue.get().isStarted()) {
+            Messages.info(task.label() + " queued - press Start to run " + (TaskQueue.get().size() == 1 ? "it" : "the queue"));
+        } else if (TaskQueue.get().size() > 1) {
             Messages.info(task.label() + " queued (" + (TaskQueue.get().size() - 1) + " ahead)");
         }
     }
@@ -110,8 +112,20 @@ public final class WorldActions {
                 queue(new InteractTask(hit, state.getBlock().getName().getString(), interactItem(s)));
             }
             case LINK -> {
+                var partHost = world.getBlockEntity(hit.getBlockPos());
+                var meSide = com.testrts.rtsclient.storage.Ae2.terminalSideAt(partHost, hit.getLocation(), hit.getDirection());
+                if (meSide != null) {
+                    // An AE2 ME terminal (plain, crafting, pattern...): materials can be fetched from its network.
+                    boolean linked = com.testrts.rtsclient.storage.MeNetwork.get().toggle(hit.getBlockPos(), meSide);
+                    Messages.info((linked ? "Linked ME terminal " : "Unlinked ME terminal ") + hit.getBlockPos().toShortString());
+                    return;
+                }
+                if (com.testrts.rtsclient.storage.Ae2.isPartHost(partHost)) {
+                    Messages.warn("No ME terminal there - click the terminal itself");
+                    return;
+                }
                 if (!StorageManager.isContainer(world, hit.getBlockPos())) {
-                    Messages.warn("That's not a container");
+                    Messages.warn("That's not a storage block");
                     return;
                 }
                 boolean linked = StorageManager.get().toggle(world, hit.getBlockPos());
@@ -556,6 +570,7 @@ public final class WorldActions {
             return;
         }
         StorageManager.get().pruneMissing(world());
+        com.testrts.rtsclient.storage.MeNetwork.get().pruneMissing(world());
         int added = StorageManager.get().scanNearby(world(), this.client.player.blockPosition(), RtsConfig.get().scanRadius);
         int unread = StorageManager.get().unindexed().size();
         if (unread == 0) {

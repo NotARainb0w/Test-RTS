@@ -1,5 +1,8 @@
 {
   "key.categories.rtsclient": "RTS Client Builder",
   "key.rtsclient.toggle": "Toggle RTS mode",
-  "key.rtsclient.stop": "Stop all RTS orders"
+  "key.rtsclient.stop": "Stop all RTS orders",
+  "key.rtsclient.hologram": "Show/hide the build hologram",
+  "key.rtsclient.autoplace": "Place hologram blocks in reach (hold)",
+  "key.rtsclient.aimplace": "Place the hologram block you look at (hold)"
 }

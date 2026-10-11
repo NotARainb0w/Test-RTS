@@ -7,9 +7,12 @@
     "CameraMixin",
     "ChatComponentMixin",
     "FogRendererMixin",
+    "GuiMixin",
+    "LevelRendererMixin",
     "GameRendererMixin",
     "LocalPlayerMixin",
     "MinecraftMixin",
+    "OptionsMixin",
     "RenderChunkMixin",
     "SodiumLevelSliceMixin"
   ],

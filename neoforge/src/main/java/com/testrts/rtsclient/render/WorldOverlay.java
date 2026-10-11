@@ -46,27 +46,88 @@ public final class WorldOverlay {
     /** Clear orders are re-meshed now and then so mined blocks drop out of the red preview. */
     private static final long CLEAR_REFRESH_MS = 2500;
     private static final int CLEAR_REFRESH_MAX = 60_000;
+    /** Build orders: how often placed blocks are taken out of the ghost. */
+    private static final long BUILD_REFRESH_MS = 1000;
 
     private WorldOverlay() {
     }
 
-    /** The vanilla renderer skips the local player when the camera is elsewhere; draw them ourselves. */
-    public static void renderPlayer(RenderContext context) {
+    /** Outside RTS mode: keep preview uploads moving (the preview worker waits for them), draw nothing. */
+    public static void idle() {
+        PreviewMesh.pump();
+        closeTaskMeshes(List.of());
+    }
+
+    /**
+     * Outside RTS mode, with the hologram on: just the ghosts of queued builds, to place blocks by hand.
+     * Only our own preview meshes are drawn (with the given matrices); nothing else of the render state
+     * or the shared buffers is touched.
+     */
+    public static void hologram(PoseStack matrices, Matrix4f projection, Vec3 cam) {
+        PreviewMesh.pump();
         Minecraft client = Minecraft.getInstance();
-        LocalPlayer player = client.player;
-        if (!RtsController.get().isActive() || player == null || client.getCameraEntity() == player
-                || context.consumers() == null || player.isInvisible()) {
+        if (client.level == null || client.player == null) {
+            closeTaskMeshes(List.of());
             return;
         }
-        float tickDelta = context.tickDelta();
-        Vec3 cam = context.camera().getPosition();
-        double x = Mth.lerp(tickDelta, player.xo, player.getX()) - cam.x;
-        double y = Mth.lerp(tickDelta, player.yo, player.getY()) - cam.y;
-        double z = Mth.lerp(tickDelta, player.zo, player.getZ()) - cam.z;
-        float yaw = Mth.lerp(tickDelta, player.yRotO, player.getYRot());
-        EntityRenderDispatcher dispatcher = client.getEntityRenderDispatcher();
-        dispatcher.render(player, x, y, z, yaw, tickDelta, context.matrixStack(), context.consumers(),
-                dispatcher.getPackedLightCoords(player, tickDelta));
+        drawTaskMeshes(client, matrices, projection, cam);
+    }
+
+    /** Whether there's anything for {@link #hologram} to show. */
+    public static boolean hasHologram() {
+        if (!RtsConfig.get().showHologram) {
+            return false;
+        }
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Ghosts of queued build (green) and clear (red) orders; done blocks drop out every second or so. */
+    private static void drawTaskMeshes(Minecraft client, PoseStack matrices, Matrix4f projection, Vec3 cam) {
+        List<BuildTask> builds = new ArrayList<>();
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build) {
+                builds.add(build);
+            }
+        }
+        closeTaskMeshes(builds);
+        long now = System.currentTimeMillis();
+        for (BuildTask build : builds) {
+            PreviewMesh mesh = TASK_MESHES.computeIfAbsent(build,
+                    b -> new PreviewMesh(b.clearing() ? PreviewMesh.Style.CLEAR : PreviewMesh.Style.GHOST));
+            if (build.blocks().size() <= CLEAR_REFRESH_MAX) {
+                long last = TASK_REFRESH.getOrDefault(build, 0L);
+                if (now - last > (build.clearing() ? CLEAR_REFRESH_MS : BUILD_REFRESH_MS)) {
+                    TASK_REFRESH.put(build, now);
+                    if (build.clearing()) {
+                        List<BlockPos> left = new ArrayList<>();
+                        for (BlockPos p : build.blocks().keySet()) {
+                            if (!client.level.getBlockState(p).isAir()) {
+                                left.add(p);
+                            }
+                        }
+                        mesh.request(List.of(build, left.size()),
+                                () -> PreviewMesh.Blocks.of(left, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), false), true);
+                    } else {
+                        // Only what's still to place: blocks placed by the builder or by hand drop out.
+                        Map<BlockPos, net.minecraft.world.level.block.state.BlockState> left = new java.util.LinkedHashMap<>();
+                        for (Map.Entry<BlockPos, net.minecraft.world.level.block.state.BlockState> e : build.blocks().entrySet()) {
+                            if (!com.testrts.rtsclient.task.MaterialPlanner.matches(client.level.getBlockState(e.getKey()), e.getValue())) {
+                                left.put(e.getKey(), e.getValue());
+                            }
+                        }
+                        mesh.request(List.of(build, left.size()), () -> new PreviewMesh.Blocks(left, false), true);
+                    }
+                }
+            } else {
+                mesh.request(build, () -> new PreviewMesh.Blocks(build.blocks(), false), true);
+            }
+            mesh.draw(matrices, projection, cam);
+        }
     }
 
     public static void render(RenderContext context) {
@@ -85,35 +146,7 @@ public final class WorldOverlay {
         BlockHitResult hover = controller.hover();
 
         // ---- meshes (GPU buffers) ----
-        List<BuildTask> builds = new ArrayList<>();
-        for (RtsTask task : TaskQueue.get().snapshot()) {
-            if (task instanceof BuildTask build) {
-                builds.add(build);
-            }
-        }
-        closeTaskMeshes(builds);
-        long now = System.currentTimeMillis();
-        for (BuildTask build : builds) {
-            PreviewMesh mesh = TASK_MESHES.computeIfAbsent(build,
-                    b -> new PreviewMesh(b.clearing() ? PreviewMesh.Style.CLEAR : PreviewMesh.Style.GHOST));
-            if (build.clearing() && build.blocks().size() <= CLEAR_REFRESH_MAX) {
-                long last = TASK_REFRESH.getOrDefault(build, 0L);
-                if (now - last > CLEAR_REFRESH_MS) {
-                    TASK_REFRESH.put(build, now);
-                    List<BlockPos> left = new ArrayList<>();
-                    for (BlockPos p : build.blocks().keySet()) {
-                        if (!client.level.getBlockState(p).isAir()) {
-                            left.add(p);
-                        }
-                    }
-                    mesh.request(List.of(build, left.size()),
-                            () -> PreviewMesh.Blocks.of(left, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), false), true);
-                }
-            } else {
-                mesh.request(build, () -> new PreviewMesh.Blocks(build.blocks(), false), true);
-            }
-            mesh.draw(matrices, projection, cam);
-        }
+        drawTaskMeshes(client, matrices, projection, cam);
 
         boolean showShape = session.tool.usesShapes() && session.anchorA != null;
         if (showShape) {
@@ -204,6 +237,18 @@ public final class WorldOverlay {
                 }
             }
             LevelRenderer.renderLineBox(matrices, lines, box, 1.0F, c.indexed() ? 0.75F : 0.5F, 0.1F, storageAlpha);
+        }
+        // Linked ME terminals: a cyan plate on the terminal's face.
+        for (com.testrts.rtsclient.storage.MeNetwork.Terminal t : com.testrts.rtsclient.storage.MeNetwork.get().terminals()) {
+            BlockPos p = t.pos();
+            if (p.distToCenterSqr(cam.x, cam.y, cam.z) > 160 * 160) {
+                continue;
+            }
+            net.minecraft.core.Direction d = t.side();
+            double inset = 0.85;
+            AABB plate = new AABB(p).deflate(0.1).inflate(0.02);
+            plate = plate.contract(-d.getStepX() * inset, -d.getStepY() * inset, -d.getStepZ() * inset);
+            LevelRenderer.renderLineBox(matrices, lines, plate, 0.2F, 0.85F, 1.0F, storageAlpha);
         }
 
         for (RtsTask task : TaskQueue.get().snapshot()) {

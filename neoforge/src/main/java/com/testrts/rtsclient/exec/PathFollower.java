@@ -312,8 +312,7 @@ public final class PathFollower {
                 if (pos.y >= base.getY() + 1.0 && !world.getBlockState(below).canBeReplaced()) {
                     BlockHitResult hit = new BlockHitResult(new Vec3(base.getX() + 0.5, base.getY(), base.getZ() + 0.5),
                             Direction.UP, below, false);
-                    client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
-                    player.swing(InteractionHand.MAIN_HAND);
+                    Clicks.place(client, player, hit);
                     this.scaffolder.placed(base);
                 }
                 return State.WALKING;

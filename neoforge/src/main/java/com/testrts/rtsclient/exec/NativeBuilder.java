@@ -709,7 +709,8 @@ public final class NativeBuilder {
         for (String id : com.testrts.rtsclient.config.RtsConfig.get().scaffoldBlocks) {
             net.minecraft.resources.ResourceLocation ident = net.minecraft.resources.ResourceLocation.tryParse(id);
             if (ident != null && net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(ident)
-                    && com.testrts.rtsclient.storage.StorageManager.get().total(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(ident)) > 0) {
+                    && (com.testrts.rtsclient.storage.StorageManager.get().total(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(ident)) > 0
+                    || com.testrts.rtsclient.storage.MeNetwork.get().mightHave(Minecraft.getInstance(), net.minecraft.core.registries.BuiltInRegistries.ITEM.get(ident)))) {
                 return true;
             }
         }
@@ -1299,8 +1300,7 @@ public final class NativeBuilder {
         if (player.getY() >= step.getY() + 1.0 && world.getBlockState(step).canBeReplaced()) {
             BlockPos below = step.below();
             BlockHitResult hit = new BlockHitResult(new Vec3(step.getX() + 0.5, step.getY(), step.getZ() + 0.5), Direction.UP, below, false);
-            client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
-            player.swing(InteractionHand.MAIN_HAND);
+            Clicks.place(client, player, hit);
             this.scaffolds.add(step.immutable());
             this.pillarPlaced++;
             this.status = "climbing (" + this.pillarPlaced + ")";
@@ -1578,7 +1578,7 @@ public final class NativeBuilder {
 
     /** The side of the target to click: a neighbour that is solid and won't open a GUI. */
     @Nullable
-    private static Direction support(ClientLevel world, BlockPos pos) {
+    static Direction support(ClientLevel world, BlockPos pos) {
         for (Direction d : SUPPORT_ORDER) {
             BlockPos n = pos.relative(d);
             if (!world.hasChunkAt(n)) {
@@ -1659,13 +1659,47 @@ public final class NativeBuilder {
         if (!Look.toward(player, rotation[0], rotation[1])) {
             return Placed.TURNING;
         }
-        client.gameMode.useItemOn(player, InteractionHand.MAIN_HAND, hit);
-        player.swing(InteractionHand.MAIN_HAND);
+        Clicks.place(client, player, hit);
         return Placed.DONE;
     }
 
+    /** A neighbour we may click to place against: solid, and not something that opens a screen. */
+    static boolean clickable(ClientLevel world, BlockPos n) {
+        if (!world.hasChunkAt(n)) {
+            return false;
+        }
+        BlockState s = world.getBlockState(n);
+        return !(s.isAir() || s.canBeReplaced() || s.getCollisionShape(world, n).isEmpty() || interactive(s));
+    }
+
+    /** Properties that say which way a block points; others (fence connections...) follow the neighbours. */
+    private static final java.util.Set<String> ORIENTATION = java.util.Set.of(
+            "facing", "axis", "half", "type", "face", "rotation", "hinge", "attachment", "orientation", "vertical_direction");
+
+    /**
+     * Whether clicking {@code hit} with the player's real view (no turning) puts {@code wanted} down
+     * pointing the right way. Only the block and its orientation count.
+     */
+    static boolean comesOutAs(LocalPlayer player, BlockState wanted, BlockHitResult hit) {
+        BlockState result;
+        try {
+            result = wanted.getBlock().getStateForPlacement(new BlockPlaceContext(player, InteractionHand.MAIN_HAND, player.getMainHandItem(), hit));
+        } catch (RuntimeException e) {
+            return false;
+        }
+        if (result == null || result.getBlock() != wanted.getBlock()) {
+            return false;
+        }
+        for (net.minecraft.world.level.block.state.properties.Property<?> p : wanted.getProperties()) {
+            if (ORIENTATION.contains(p.getName()) && result.hasProperty(p) && !result.getValue(p).equals(wanted.getValue(p))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     @Nullable
-    private static float[] rotationFor(LocalPlayer player, BlockState wanted, BlockHitResult hit) {
+    static float[] rotationFor(LocalPlayer player, BlockState wanted, BlockHitResult hit) {
         ItemStack stack = player.getMainHandItem();
         float oldYaw = player.getYRot();
         float oldPitch = player.getXRot();

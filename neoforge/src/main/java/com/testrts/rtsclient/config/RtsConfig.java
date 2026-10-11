@@ -56,6 +56,24 @@ public final class RtsConfig {
     public boolean creativeFlight = true;
     /** In creative mode, spawn the blocks a build needs instead of fetching them or stopping. */
     public boolean creativeSupply = true;
+    /**
+     * With Applied Energistics 2: fetch materials through a wireless terminal you carry, or from ME
+     * terminals you linked, before walking to chests.
+     */
+    public boolean useAe2 = true;
+    /** Start orders as soon as they're queued (off: they wait for the Start button). */
+    public boolean autoStart = false;
+    /** Outside RTS mode, show the ghost blocks of queued builds (to place blocks by hand). Toggle: H. */
+    public boolean showHologram = true;
+    /** How far (from the eyes) hold-Z places hologram blocks; 0 = as far as you can reach. */
+    public double autoPlaceRange = 0;
+    /** Blocks per second for hold-Z (server-safe placing caps it at 5, the pace of holding right-click). */
+    public double autoPlaceSpeed = 5;
+    /**
+     * Hold-Z / hold-X only do what a player could do by hand (anti-cheat friendly): no faked look
+     * direction, no mid-air placing, only faces you can see, at most 5 blocks a second.
+     */
+    public boolean serverSafePlacing = true;
     /** Shapes (Fill mode) mine and replace whatever is in their cells instead of skipping them. */
     public boolean clearInTheWay = true;
     /** Stop the camera at solid blocks. Off: the camera flies through walls. */

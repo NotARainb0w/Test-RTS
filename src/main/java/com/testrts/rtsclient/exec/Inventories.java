@@ -81,10 +81,30 @@ public final class Inventories {
         if (client.interactionManager == null || player.currentScreenHandler != player.playerScreenHandler) {
             return false;
         }
+        select(client, handSlot(player.getInventory()));
         // In the player screen handler, main inventory index i (9..35) is slot id i.
         client.interactionManager.clickSlot(player.playerScreenHandler.syncId, inventoryIndex,
                 player.getInventory().selectedSlot, SlotActionType.SWAP, player);
         return true;
+    }
+
+    /**
+     * The hotbar slot to swap something from the main inventory into. Not the first or last one:
+     * Baritone's inventory management (allowInventory, which RTS orders turn on) keeps the best pickaxe
+     * in the first and throwaway blocks in the last, and puts them back every tick. Swapping our block
+     * into those had the two fighting over the slot, the hand flicking between block and pickaxe.
+     */
+    private static int handSlot(PlayerInventory inv) {
+        int current = inv.selectedSlot;
+        if (current != 0 && current != 8) {
+            return current;
+        }
+        for (int i = 1; i < 8; i++) {
+            if (inv.getStack(i).isEmpty()) {
+                return i;
+            }
+        }
+        return 1;
     }
 
     public static int count(MinecraftClient client, Item item) {

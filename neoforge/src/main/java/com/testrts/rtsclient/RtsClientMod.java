@@ -42,6 +42,12 @@ public final class RtsClientMod {
             "key.rtsclient.toggle", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_G, CATEGORY);
     public static KeyMapping stopKey = new KeyMapping(
             "key.rtsclient.stop", InputConstants.Type.KEYSYM, InputConstants.UNKNOWN.getValue(), CATEGORY);
+    public static KeyMapping hologramKey = new KeyMapping(
+            "key.rtsclient.hologram", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_H, CATEGORY);
+    public static KeyMapping autoPlaceKey = new KeyMapping(
+            "key.rtsclient.autoplace", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_Z, CATEGORY);
+    public static KeyMapping aimPlaceKey = new KeyMapping(
+            "key.rtsclient.aimplace", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_X, CATEGORY);
 
     public RtsClientMod(IEventBus modBus) {
         RtsConfig.load();
@@ -49,6 +55,9 @@ public final class RtsClientMod {
         modBus.addListener(RegisterKeyMappingsEvent.class, event -> {
             event.register(toggleKey);
             event.register(stopKey);
+            event.register(hologramKey);
+            event.register(autoPlaceKey);
+            event.register(aimPlaceKey);
         });
 
         IEventBus bus = NeoForge.EVENT_BUS;
@@ -61,7 +70,7 @@ public final class RtsClientMod {
             }
             // Outside RTS mode, keep a small reminder that orders are still running.
             RtsTask head = TaskQueue.get().snapshot().get(0);
-            String text = "RTS: " + head.label() + " (" + TaskQueue.get().size() + " queued) - "
+            String text = "RTS: " + head.label() + " (" + TaskQueue.get().size() + " queued" + (TaskQueue.get().isStarted() ? "" : ", waiting for Start") + ") - "
                     + toggleKey.getTranslatedKeyMessage().getString() + " to open";
             event.getGuiGraphics().drawString(client.font, text, 4, 4, 0xFFFFFF);
         });
@@ -71,10 +80,12 @@ public final class RtsClientMod {
             com.testrts.rtsclient.task.QueueStore.autosave();
             TaskQueue.get().clear(client);
             StorageManager.get().flush();
+            com.testrts.rtsclient.storage.MeNetwork.get().flush();
         });
         bus.addListener(GameShuttingDownEvent.class, event -> {
             com.testrts.rtsclient.task.QueueStore.autosave();
             StorageManager.get().flush();
+            com.testrts.rtsclient.storage.MeNetwork.get().flush();
         });
 
         // Live tests (src/devtest, dev runs only; not part of the release jar).
@@ -94,8 +105,13 @@ public final class RtsClientMod {
         while (stopKey.consumeClick()) {
             TaskQueue.get().clear(client);
         }
+        while (hologramKey.consumeClick()) {
+            toggleHologram();
+        }
+        com.testrts.rtsclient.exec.AutoPlace.tick(client, autoPlaceKey.isDown(), aimPlaceKey.isDown());
         com.testrts.rtsclient.task.QueueStore.tick(client);
         StorageManager.get().tick(client);
+        com.testrts.rtsclient.storage.MeNetwork.get().tick(client);
         ContainerTracker.get().tick(client);
         RtsController.get().tick(client);
         TaskQueue.get().tick(client);
@@ -105,12 +121,23 @@ public final class RtsClientMod {
     }
 
     private static void onRenderLevel(RenderLevelStageEvent event) {
-        RenderLevelStageEvent.Stage stage = event.getStage();
-        if (stage == RenderLevelStageEvent.Stage.AFTER_ENTITIES) {
-            withViewMatrix(event, WorldOverlay::renderPlayer);
-        } else if (stage == RenderLevelStageEvent.Stage.AFTER_LEVEL) {
-            withViewMatrix(event, WorldOverlay::render);
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_LEVEL) {
+            return;
         }
+        if (!RtsController.get().isActive()) {
+            // Outside RTS mode leave the render state and the shared buffers alone: swapping the view
+            // matrix and flushing them here drew other things (like the player's own model) in the wrong
+            // place. The hologram only draws our own preview meshes, with the matrices given to it.
+            if (WorldOverlay.hasHologram()) {
+                PoseStack view = new PoseStack();
+                view.mulPose(event.getModelViewMatrix());
+                WorldOverlay.hologram(view, event.getProjectionMatrix(), event.getCamera().getPosition());
+            } else {
+                WorldOverlay.idle();
+            }
+            return;
+        }
+        withViewMatrix(event, WorldOverlay::render);
     }
 
     /**
@@ -134,5 +161,12 @@ public final class RtsClientMod {
             modelView.popMatrix();
             RenderSystem.applyModelViewMatrix();
         }
+    }
+
+    private static void toggleHologram() {
+        com.testrts.rtsclient.config.RtsConfig cfg = com.testrts.rtsclient.config.RtsConfig.get();
+        cfg.showHologram = !cfg.showHologram;
+        com.testrts.rtsclient.config.RtsConfig.save();
+        com.testrts.rtsclient.util.Messages.info("Build hologram " + (cfg.showHologram ? "on" : "off"));
     }
 }

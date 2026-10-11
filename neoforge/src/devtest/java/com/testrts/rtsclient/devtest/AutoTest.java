@@ -69,6 +69,14 @@ public final class AutoTest {
      */
     private static final java.util.Set<String> FROM_STORAGE = new java.util.HashSet<>();
     private static final int STORED_BRICKS = 7 * 64;
+    /**
+     * Scenarios whose bricks and dirt are only in an Applied Energistics 2 network built next to the arena:
+     * through a linked wireless terminal the player carries, or at an ME terminal linked with the Link tool.
+     */
+    private static final java.util.Set<String> FROM_ME = new java.util.HashSet<>();
+    /** Controller of the test network (energy cell south, drive east, access point on top, terminal cable west). */
+    private static final BlockPos ME_CONTROLLER = O.offset(-10, 0, 8);
+    private static int meStage;
     /** Scenarios run in creative mode (creative flight and creative supply). */
     private static final java.util.Set<String> CREATIVE = new java.util.HashSet<>();
 
@@ -115,6 +123,18 @@ public final class AutoTest {
         scenario("storage-dome", BuildShape.DOME, BlockPos.ZERO, new BlockPos(5, 0, 0), 1, true, "builtin", false);
         FROM_STORAGE.add("storage-box");
         FROM_STORAGE.add("storage-dome");
+        // Materials from an AE2 network (needs AE2 in run/mods).
+        scenario("me-wireless", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        scenario("me-terminal", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        FROM_ME.add("me-wireless");
+        FROM_ME.add("me-terminal");
+        // Only an ae2wtlib terminal (pattern encoding): AE2's own hotkey can't open it, ae2wtlib's must.
+        scenario("me-wtlib", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        FROM_ME.add("me-wtlib");
+        // Same, but keeping the stone and dirt every scenario starts with (a full inventory: blocks and tools
+        // have to be swapped into the hand from the main inventory).
+        scenario("me-terminal-full", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        FROM_ME.add("me-terminal-full");
         // Creative mode: flies to the blocks instead of walking and climbing.
         scenario("fly-sphere", BuildShape.SPHERE, new BlockPos(0, 8, 0), new BlockPos(5, 8, 0), 1, true, "builtin", true);
         scenario("fly-dome10", BuildShape.DOME, BlockPos.ZERO, new BlockPos(10, 0, 0), 1, true, "builtin", true);
@@ -216,11 +236,34 @@ public final class AutoTest {
                 }
                 clearWaits = 0;
                 Scenario s = current;
+                if (FROM_ME.contains(s.name()) && meStage < 2) {
+                    // Build the network, let it boot, then fill it and hand out the terminal.
+                    if (meStage == 0) {
+                        com.testrts.rtsclient.storage.MeNetwork.get().reset();
+                        meBuild(mc);
+                        wait = 60;
+                    } else {
+                        meFill(mc, s.name().equals("me-wireless") ? "ae2:wireless_terminal"
+                                : s.name().equals("me-wtlib") ? "ae2wtlib:wireless_pattern_encoding_terminal" : null);
+                        if (s.name().startsWith("me-terminal")) {
+                            // As the Link tool gets it: a click on the terminal's rim (its east edge), not its screen.
+                            BlockPos t = ME_CONTROLLER.west();
+                            var rim = net.minecraft.world.phys.Vec3.atLowerCornerOf(t).add(0.875, 0.5, 0.06);
+                            var side = com.testrts.rtsclient.storage.Ae2.terminalSideAt(mc.level.getBlockEntity(t), rim, net.minecraft.core.Direction.EAST);
+                            report("    Link tool on the crafting terminal's rim: side " + side + (side == net.minecraft.core.Direction.NORTH ? " (right)" : " (WRONG)"));
+                            com.testrts.rtsclient.storage.MeNetwork.get().toggle(t, side != null ? side : net.minecraft.core.Direction.NORTH);
+                        }
+                        wait = 20;
+                    }
+                    meStage++;
+                    return;
+                }
+                meStage = 0;
                 RtsConfig cfg = RtsConfig.get();
                 cfg.engine = s.engine();
                 cfg.airPlace = s.airPlace();
                 OrderPlanner.Request r = new OrderPlanner.Request(ToolMode.BUILD, s.shape(), BuildMode.FILL, s.a(), s.b(),
-                        s.height(), s.hollow(), (FROM_STORAGE.contains(s.name()) ? Blocks.STONE_BRICKS : Blocks.STONE).defaultBlockState(),
+                        s.height(), s.hollow(), (FROM_STORAGE.contains(s.name()) || FROM_ME.contains(s.name()) ? Blocks.STONE_BRICKS : Blocks.STONE).defaultBlockState(),
                         null, 100_000, List.of(), true,
                         com.testrts.rtsclient.build.MixPattern.RANDOM);
                 if (s.preset() != null) {
@@ -241,6 +284,8 @@ public final class AutoTest {
                 if (FROM_STORAGE.contains(s.name())) {
                     // Like pressing Scan nearby: link the chests and read them; the build then fetches.
                     new com.testrts.rtsclient.screen.WorldActions(mc, RtsController.get()).scanNearby();
+                } else if (FROM_ME.contains(s.name())) {
+                    // Nothing to give: the build has to get its bricks from the network.
                 } else if (s.preset() == null) {
                     // Railings, lanterns...: anything besides the stone every scenario gets.
                     Map<BlockPos, BlockState> extra = new java.util.HashMap<>(order);
@@ -249,6 +294,7 @@ public final class AutoTest {
                 }
                 task = new BuildTask("autotest " + s.name(), order, false);
                 TaskQueue.get().add(task);
+                TaskQueue.get().start();
                 ticks = 0;
                 minHealth = mc.player.getHealth();
                 log("start %s: %d blocks, engine=%s air=%s", s.name(), order.size(), s.engine(), s.airPlace());
@@ -259,8 +305,9 @@ public final class AutoTest {
                 minHealth = Math.min(minHealth, mc.player.getHealth());
                 if (ticks % 100 == 0) {
                     int left = MaterialPlanner.remaining(mc.level, order);
-                    log("  t=%ds left=%d status=%s task=%s pos=%s", ticks / 20, left, Engine.status(),
-                            task.detail(),
+                    var head = TaskQueue.get().snapshot().isEmpty() ? null : TaskQueue.get().snapshot().get(0);
+                    log("  t=%ds left=%d status=%s task=%s head=%s pos=%s", ticks / 20, left, Engine.status(),
+                            task.detail(), head == null || head == task ? "-" : head.label() + " (" + head.detail() + ")",
                             mc.player.blockPosition().toShortString());
                 }
                 // Only our own order counts: someone may queue things by hand in the same window.
@@ -315,7 +362,7 @@ public final class AutoTest {
             for (int z = -ARENA; z <= ARENA; z++) {
                 for (int y = O.getY(); y < O.getY() + 30; y++) {
                     BlockState st = mc.level.getBlockState(new BlockPos(x, y, z));
-                    if (!st.isAir() && !st.is(Blocks.CHEST)) {
+                    if (!st.isAir() && !st.is(Blocks.CHEST) && !isAe2(st)) {
                         return false;
                     }
                 }
@@ -342,6 +389,11 @@ public final class AutoTest {
         cmd(mc, "give @s dirt 256");
         cmd(mc, "give @s diamond_pickaxe");
         cmd(mc, "give @s diamond_shovel");
+        if (FROM_ME.contains(s.name()) && !s.name().endsWith("-full")) {
+            // Bricks and scaffolding dirt are only in the AE2 network.
+            cmd(mc, "clear @s minecraft:stone");
+            cmd(mc, "clear @s minecraft:dirt");
+        }
         if (FROM_STORAGE.contains(s.name())) {
             // Nothing to build with in the inventory: it's all in two chests by the arena's edge.
             cmd(mc, "clear @s minecraft:stone");
@@ -391,7 +443,8 @@ public final class AutoTest {
                     // The top half of a door, bed or tall plant comes with the order's bottom half.
                     boolean otherHalf = order.containsKey(p.below())
                             && level.getBlockState(p).getBlock() == level.getBlockState(p.below()).getBlock();
-                    boolean ours = FROM_STORAGE.contains(current.name()) && level.getBlockState(p).is(Blocks.CHEST);
+                    boolean ours = FROM_STORAGE.contains(current.name()) && level.getBlockState(p).is(Blocks.CHEST)
+                            || FROM_ME.contains(current.name()) && isAe2(level.getBlockState(p));
                     if (!level.getBlockState(p).isAir() && !order.containsKey(p) && !otherHalf && !ours) {
                         stray++;
                         if (strays.size() < 12) {
@@ -416,12 +469,161 @@ public final class AutoTest {
                     com.testrts.rtsclient.storage.StorageManager.get().linked().size(), stored, STORED_BRICKS, carried,
                     order.size() - missing));
         }
+        if (FROM_ME.contains(current.name())) {
+            int carried = mc.player.getInventory().countItem(net.minecraft.world.item.Items.STONE_BRICKS);
+            report(String.format(Locale.ROOT, "    ME: stone bricks %d left in the network (of %d), %d carried, %d placed; client sees %d, wireless=%s, terminals=%d",
+                    meCount(mc, net.minecraft.world.item.Items.STONE_BRICKS), STORED_BRICKS, carried, order.size() - missing,
+                    com.testrts.rtsclient.storage.MeNetwork.get().count(net.minecraft.world.item.Items.STONE_BRICKS),
+                    com.testrts.rtsclient.storage.MeNetwork.get().wirelessUsable(mc),
+                    com.testrts.rtsclient.storage.MeNetwork.get().terminals().size()));
+        }
         if (!missed.isEmpty()) {
             report("    missed: " + missed.stream().map(p -> p.subtract(O).toShortString()).toList());
         }
         if (!strays.isEmpty()) {
             report("    stray:  " + strays.stream().map(p -> p.subtract(O).toShortString() + "=" + level.getBlockState(p).getBlock().getName().getString()).toList());
         }
+    }
+
+    // ------------------------------------------------------------------ AE2 test network (server side, by reflection)
+
+    private static boolean isAe2(BlockState st) {
+        return net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).getNamespace().equals("ae2");
+    }
+
+    private static net.minecraft.world.item.Item ae2Item(String id) {
+        return net.minecraft.core.registries.BuiltInRegistries.ITEM.get(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("ae2", id));
+    }
+
+    private static BlockState ae2Block(String id) {
+        return net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("ae2", id)).defaultBlockState();
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static BlockState with(BlockState st, String property, String value) {
+        net.minecraft.world.level.block.state.properties.Property prop = st.getBlock().getStateDefinition().getProperty(property);
+        if (prop == null) {
+            return st;
+        }
+        Optional<Comparable> v = prop.getValue(value);
+        return v.isPresent() ? st.setValue(prop, v.get()) : st;
+    }
+
+    private static void setSlot(Object blockEntity, int slot, net.minecraft.world.item.ItemStack stack) throws ReflectiveOperationException {
+        Object inv = blockEntity.getClass().getMethod("getInternalInventory").invoke(blockEntity);
+        // insertItem (not setItemDirect) so the block entity hears about it (the access point recalculates its range).
+        Class.forName("appeng.api.inventories.InternalInventory").getMethod("insertItem", int.class, net.minecraft.world.item.ItemStack.class, boolean.class)
+                .invoke(inv, slot, stack, false);
+    }
+
+    private static void onServer(Minecraft mc, String what, ThrowingRunnable body) {
+        var server = mc.getSingleplayerServer();
+        try {
+            server.submit(() -> {
+                try {
+                    body.run(server.overworld(), server.getPlayerList().getPlayers().get(0));
+                } catch (Exception e) {
+                    RtsClientMod.LOGGER.error("[AUTOTEST] AE2 {} failed", what, e);
+                    report("    AE2 " + what + " failed: " + e);
+                }
+            }).join();
+        } catch (RuntimeException e) {
+            report("    AE2 " + what + " failed: " + e);
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run(net.minecraft.server.level.ServerLevel level, net.minecraft.server.level.ServerPlayer player) throws Exception;
+    }
+
+    /** Controller, creative energy cell, drive with a 64k cell, boosted access point, and a terminal on a cable. */
+    private static void meBuild(Minecraft mc) {
+        onServer(mc, "network", (level, player) -> {
+            BlockPos c = ME_CONTROLLER;
+            level.setBlockAndUpdate(c, ae2Block("controller"));
+            level.setBlockAndUpdate(c.south(), ae2Block("creative_energy_cell"));
+            level.setBlockAndUpdate(c.east(), ae2Block("drive"));
+            level.setBlockAndUpdate(c.above(), with(ae2Block("wireless_access_point"), "facing", "up"));
+            setSlot(level.getBlockEntity(c.east()), 0, new net.minecraft.world.item.ItemStack(ae2Item("item_storage_cell_64k")));
+            setSlot(level.getBlockEntity(c.above()), 0, new net.minecraft.world.item.ItemStack(ae2Item("wireless_booster"), 8));
+            Class<?> partItem = Class.forName("appeng.api.parts.IPartItem");
+            var setPart = Class.forName("appeng.api.parts.PartHelper").getMethod("setPart", net.minecraft.server.level.ServerLevel.class,
+                    BlockPos.class, net.minecraft.core.Direction.class, net.minecraft.world.entity.player.Player.class, partItem);
+            setPart.invoke(null, level, c.west(), null, player, ae2Item("fluix_glass_cable"));
+            setPart.invoke(null, level, c.west(), net.minecraft.core.Direction.NORTH, player, ae2Item("crafting_terminal"));
+            log("AE2 network placed at %s", c.toShortString());
+        });
+    }
+
+    private static Object meStorage(net.minecraft.server.level.ServerLevel level) throws ReflectiveOperationException {
+        Object be = level.getBlockEntity(ME_CONTROLLER);
+        if (be == null) {
+            throw new IllegalStateException("no block entity at the controller, block there is " + level.getBlockState(ME_CONTROLLER));
+        }
+        Object managed = be.getClass().getMethod("getMainNode").invoke(be);
+        Class<?> managedClass = Class.forName("appeng.api.networking.IManagedGridNode");
+        Object node = managedClass.getMethod("getNode").invoke(managed);
+        Object grid = managedClass.getMethod("getGrid").invoke(managed);
+        log("AE2 controller ready=%s active=%s", managedClass.getMethod("isReady").invoke(managed),
+                node == null ? "no node" : Class.forName("appeng.api.networking.IGridNode").getMethod("isActive").invoke(node));
+        if (grid == null) {
+            throw new IllegalStateException("the controller has no grid yet");
+        }
+        Object service = Class.forName("appeng.api.networking.IGrid").getMethod("getStorageService").invoke(grid);
+        return Class.forName("appeng.api.networking.storage.IStorageService").getMethod("getInventory").invoke(service);
+    }
+
+    private static Object itemKey(net.minecraft.world.item.Item item) throws ReflectiveOperationException {
+        return Class.forName("appeng.api.stacks.AEItemKey").getMethod("of", net.minecraft.world.level.ItemLike.class).invoke(null, item);
+    }
+
+    private static Object actionable(String name) throws ReflectiveOperationException {
+        return Class.forName("appeng.api.config.Actionable").getField(name).get(null);
+    }
+
+    private static Object noSource() throws ReflectiveOperationException {
+        return Class.forName("appeng.api.networking.security.IActionSource").getMethod("empty").invoke(null);
+    }
+
+    /** Put the bricks and dirt into the network; for the wireless test, give a linked, charged wireless terminal. */
+    private static void meFill(Minecraft mc, String wirelessItem) {
+        onServer(mc, "fill", (level, player) -> {
+            Object storage = meStorage(level);
+            Class<?> keyClass = Class.forName("appeng.api.stacks.AEKey");
+            var insert = Class.forName("appeng.api.storage.MEStorage").getMethod("insert", keyClass, long.class,
+                    Class.forName("appeng.api.config.Actionable"), Class.forName("appeng.api.networking.security.IActionSource"));
+            long bricks = (long) insert.invoke(storage, itemKey(net.minecraft.world.item.Items.STONE_BRICKS), (long) STORED_BRICKS, actionable("MODULATE"), noSource());
+            long dirt = (long) insert.invoke(storage, itemKey(net.minecraft.world.item.Items.DIRT), 128L, actionable("MODULATE"), noSource());
+            log("AE2 network filled: %d stone bricks, %d dirt", bricks, dirt);
+            if (wirelessItem != null) {
+                var stack = new net.minecraft.world.item.ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(
+                        net.minecraft.resources.ResourceLocation.parse(wirelessItem)));
+                Class<?> terminal = Class.forName("appeng.items.tools.powered.WirelessTerminalItem");
+                Object handler = terminal.getField("LINKABLE_HANDLER").get(null);
+                Class.forName("appeng.api.features.IGridLinkableHandler").getMethod("link", net.minecraft.world.item.ItemStack.class, net.minecraft.core.GlobalPos.class)
+                        .invoke(handler, stack, net.minecraft.core.GlobalPos.of(level.dimension(), ME_CONTROLLER.above()));
+                Class.forName("appeng.api.implementations.items.IAEItemPowerStorage").getMethod("injectAEPower",
+                        net.minecraft.world.item.ItemStack.class, double.class, Class.forName("appeng.api.config.Actionable"))
+                        .invoke(stack.getItem(), stack, 10_000_000.0, actionable("MODULATE"));
+                // Out of the hotbar, so it isn't in the way of the blocks being placed.
+                player.getInventory().setItem(20, stack);
+                log("AE2 wireless terminal %s linked and given", wirelessItem);
+            }
+        });
+    }
+
+    /** How many of {@code item} the network holds right now (asked on the server). */
+    private static long meCount(Minecraft mc, net.minecraft.world.item.Item item) {
+        long[] out = {-1};
+        onServer(mc, "count", (level, player) -> {
+            Object storage = meStorage(level);
+            Class<?> keyClass = Class.forName("appeng.api.stacks.AEKey");
+            out[0] = (long) Class.forName("appeng.api.storage.MEStorage").getMethod("extract", keyClass, long.class,
+                    Class.forName("appeng.api.config.Actionable"), Class.forName("appeng.api.networking.security.IActionSource"))
+                    .invoke(storage, itemKey(item), Long.MAX_VALUE, actionable("SIMULATE"), noSource());
+        });
+        return out[0];
     }
 
     /** RTS camera looking at the structure from above one side, for the screenshot. */

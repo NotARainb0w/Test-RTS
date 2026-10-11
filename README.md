@@ -58,6 +58,39 @@ Both have the same features and controls.
 | F | Search items |
 | Ctrl+click an item | Fetch a stack of it from storage into your inventory |
 | E, T, / | Inventory, chat, command (RTS resumes when you close them) |
+| **F1** or the **?** button | Show every control over the view |
+| **Start** / **Pause** (right panel) | Run the queued orders / stop everything where it is |
+| **H** (outside RTS mode) | Show/hide the build hologram |
+| Hold **Z** (outside RTS mode) | Place the hologram's blocks within reach, without turning your view |
+| Hold **X** (outside RTS mode) | Place the hologram block you're looking at |
+
+**Orders wait for Start.** Confirming a shape (Enter or a click) only queues it; nothing runs until you press
+**Start**. **Pause** stops every order right where it is, and Start carries on. Once the queue is empty, new
+orders wait for Start again. To have orders start as soon as they're queued, turn on **Start orders right away**
+in Settings.
+
+**Build hologram.** Outside RTS mode, the ghost blocks of queued builds stay visible so you can place blocks by
+hand; blocks that are already right drop out of the ghost within a second. Toggle it with **H** (rebindable in
+Controls) or the **Build hologram** setting.
+
+**Placing by hand.** Hold **Z** outside RTS mode to place the hologram's blocks that are within your reach,
+lowest first, at the pace of holding right-click (how far is set with **Hold-Z place range** in Settings: 2, 3 or 4
+blocks, or full reach). Your view doesn't move: blocks with a facing (stairs, logs...)
+come out the way the order wants them. The hand switches to the right block and back to your slot when you let
+go. Only empty spots are filled (nothing gets broken), and only while the queue isn't running (Pause it first).
+Orders that are complete come off the queue. Hold **X** instead to place only the hologram block under your
+crosshair (the first ghost block along your view, within reach), for picking spots yourself.
+
+**Server-safe placing** (Settings, on by default) keeps Z and X to what you could do by hand, so anti-cheat
+plugins don't object: no faked look direction, no mid-air placing, only block faces you can see, at most 5 blocks
+a second (the pace of holding right-click), and X is a plain right-click on what your crosshair is on. Blocks
+that would face the wrong way from where you look are skipped by Z (place them with X, looking the right way, or
+let the builder do them). **Hold-Z place speed** sets how fast Z goes (2-20 blocks a second; above 5 only with
+server-safe placing off, e.g. in singleplayer).
+
+Blocks are placed while sneaking for that one click, like a player placing against a chest, so clicking next to a
+chest, crafting table or modded machine places the block instead of opening its screen (this applies to the
+builder too). If a modded block opens its screen anyway, it's closed again and that spot is skipped.
 
 ### Tools
 
@@ -205,7 +238,10 @@ summary with Scan nearby / Re-index / Sort / Smelt buttons.
 The item bar at the bottom shows **your inventory plus everything in linked containers**. Gold counts mean the
 item is only in storage.
 
-- **Scan nearby** links every chest, barrel and shulker box within 32 blocks, then walks over and opens the new
+- **Link storage** works on any block with an inventory: vanilla chests and barrels, and modded storage such as
+  Sophisticated Storage, Iron Chests or crates. Drawers are left out (right-clicking one puts your held item in).
+- **Scan nearby** links every chest, barrel, shulker box and modded storage block (chests, barrels, crates,
+  cabinets... by name) within 32 blocks, then walks over and opens the new
   ones so their contents show up in the item bar. A client can only see inside a chest after opening it, so
   this read is needed once per chest. Chests you open yourself in RTS mode are re-read automatically.
 - **When you build**, any blocks you don't carry are fetched from linked containers first. If Baritone runs out
@@ -214,6 +250,23 @@ item is only in storage.
 - **Pin** items with right-click to keep them on the quick bar.
 
 Storage links and contents are saved per world/server and dimension in `config/rtsclient/storage/`.
+
+### Applied Energistics 2
+
+With AE2 installed (Fabric 15.x / NeoForge 19.x), the builder gets materials from your ME network before it
+walks to any chest:
+
+- **Wireless terminal**: if you carry one (inventory, Curios or Trinkets; AE2's wireless or wireless crafting
+  terminal, or any AE2 Wireless Terminals one, universal included), the builder opens it wherever it is, takes
+  what the build needs and closes it again. Set it up as for normal use: a Wireless Access Point on the network
+  (it connects only through its back, and needs a channel), the terminal linked by putting it in the access
+  point's link slot, and charged. You need to be in range of an access point, as usual.
+- **ME terminals**: with the Link tool, click an ME terminal or crafting terminal on a cable. When
+  there's no wireless terminal, the builder walks to the nearest linked one instead. Linked terminals show as
+  a cyan plate.
+- The item bar counts what the network holds, from the last time any terminal was open (yours or the
+  builder's). The storage panel shows how the network is reached.
+- Turn it off with **Use AE2 for materials** in Settings. It's all treated as one network per world.
 
 ## Settings
 

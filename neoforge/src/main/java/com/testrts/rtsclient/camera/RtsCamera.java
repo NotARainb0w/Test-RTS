@@ -1,26 +1,23 @@
 package com.testrts.rtsclient.camera;
 
 import com.testrts.rtsclient.config.RtsConfig;
-import net.minecraft.client.CameraType;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.Marker;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * A detached top-down camera. The view is rendered from a client-only marker entity that is
- * never added to the world; the player's body stays where it is and is driven by Baritone.
+ * The RTS view: a free camera position and rotation. The player stays the game's camera entity and
+ * no game setting is touched; while RTS mode is on, CameraMixin moves Minecraft's camera here each
+ * frame, so leaving RTS mode leaves nothing behind.
  */
 public final class RtsCamera {
     private static final float MIN_PITCH = -10.0F;
     private static final float MAX_PITCH = 89.9F;
 
-    private Marker entity;
+    private boolean enabled;
     private double x;
     private double y;
     private double z;
@@ -30,75 +27,34 @@ public final class RtsCamera {
     private double velY;
     private double velZ;
 
-    private CameraType previousPerspective = CameraType.FIRST_PERSON;
-    private boolean previousHudHidden;
-
     public boolean isEnabled() {
-        return this.entity != null;
+        return this.enabled;
     }
 
+    /**
+     * Start the RTS view above and behind the player. Nothing in the game is changed: no settings
+     * (view mode, HUD), no camera entity. While RTS mode is on, mixins read the view from here
+     * (CameraMixin), report the third-person front view (OptionsMixin) and skip the HUD (GuiMixin);
+     * when it's off there is nothing to put back.
+     */
     public void enable(Minecraft client) {
         Player player = client.player;
-        ClientLevel world = client.level;
-        if (player == null || world == null) {
+        if (player == null || client.level == null) {
             return;
         }
-        Options options = client.options;
-        this.previousPerspective = options.getCameraType();
-        this.previousHudHidden = options.hideGui;
-
         this.yaw = player.getYRot();
         this.pitch = 55.0F;
         Vec3 eye = player.getEyePosition();
-        // Start above and behind the player, looking down at them.
         Vec3 back = horizontalForward(this.yaw).scale(-8.0);
         this.x = eye.x + back.x;
         this.y = eye.y + 11.0;
         this.z = eye.z + back.z;
         this.velX = this.velY = this.velZ = 0.0;
-
-        this.entity = new Marker(EntityType.MARKER, world);
-        this.entity.noPhysics = true;
-        apply();
-
-        client.setCameraEntity(this.entity);
-        // Third person (with no camera offset, see CameraMixin): nothing should treat this as the
-        // player's own eyes and draw their body or hand at the camera. The front view, because
-        // third-person camera mods (Leawind's Third Person...) take over the back view and would
-        // steal the camera; CameraMixin turns the front view back around.
-        options.setCameraType(CameraType.THIRD_PERSON_FRONT);
-        options.hideGui = true;
-        client.gameRenderer.setRenderHand(false);
+        this.enabled = true;
     }
 
     public void disable(Minecraft client) {
-        if (this.entity == null) {
-            return;
-        }
-        this.entity = null;
-        if (client.player != null) {
-            client.setCameraEntity(client.player);
-        }
-        client.options.setCameraType(this.previousPerspective);
-        client.options.hideGui = this.previousHudHidden;
-        client.gameRenderer.setRenderHand(true);
-    }
-
-    /** Re-attach after something (respawn, another mod) swapped the camera entity. */
-    public void ensureAttached(Minecraft client) {
-        if (this.entity == null || client.level == null) {
-            return;
-        }
-        if (this.entity.level() != client.level) {
-            this.entity = new Marker(EntityType.MARKER, client.level);
-            this.entity.noPhysics = true;
-            apply();
-        }
-        if (client.getCameraEntity() != this.entity) {
-            client.setCameraEntity(this.entity);
-        }
-        client.options.hideGui = true;
-        client.gameRenderer.setRenderHand(false);
+        this.enabled = false;
     }
 
     /**
@@ -109,7 +65,7 @@ public final class RtsCamera {
      * @param vertical -1..1, positive is up
      */
     public void update(Minecraft client, double dt, double forward, double strafe, double vertical, boolean fast) {
-        if (this.entity == null) {
+        if (!this.enabled) {
             return;
         }
         dt = Mth.clamp(dt, 0.0, 0.1);
@@ -133,7 +89,7 @@ public final class RtsCamera {
     }
 
     public void zoom(Minecraft client, double notches) {
-        if (this.entity == null) {
+        if (!this.enabled) {
             return;
         }
         Vec3 look = lookVector();
@@ -144,7 +100,7 @@ public final class RtsCamera {
 
     /** Pan by a screen-space drag, scaled so the ground roughly follows the cursor. */
     public void dragPan(Minecraft client, double dxPixels, double dyPixels, int screenHeight) {
-        if (this.entity == null) {
+        if (!this.enabled) {
             return;
         }
         double unitsPerPixel = Math.max(4.0, heightAboveGround(client)) * 1.6 / Math.max(1, screenHeight);
@@ -235,17 +191,8 @@ public final class RtsCamera {
         return Math.max(1.0, this.y - (start - 96));
     }
 
+    /** Nothing to push anywhere: CameraMixin reads the position and rotation every frame. */
     private void apply() {
-        if (this.entity == null) {
-            return;
-        }
-        this.entity.moveTo(this.x, this.y, this.z, this.yaw, this.pitch);
-        // Keep previous == current so render interpolation never lags a frame behind.
-        this.entity.xo = this.entity.xOld = this.x;
-        this.entity.yo = this.entity.yOld = this.y;
-        this.entity.zo = this.entity.zOld = this.z;
-        this.entity.yRotO = this.yaw;
-        this.entity.xRotO = this.pitch;
     }
 
     /** A saved camera position. */

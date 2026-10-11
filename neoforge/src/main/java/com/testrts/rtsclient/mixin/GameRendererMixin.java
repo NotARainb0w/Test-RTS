@@ -1,25 +1,22 @@
 package com.testrts.rtsclient.mixin;
 
 import com.testrts.rtsclient.RtsController;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/**
- * Keep the vanilla crosshair target computed from the player's own eyes rather than the RTS
- * camera, so anything reading {@code minecraft.hitResult} sees what the player could reach.
- */
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
-    @Redirect(method = "pick(F)V",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/client/Minecraft;getCameraEntity()Lnet/minecraft/world/entity/Entity;"))
-    private Entity rtsclient$targetFromPlayer(Minecraft instance) {
-        if (RtsController.get().isActive() && instance.player != null) {
-            return instance.player;
+    /**
+     * The player stays the camera entity, so {@code minecraft.hitResult} is still what the player
+     * looks at (Baritone relies on it); just don't outline that block in the RTS view.
+     */
+    @Inject(method = "shouldRenderBlockOutline", at = @At("HEAD"), cancellable = true)
+    private void rtsclient$noOutlineInRts(CallbackInfoReturnable<Boolean> cir) {
+        if (RtsController.get().isActive()) {
+            cir.setReturnValue(false);
         }
-        return instance.getCameraEntity();
     }
 }

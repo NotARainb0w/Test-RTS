@@ -25,6 +25,8 @@ public final class RtsSettingsScreen extends Screen {
     private static final int[] SHAPE_LIMITS = {16_384, 65_536, 262_144, 1_000_000, 4_000_000};
     private static final double[] SPEEDS = {8, 12, 18, 26, 40};
     private static final double[] TURN_SPEEDS = {15, 30, 45, 90, 0};
+    private static final double[] AUTO_PLACE_RANGES = {2, 3, 4, 0};
+    private static final double[] AUTO_PLACE_SPEEDS = {2, 3, 5, 10, 20};
 
     private static final int COL_W = 196;
     private static final int ROW_H = 18;
@@ -98,6 +100,30 @@ public final class RtsSettingsScreen extends Screen {
                         "In creative mode, the builder spawns the blocks (and scaffolding) it needs into your hotbar "
                                 + "instead of fetching them from storage. Does nothing in survival.",
                         () -> c.creativeSupply = !c.creativeSupply),
+                new Setting("Start orders right away", () -> onOff(c.autoStart),
+                        "Off: orders wait in the queue until you press Start (Pause stops everything). On: they start as soon as you queue them.",
+                        () -> c.autoStart = !c.autoStart),
+                new Setting("Build hologram", () -> onOff(c.showHologram),
+                        "Outside RTS mode, show the ghost blocks of queued builds so you can place blocks by hand. Also toggled with H outside RTS mode.",
+                        () -> c.showHologram = !c.showHologram),
+                new Setting("Hold-Z place range", () -> c.autoPlaceRange <= 0 ? "Full reach" : (int) c.autoPlaceRange + " blocks",
+                        "How far from you hold-Z places the hologram's blocks (measured from your eyes). Shorter keeps it to the "
+                                + "blocks right around you. Hold-X (the block you look at) always reaches as far as you can.",
+                        () -> c.autoPlaceRange = next(AUTO_PLACE_RANGES, c.autoPlaceRange)),
+                new Setting("Hold-Z place speed", () -> (int) c.autoPlaceSpeed + " blocks/s"
+                                + (c.serverSafePlacing && c.autoPlaceSpeed > 5 ? " (5 server-safe)" : ""),
+                        "How many blocks a second hold-Z places. Server-safe placing never goes faster than 5 (holding right-click).",
+                        () -> c.autoPlaceSpeed = next(AUTO_PLACE_SPEEDS, c.autoPlaceSpeed)),
+                new Setting("Server-safe placing", () -> onOff(c.serverSafePlacing),
+                        "Hold-Z and hold-X only do what you could do by hand, so anti-cheat plugins don't object: no faked look "
+                                + "direction, no mid-air placing, only block faces you can see, at most 5 blocks a second, and hold-X is a "
+                                + "plain right-click on what your crosshair is on. Blocks that would face the wrong way from where you look "
+                                + "are left for hold-X or the builder. Off: anything in reach, any facing, mid-air allowed (singleplayer).",
+                        () -> c.serverSafePlacing = !c.serverSafePlacing),
+                new Setting("Use AE2 for materials", () -> onOff(c.useAe2),
+                        "With Applied Energistics 2: fetch building materials through a wireless terminal you carry "
+                                + "(works from anywhere in range), or from ME terminals you linked with the Link tool, before chests.",
+                        () -> c.useAe2 = !c.useAe2),
                 new Setting("Clear blocks in the way", () -> onOff(c.clearInTheWay),
                         "Shapes mine whatever is in their cells (terrain, trees) and put the brush block there instead of skipping them.",
                         () -> c.clearInTheWay = !c.clearInTheWay),

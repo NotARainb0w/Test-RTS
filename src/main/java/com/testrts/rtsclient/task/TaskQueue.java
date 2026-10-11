@@ -22,6 +22,11 @@ public final class TaskQueue {
     /** The task ticked last; when another one takes over it is suspended so it can restart later. */
     private RtsTask running;
     private int idleTicks;
+    /**
+     * Orders only run once Start was pressed; Pause stops them where they are. When the queue runs
+     * empty it goes back to waiting, so new orders wait for Start again (unless autoStart is on).
+     */
+    private boolean started;
 
     public static TaskQueue get() {
         return INSTANCE;
@@ -29,11 +34,41 @@ public final class TaskQueue {
 
     public void add(RtsTask task) {
         this.tasks.addLast(task);
+        startIfAuto();
+    }
+
+    private void startIfAuto() {
+        if (com.testrts.rtsclient.config.RtsConfig.get().autoStart) {
+            this.started = true;
+        }
+    }
+
+    public boolean isStarted() {
+        return this.started;
+    }
+
+    /** Start (or carry on with) the queued orders. */
+    public void start() {
+        this.started = true;
+    }
+
+    /** Stop working on every order right where we are; Start carries on. */
+    public void pauseAll(MinecraftClient client) {
+        if (!this.started) {
+            return;
+        }
+        this.started = false;
+        if (this.running != null) {
+            this.running.suspend(client);
+            this.running = null;
+        }
+        Engine.stop();
     }
 
     /** Run {@code task} before whatever is currently at the head. */
     public void pushFront(RtsTask task) {
         this.tasks.addFirst(task);
+        startIfAuto();
     }
 
     public boolean isEmpty() {
@@ -82,6 +117,7 @@ public final class TaskQueue {
         this.tasks.clear();
         this.paused.clear();
         this.running = null;
+        this.started = false;
         Engine.stop();
         if (client.player != null && client.player.currentScreenHandler != client.player.playerScreenHandler) {
             client.player.closeHandledScreen();
@@ -110,6 +146,26 @@ public final class TaskQueue {
                 QueueStore.autosave();
                 this.tasks.clear();
             }
+            this.started = false;
+            return;
+        }
+        if (this.tasks.isEmpty()) {
+            // Ran out of orders: new ones wait for Start again.
+            this.started = false;
+            this.running = null;
+            if (++this.idleTicks % 200 == 0 && com.testrts.rtsclient.config.RtsConfig.get().autoRepair
+                    && CompletedBuilds.queueRepairs(client.world, true) > 0) {
+                this.started = true; // auto-repair runs by itself
+            }
+            return;
+        }
+        if (!this.started) {
+            // Waiting for Start, or paused: whatever was running stops where it is.
+            if (this.running != null) {
+                this.running.suspend(client);
+                this.running = null;
+                Engine.stop();
+            }
             return;
         }
         RtsTask head = null;
@@ -126,10 +182,7 @@ public final class TaskQueue {
         }
         this.running = head;
         if (head == null) {
-            if (this.tasks.isEmpty() && ++this.idleTicks % 200 == 0 && com.testrts.rtsclient.config.RtsConfig.get().autoRepair) {
-                CompletedBuilds.queueRepairs(client.world, true);
-            }
-            return;
+            return; // every order is paused on its own
         }
         this.idleTicks = 0;
         RtsTask.Status status;

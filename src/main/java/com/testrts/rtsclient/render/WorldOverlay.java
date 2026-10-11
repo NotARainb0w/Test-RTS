@@ -47,45 +47,48 @@ public final class WorldOverlay {
     /** Clear orders are re-meshed now and then so mined blocks drop out of the red preview. */
     private static final long CLEAR_REFRESH_MS = 2500;
     private static final int CLEAR_REFRESH_MAX = 60_000;
+    /** Build orders: how often placed blocks are taken out of the ghost. */
+    private static final long BUILD_REFRESH_MS = 1000;
 
     private WorldOverlay() {
     }
 
-    /** The vanilla renderer skips the local player when the camera is elsewhere; draw them ourselves. */
-    public static void renderPlayer(WorldRenderContext context) {
-        MinecraftClient client = MinecraftClient.getInstance();
-        ClientPlayerEntity player = client.player;
-        if (!RtsController.get().isActive() || player == null || client.getCameraEntity() == player
-                || context.consumers() == null || player.isInvisible()) {
-            return;
-        }
-        float tickDelta = context.tickDelta();
-        Vec3d cam = context.camera().getPos();
-        double x = MathHelper.lerp(tickDelta, player.prevX, player.getX()) - cam.x;
-        double y = MathHelper.lerp(tickDelta, player.prevY, player.getY()) - cam.y;
-        double z = MathHelper.lerp(tickDelta, player.prevZ, player.getZ()) - cam.z;
-        float yaw = MathHelper.lerp(tickDelta, player.prevYaw, player.getYaw());
-        EntityRenderDispatcher dispatcher = client.getEntityRenderDispatcher();
-        dispatcher.render(player, x, y, z, yaw, tickDelta, context.matrixStack(), context.consumers(),
-                dispatcher.getLight(player, tickDelta));
+    /** Outside RTS mode: keep preview uploads moving (the preview worker waits for them), draw nothing. */
+    public static void idle() {
+        PreviewMesh.pump();
+        closeTaskMeshes(List.of());
     }
 
-    public static void render(WorldRenderContext context) {
-        // Uploads must run even when RTS is off, so the preview worker never waits forever.
+    /**
+     * Outside RTS mode, with the hologram on: just the ghosts of queued builds, to place blocks by hand.
+     * Only our own preview meshes are drawn (with the given matrices); nothing else of the render state
+     * or the shared buffers is touched.
+     */
+    public static void hologram(MatrixStack matrices, Matrix4f projection, Vec3d cam) {
         PreviewMesh.pump();
-        RtsController controller = RtsController.get();
         MinecraftClient client = MinecraftClient.getInstance();
-        if (!controller.isActive() || client.world == null || client.player == null) {
+        if (client.world == null || client.player == null) {
             closeTaskMeshes(List.of());
             return;
         }
-        MatrixStack matrices = context.matrixStack();
-        Matrix4f projection = context.projectionMatrix();
-        Vec3d cam = context.camera().getPos();
-        BuildSession session = controller.session();
-        BlockHitResult hover = controller.hover();
+        drawTaskMeshes(client, matrices, projection, cam);
+    }
 
-        // ---- meshes (GPU buffers) ----
+    /** Whether there's anything for {@link #hologram} to show. */
+    public static boolean hasHologram() {
+        if (!RtsConfig.get().showHologram) {
+            return false;
+        }
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Ghosts of queued build (green) and clear (red) orders; done blocks drop out every second or so. */
+    private static void drawTaskMeshes(MinecraftClient client, MatrixStack matrices, Matrix4f projection, Vec3d cam) {
         List<BuildTask> builds = new ArrayList<>();
         for (RtsTask task : TaskQueue.get().snapshot()) {
             if (task instanceof BuildTask build) {
@@ -97,24 +100,58 @@ public final class WorldOverlay {
         for (BuildTask build : builds) {
             PreviewMesh mesh = TASK_MESHES.computeIfAbsent(build,
                     b -> new PreviewMesh(b.clearing() ? PreviewMesh.Style.CLEAR : PreviewMesh.Style.GHOST));
-            if (build.clearing() && build.blocks().size() <= CLEAR_REFRESH_MAX) {
+            if (build.blocks().size() <= CLEAR_REFRESH_MAX) {
                 long last = TASK_REFRESH.getOrDefault(build, 0L);
-                if (now - last > CLEAR_REFRESH_MS) {
+                if (now - last > (build.clearing() ? CLEAR_REFRESH_MS : BUILD_REFRESH_MS)) {
                     TASK_REFRESH.put(build, now);
-                    List<BlockPos> left = new ArrayList<>();
-                    for (BlockPos p : build.blocks().keySet()) {
-                        if (!client.world.getBlockState(p).isAir()) {
-                            left.add(p);
+                    if (build.clearing()) {
+                        List<BlockPos> left = new ArrayList<>();
+                        for (BlockPos p : build.blocks().keySet()) {
+                            if (!client.world.getBlockState(p).isAir()) {
+                                left.add(p);
+                            }
                         }
+                        mesh.request(List.of(build, left.size()),
+                                () -> PreviewMesh.Blocks.of(left, net.minecraft.block.Blocks.AIR.getDefaultState(), false), true);
+                    } else {
+                        // Only what's still to place: blocks placed by the builder or by hand drop out.
+                        Map<BlockPos, net.minecraft.block.BlockState> left = new java.util.LinkedHashMap<>();
+                        for (Map.Entry<BlockPos, net.minecraft.block.BlockState> e : build.blocks().entrySet()) {
+                            if (!com.testrts.rtsclient.task.MaterialPlanner.matches(client.world.getBlockState(e.getKey()), e.getValue())) {
+                                left.put(e.getKey(), e.getValue());
+                            }
+                        }
+                        mesh.request(List.of(build, left.size()), () -> new PreviewMesh.Blocks(left, false), true);
                     }
-                    mesh.request(List.of(build, left.size()),
-                            () -> PreviewMesh.Blocks.of(left, net.minecraft.block.Blocks.AIR.getDefaultState(), false), true);
                 }
             } else {
                 mesh.request(build, () -> new PreviewMesh.Blocks(build.blocks(), false), true);
             }
             mesh.draw(matrices, projection, cam);
         }
+    }
+
+    public static void render(WorldRenderContext context) {
+        // Uploads must run even when RTS is off, so the preview worker never waits forever.
+        PreviewMesh.pump();
+        RtsController controller = RtsController.get();
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!controller.isActive() || client.world == null || client.player == null) {
+            if (!controller.isActive() && hasHologram() && client.world != null && client.player != null) {
+                drawTaskMeshes(client, context.matrixStack(), context.projectionMatrix(), context.camera().getPos());
+                return;
+            }
+            closeTaskMeshes(List.of());
+            return;
+        }
+        MatrixStack matrices = context.matrixStack();
+        Matrix4f projection = context.projectionMatrix();
+        Vec3d cam = context.camera().getPos();
+        BuildSession session = controller.session();
+        BlockHitResult hover = controller.hover();
+
+        // ---- meshes (GPU buffers) ----
+        drawTaskMeshes(client, matrices, projection, cam);
 
         boolean showShape = session.tool.usesShapes() && session.anchorA != null;
         if (showShape) {
@@ -205,6 +242,18 @@ public final class WorldOverlay {
                 }
             }
             WorldRenderer.drawBox(matrices, lines, box, 1.0F, c.indexed() ? 0.75F : 0.5F, 0.1F, storageAlpha);
+        }
+        // Linked ME terminals: a cyan plate on the terminal's face.
+        for (com.testrts.rtsclient.storage.MeNetwork.Terminal t : com.testrts.rtsclient.storage.MeNetwork.get().terminals()) {
+            BlockPos p = t.pos();
+            if (p.getSquaredDistance(cam.x, cam.y, cam.z) > 160 * 160) {
+                continue;
+            }
+            net.minecraft.util.math.Direction d = t.side();
+            double inset = 0.85;
+            Box plate = new Box(p).contract(0.1).expand(0.02);
+            plate = plate.shrink(-d.getOffsetX() * inset, -d.getOffsetY() * inset, -d.getOffsetZ() * inset);
+            WorldRenderer.drawBox(matrices, lines, plate, 0.2F, 0.85F, 1.0F, storageAlpha);
         }
 
         for (RtsTask task : TaskQueue.get().snapshot()) {

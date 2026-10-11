@@ -121,6 +121,7 @@ public final class RtsController {
 
     public void tick(Minecraft client) {
         if (!this.active) {
+            keepCameraOnPlayer(client);
             return;
         }
         LocalPlayer p = client.player;
@@ -141,10 +142,35 @@ public final class RtsController {
             disable(client);
             return;
         }
-        this.camera.ensureAttached(client);
         // A container, chat or inventory screen replaced ours; once it closes, come back.
         if (client.screen == null) {
             openScreen(client);
+        }
+    }
+
+    /** Entity classes we've already reported following with the camera (report each once). */
+    private final java.util.Set<String> reportedCameras = new java.util.HashSet<>();
+
+    /**
+     * Outside RTS mode the camera should follow the player. If it's left on something that isn't
+     * really there (an entity not in the world, like a freecam's or an old RTS marker), put it back on
+     * the player; anything else is only reported, since some mods move the camera on purpose
+     * (SecurityCraft cameras...). The report names the entity, so the cause can be found.
+     */
+    private void keepCameraOnPlayer(Minecraft client) {
+        LocalPlayer p = client.player;
+        net.minecraft.world.entity.Entity cam = client.getCameraEntity();
+        if (p == null || client.level == null || cam == null || cam == p || p.isSpectator()) {
+            return;
+        }
+        boolean stale = cam.isRemoved() || cam.level() != client.level || client.level.getEntity(cam.getId()) != cam
+                || cam instanceof net.minecraft.world.entity.Marker;
+        if (this.reportedCameras.add(cam.getClass().getName())) {
+            RtsClientMod.LOGGER.warn("Camera is following {} ({}) instead of the player{}", cam.getClass().getName(),
+                    cam.getName().getString(), stale ? " - it isn't in the world, putting the camera back on the player" : "");
+        }
+        if (stale) {
+            client.setCameraEntity(p);
         }
     }
 }

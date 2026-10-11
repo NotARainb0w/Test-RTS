@@ -207,10 +207,70 @@ public final class StorageManager {
 
     // ---------------------------------------------------------------- queries
 
+    /**
+     * Storage we can link: any block with an inventory the player can open. Vanilla containers, and
+     * modded storage that offers its items to hoppers and pipes (Sophisticated Storage, Iron Chests,
+     * crates...). Not drawers or AE2 blocks (see {@link #notStorage}).
+     */
     public static boolean isContainer(ClientWorld world, BlockPos pos) {
         BlockEntity be = world.getBlockEntity(pos);
-        return be instanceof Inventory;
+        if (be == null) {
+            return false;
+        }
+        Identifier id = Registries.BLOCK.getId(be.getCachedState().getBlock());
+        if (notStorage(id.getNamespace(), id.getPath())) {
+            return false;
+        }
+        if (be instanceof Inventory) {
+            return true;
+        }
+        try {
+            return net.fabricmc.fabric.api.transfer.v1.item.ItemStorage.SIDED.find(world, pos, null) != null;
+        } catch (RuntimeException | LinkageError e) {
+            return false; // some mods' storages only work on the server
+        }
     }
+
+    /** For Scan nearby: vanilla chests, barrels and shulker boxes, and modded storage named like storage. */
+    public static boolean looksLikeStorage(ClientWorld world, BlockEntity be) {
+        if (be instanceof ChestBlockEntity || be instanceof BarrelBlockEntity || be instanceof ShulkerBoxBlockEntity) {
+            return true;
+        }
+        Identifier id = Registries.BLOCK.getId(be.getCachedState().getBlock());
+        return storageName(id.getPath()) && isContainer(world, be.getPos());
+    }
+
+    /** Words in a block's id that mean storage, for Scan nearby (chests, barrels, crates... from any mod). */
+    private static final String[] STORAGE_WORDS = {"chest", "barrel", "crate", "shulker", "storage", "cabinet", "locker", "safe", "backpack"};
+    /**
+     * Blocks never linked as storage: drawers (a right-click puts the held item in instead of opening
+     * them), the parts of storage networks that aren't storage themselves, and machines.
+     */
+    private static final String[] NOT_STORAGE_WORDS = {"drawer", "controller", "terminal", "interface", "connector", "importer",
+            "exporter", "trash", "void", "hopper", "furnace", "smoker", "compacting"};
+
+    private static boolean notStorage(String namespace, String path) {
+        // AE2 blocks (ME chest, drive...) have their own support through the ME network.
+        if (namespace.equals("ae2")) {
+            return true;
+        }
+        for (String word : NOT_STORAGE_WORDS) {
+            if (path.contains(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean storageName(String path) {
+        for (String word : STORAGE_WORDS) {
+            if (path.contains(word)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     /** Both halves of a double chest map to the same key, so its items aren't counted twice. */
     public static BlockPos canonical(ClientWorld world, BlockPos pos) {
@@ -290,7 +350,7 @@ public final class StorageManager {
                     continue;
                 }
                 for (BlockEntity be : new ArrayList<>(worldChunk.getBlockEntities().values())) {
-                    if (!(be instanceof ChestBlockEntity || be instanceof BarrelBlockEntity || be instanceof ShulkerBoxBlockEntity)) {
+                    if (!looksLikeStorage(world, be)) {
                         continue;
                     }
                     BlockPos pos = be.getPos();
@@ -311,17 +371,19 @@ public final class StorageManager {
         return added;
     }
 
-    /** Sum of everything we know is stored, across indexed containers. */
+    /** Sum of everything we know is stored, across indexed containers and the AE2 network. */
     public Map<Item, Integer> totals() {
         Map<Item, Integer> totals = new HashMap<>();
         for (LinkedContainer c : this.containers.values()) {
             c.items.forEach((item, count) -> totals.merge(item, count, Integer::sum));
         }
+        MeNetwork.get().items().forEach((item, count) ->
+                totals.merge(item, (int) Math.min(Integer.MAX_VALUE, count), (a, b) -> (int) Math.min(Integer.MAX_VALUE, (long) a + b)));
         return totals;
     }
 
     public int total(Item item) {
-        int sum = 0;
+        int sum = MeNetwork.get().count(item);
         for (LinkedContainer c : this.containers.values()) {
             sum += c.count(item);
         }

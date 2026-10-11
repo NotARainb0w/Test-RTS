@@ -1,5 +1,6 @@
 package com.testrts.rtsclient.task;
 
+import com.testrts.rtsclient.storage.MeNetwork;
 import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.Minecraft;
@@ -18,13 +19,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Pulls items out of linked containers, visiting the nearest ones that have what we need. */
+/**
+ * Pulls items out of storage: first the AE2 network (wireless terminal, or the nearest linked ME
+ * terminal) when there is one, then linked containers, visiting the nearest ones that have what we need.
+ */
 public final class FetchTask implements RtsTask {
     private static final int CLICKS_PER_TICK = 6;
 
     private final Map<Item, Integer> remaining;
     private final Set<BlockPos> visited = new HashSet<>();
-    private ContainerVisitTask visit;
+    /** The visit in progress: a {@link ContainerVisitTask} or a {@link MeFetchTask}. */
+    private RtsTask visit;
+    /** AE2 network: tried (or found nothing to try), and how many terminals we tried to open. */
+    private boolean meDone;
+    private int meAttempts;
     private Map<Item, Integer> before;
 
     public FetchTask(Map<Item, Integer> wanted) {
@@ -52,6 +60,9 @@ public final class FetchTask implements RtsTask {
             if (s == Status.RUNNING) {
                 return Status.RUNNING;
             }
+            if (this.visit instanceof MeFetchTask && s == Status.DONE) {
+                this.meDone = true;
+            }
             settle(player.getInventory());
             this.visit = null;
         }
@@ -63,6 +74,16 @@ public final class FetchTask implements RtsTask {
             Messages.warn("Inventory full, stopped fetching");
             return Status.DONE;
         }
+        if (!this.meDone) {
+            MeFetchTask me = meVisit(client, player.blockPosition());
+            if (me != null) {
+                this.meAttempts++;
+                this.before = counts(player.getInventory());
+                this.visit = me;
+                return Status.RUNNING;
+            }
+            this.meDone = true;
+        }
         BlockPos next = nextContainer(player.blockPosition());
         if (next == null) {
             Messages.warn("Storage doesn't have " + MaterialPlanner.describe(this.remaining, 3));
@@ -72,6 +93,31 @@ public final class FetchTask implements RtsTask {
         this.before = counts(player.getInventory());
         this.visit = new ContainerVisitTask(next, "Fetch", this::take);
         return Status.RUNNING;
+    }
+
+    /**
+     * Get what the AE2 network may have: through the wireless terminal, or if that can't be used
+     * (or just failed), at the nearest linked ME terminal. Null when there's nothing to try.
+     */
+    private MeFetchTask meVisit(Minecraft client, BlockPos near) {
+        MeNetwork me = MeNetwork.get();
+        if (this.meAttempts >= 2 || !me.reachable(client)) {
+            return null;
+        }
+        Map<Item, Integer> fromMe = new LinkedHashMap<>();
+        this.remaining.forEach((item, n) -> {
+            if (me.mightHave(client, item)) {
+                fromMe.put(item, n);
+            }
+        });
+        if (fromMe.isEmpty()) {
+            return null;
+        }
+        if (me.wirelessUsable(client)) {
+            return new MeFetchTask(fromMe);
+        }
+        MeNetwork.Terminal terminal = me.nearestTerminal(near);
+        return terminal == null ? null : new MeFetchTask(fromMe, terminal);
     }
 
     private BlockPos nextContainer(BlockPos near) {

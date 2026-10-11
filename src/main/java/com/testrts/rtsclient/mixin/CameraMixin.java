@@ -1,9 +1,11 @@
 package com.testrts.rtsclient.mixin;
 
 import com.testrts.rtsclient.RtsController;
+import com.testrts.rtsclient.camera.RtsCamera;
 import net.minecraft.client.render.Camera;
 import net.minecraft.client.render.CameraSubmersionType;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.BlockView;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -12,21 +14,29 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/**
- * The RTS camera flies through water and lava; without this the whole view turns into a blue (or
- * orange) blur of underwater fog whenever it dips below a surface.
- */
 @Mixin(Camera.class)
 public abstract class CameraMixin {
     @Shadow
+    protected abstract void setPos(double x, double y, double z);
+
+    @Shadow
     protected abstract void setRotation(float yaw, float pitch);
 
-    /** RTS mode uses the front view (see RtsCamera): look the way the RTS camera looks, not back at it. */
+    /**
+     * RTS mode: the view comes from the RTS camera. Minecraft's camera still belongs to the player
+     * (nothing to restore afterwards); only where it sits and where it looks is replaced.
+     */
     @Inject(method = "update", at = @At("TAIL"))
-    private void rtsclient$unflipFrontView(BlockView area, Entity focusedEntity, boolean thirdPerson, boolean inverseView,
-                                          float tickDelta, CallbackInfo ci) {
-        if (RtsController.get().isActive() && inverseView) {
-            setRotation(focusedEntity.getYaw(tickDelta), focusedEntity.getPitch(tickDelta));
+    private void rtsclient$rtsView(BlockView area, Entity focusedEntity, boolean thirdPerson, boolean inverseView,
+                                  float tickDelta, CallbackInfo ci) {
+        if (!RtsController.get().isActive()) {
+            return;
+        }
+        RtsCamera rts = RtsController.get().camera();
+        if (rts.isEnabled()) {
+            Vec3d pos = rts.position();
+            setRotation(rts.yaw(), rts.pitch());
+            setPos(pos.x, pos.y, pos.z);
         }
     }
 
@@ -34,17 +44,6 @@ public abstract class CameraMixin {
     private void rtsclient$noFluidFog(CallbackInfoReturnable<CameraSubmersionType> cir) {
         if (RtsController.get().isActive()) {
             cir.setReturnValue(CameraSubmersionType.NONE);
-        }
-    }
-
-    /**
-     * RTS mode reports third person (so mods that draw the player's body in first person don't add
-     * a second copy at the camera), but the view must stay exactly where the RTS camera is.
-     */
-    @Inject(method = "clipToSpace", at = @At("HEAD"), cancellable = true)
-    private void rtsclient$noThirdPersonOffset(double desiredDistance, CallbackInfoReturnable<Double> cir) {
-        if (RtsController.get().isActive()) {
-            cir.setReturnValue(0.0);
         }
     }
 }

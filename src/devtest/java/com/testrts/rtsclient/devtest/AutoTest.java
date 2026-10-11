@@ -248,6 +248,7 @@ public final class AutoTest {
                 }
                 task = new BuildTask("autotest " + s.name(), order, false);
                 TaskQueue.get().add(task);
+                TaskQueue.get().start();
                 ticks = 0;
                 minHealth = mc.player.getHealth();
                 log("start %s: %d blocks, engine=%s air=%s", s.name(), order.size(), s.engine(), s.airPlace());
