@@ -156,6 +156,14 @@ public final class NativeBuilder {
     @Nullable
     private BlockPos flyFor;
     private int flyTicks;
+    /** The route being flown (feet cells), the waypoint we're on, and progress for the watchdog. */
+    @Nullable
+    private List<BlockPos> flyPath;
+    private int flyIndex;
+    private double flyBest = Double.MAX_VALUE;
+    private int flyReplans;
+    /** End spots that didn't work out for the current block. */
+    private final Set<BlockPos> flyRejected = new HashSet<>();
     /** Ticks spent turning toward the block being placed. */
     private int turnedTicks;
     /** The block we're turning toward to place. */
@@ -781,93 +789,198 @@ public final class NativeBuilder {
         return com.testrts.rtsclient.config.RtsConfig.get().creativeFlight && player.getAbilities().allowFlying;
     }
 
+    private static final int FLY_SEARCH_NODES = 6000;
+    private static final int FLY_STALL_TICKS = 40;
+    private static final int FLY_MAX_REPLANS = 3;
+
     /**
-     * One step of flying to a free spot in the air within reach of {@code target}: turn toward it,
-     * fly there (jump/sneak for up and down), and climb over anything in the way.
+     * One step of flying to work on {@code target}: plan a route through free air to a spot within reach
+     * of it (around walls, roofs and the build itself), follow it with braking so momentum doesn't
+     * overshoot, stop as soon as the block is in reach, and plan again from here when no progress is made.
      */
     private void flyStep(MinecraftClient client, BlockPos target, String info) {
         ClientPlayerEntity player = client.player;
         ClientWorld world = client.world;
         this.walk = null;
         this.search = null;
-        if (this.flyTo == null || !target.equals(this.flyFor)) {
-            this.flyFor = target.toImmutable();
-            this.flyTo = hoverSpot(world, player, target);
-            this.flyTicks = 0;
-            if (this.flyTo == null) {
-                unreachable(target);
-                return;
-            }
-        }
+        MovementInput input = MovementInput.acquire(player);
+        input.release();
         if (!player.getAbilities().flying) {
             player.getAbilities().flying = true;
             player.sendAbilitiesUpdate();
         }
-        MovementInput input = MovementInput.acquire(player);
-        input.release();
-        if (++this.flyTicks > 20 * 20) {
-            // Something keeps us from getting there; try other blocks first.
+        // Already close enough: just stop and let the next tick place or mine it.
+        if (Reach.inReach(client, target) && !player.getBoundingBox().intersects(new Box(target))) {
+            brake(player, 0.2);
             this.flyTo = null;
-            warn("Can't fly to " + target.toShortString() + ", doing other blocks first");
-            unreachable(target);
+            this.flyPath = null;
             return;
+        }
+        if (this.flyPath == null || !target.equals(this.flyFor)) {
+            if (!target.equals(this.flyFor)) {
+                this.flyReplans = 0;
+                this.flyRejected.clear();
+            }
+            this.flyFor = target.toImmutable();
+            if (!planFlight(world, player, target)) {
+                this.flyPath = null;
+                this.flyTo = null;
+                warn("No way to fly to " + target.toShortString() + ", doing other blocks first");
+                unreachable(target);
+                return;
+            }
         }
         Vec3d pos = player.getPos();
-        double dx = this.flyTo.x - pos.x;
-        double dy = this.flyTo.y - pos.y;
-        double dz = this.flyTo.z - pos.z;
-        if (dx * dx + dy * dy + dz * dz < 0.36) {
-            this.flyTo = null; // there: the next tick works on what's in reach
+        // Watchdog: no progress toward the end of the route for 2 s means something blocks it.
+        double toEnd = pos.squaredDistanceTo(this.flyTo);
+        if (toEnd < this.flyBest - 0.09) {
+            this.flyBest = toEnd;
+            this.flyTicks = 0;
+        } else if (++this.flyTicks > FLY_STALL_TICKS) {
+            this.flyRejected.add(BlockPos.ofFloored(this.flyTo));
+            this.flyPath = null;
+            if (++this.flyReplans > FLY_MAX_REPLANS) {
+                this.flyTo = null;
+                warn("Stuck flying to " + target.toShortString() + ", doing other blocks first");
+                unreachable(target);
+            }
             return;
         }
-        if (dx * dx + dz * dz > 1.0) {
+        // Aim at the furthest waypoint we can fly to in a straight line.
+        int aim = this.flyIndex;
+        for (int k = Math.min(this.flyPath.size() - 1, this.flyIndex + 8); k > this.flyIndex; k--) {
+            if (clearFlight(world, pos, waypoint(this.flyPath.get(k)))) {
+                aim = k;
+                break;
+            }
+        }
+        this.flyIndex = aim;
+        Vec3d goal = waypoint(this.flyPath.get(aim));
+        boolean last = aim == this.flyPath.size() - 1;
+        double dx = goal.x - pos.x;
+        double dy = goal.y - pos.y;
+        double dz = goal.z - pos.z;
+        double flat = Math.sqrt(dx * dx + dz * dz);
+        if (flat < 0.35 && Math.abs(dy) < 0.4) {
+            if (last) {
+                brake(player, 0.0);
+                this.flyPath = null; // arrived; the next tick works on what's in reach
+                return;
+            }
+            this.flyIndex = Math.min(this.flyPath.size() - 1, aim + 1);
+            return;
+        }
+        // Creative flight keeps its speed: slow down near the end so we don't overshoot and circle.
+        double dist = Math.sqrt(flat * flat + dy * dy);
+        if (last && dist < 1.5) {
+            brake(player, 0.55);
+        }
+        if (flat > 1.0) {
             float yaw = (float) (net.minecraft.util.math.MathHelper.atan2(dz, dx) * net.minecraft.util.math.MathHelper.DEGREES_PER_RADIAN) - 90.0F;
             Look.toward(player, yaw, player.getPitch());
         }
-        // Move toward the spot whichever way we face (strafing while the head turns).
+        // Move toward the waypoint whichever way we face (strafing while the head turns).
         float rad = player.getYaw() * net.minecraft.util.math.MathHelper.RADIANS_PER_DEGREE;
         double forward = -dx * net.minecraft.util.math.MathHelper.sin(rad) + dz * net.minecraft.util.math.MathHelper.cos(rad);
         double left = dx * net.minecraft.util.math.MathHelper.cos(rad) + dz * net.minecraft.util.math.MathHelper.sin(rad);
-        input.forward = forward > 0.15;
-        input.back = forward < -0.15;
-        input.left = left > 0.15;
-        input.right = left < -0.15;
-        input.jump = dy > 0.25 || player.horizontalCollision;
-        input.sneak = dy < -0.25 && !player.horizontalCollision;
+        double dead = last && dist < 1.2 ? 0.25 : 0.12;
+        input.forward = forward > dead;
+        input.back = forward < -dead;
+        input.left = left > dead;
+        input.right = left < -dead;
+        input.jump = dy > 0.2;
+        input.sneak = dy < -0.2;
         this.status = "flying" + info;
     }
 
-    /**
-     * Where to hover to work on {@code target}: a free spot about an arm's length away at eye level
-     * (or a little above or below), not inside anything the order still has to fill. Nearest to us.
-     */
-    @Nullable
-    private Vec3d hoverSpot(ClientWorld world, ClientPlayerEntity player, BlockPos target) {
-        Vec3d best = null;
-        double bestDist = Double.MAX_VALUE;
-        for (double r : new double[]{2.6, 3.2, 1.8}) {
-            for (int i = 0; i < 16; i++) {
-                double a = i * Math.PI / 8.0;
-                for (int dy : new int[]{0, 1, -1, 2}) {
-                    // Feet one block below the target puts the eyes level with it.
-                    Vec3d feet = new Vec3d(target.getX() + 0.5 + Math.cos(a) * r, target.getY() - 1.0 + dy,
-                            target.getZ() + 0.5 + Math.sin(a) * r);
-                    BlockPos cell = BlockPos.ofFloored(feet.x, feet.y, feet.z);
-                    if (!freeToHover(world, cell) || !freeToHover(world, cell.up())) {
-                        continue;
-                    }
-                    double d = feet.squaredDistanceTo(player.getPos());
-                    if (d < bestDist) {
-                        bestDist = d;
-                        best = feet;
+    /** Scale the player's speed down (0 = stop dead). Our own movement, so the client decides it. */
+    private static void brake(ClientPlayerEntity player, double keep) {
+        Vec3d v = player.getVelocity();
+        player.setVelocity(v.x * keep, v.y * keep, v.z * keep);
+    }
+
+    private static Vec3d waypoint(BlockPos feet) {
+        return new Vec3d(feet.getX() + 0.5, feet.getY() + 0.05, feet.getZ() + 0.5);
+    }
+
+    /** Whether the player's body fits all along the straight line from {@code from} to {@code to}. */
+    private boolean clearFlight(ClientWorld world, Vec3d from, Vec3d to) {
+        double len = from.distanceTo(to);
+        int steps = Math.max(1, (int) Math.ceil(len / 0.3));
+        for (int i = 1; i <= steps; i++) {
+            Vec3d p = from.lerp(to, (double) i / steps);
+            for (double ox : new double[]{-0.3, 0.3}) {
+                for (double oz : new double[]{-0.3, 0.3}) {
+                    BlockPos feet = BlockPos.ofFloored(p.x + ox, p.y + 0.1, p.z + oz);
+                    if (!freeToHover(world, feet) || !freeToHover(world, feet.up())) {
+                        return false;
                     }
                 }
             }
-            if (best != null) {
-                return best;
+        }
+        return true;
+    }
+
+    /**
+     * Breadth-first search through free air (2 blocks of headroom) from the player to the nearest spot
+     * within reach of {@code target}. Sets {@link #flyPath} and {@link #flyTo}.
+     */
+    private boolean planFlight(ClientWorld world, ClientPlayerEntity player, BlockPos target) {
+        double reach = Reach.reach(MinecraftClient.getInstance()) - 0.6;
+        BlockPos start = BlockPos.ofFloored(player.getX(), player.getY() + 0.2, player.getZ());
+        if (!freeToHover(world, start) || !freeToHover(world, start.up())) {
+            start = start.up();
+        }
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        Map<BlockPos, BlockPos> parent = new java.util.HashMap<>();
+        queue.add(start);
+        parent.put(start, start);
+        int[][] dirs = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}, {0, 1, 0}, {0, -1, 0},
+                {1, 0, 1}, {1, 0, -1}, {-1, 0, 1}, {-1, 0, -1}};
+        Vec3d aim = Vec3d.ofCenter(target);
+        BlockPos found = null;
+        while (!queue.isEmpty() && parent.size() < FLY_SEARCH_NODES) {
+            BlockPos c = queue.poll();
+            Vec3d eye = new Vec3d(c.getX() + 0.5, c.getY() + player.getStandingEyeHeight(), c.getZ() + 0.5);
+            boolean inside = c.equals(target) || c.up().equals(target);
+            if (!inside && eye.squaredDistanceTo(aim) <= reach * reach && !this.flyRejected.contains(c)) {
+                found = c;
+                break;
+            }
+            for (int[] d : dirs) {
+                BlockPos n = c.add(d[0], d[1], d[2]);
+                if (parent.containsKey(n) || !world.isChunkLoaded(n)
+                        || !freeToHover(world, n) || !freeToHover(world, n.up())) {
+                    continue;
+                }
+                // Diagonals only when both side cells are open too, so we don't clip a corner.
+                if (d[0] != 0 && d[2] != 0) {
+                    BlockPos a = c.add(d[0], 0, 0);
+                    BlockPos b = c.add(0, 0, d[2]);
+                    if (!freeToHover(world, a) || !freeToHover(world, a.up()) || !freeToHover(world, b) || !freeToHover(world, b.up())) {
+                        continue;
+                    }
+                }
+                parent.put(n, c);
+                queue.add(n);
             }
         }
-        return null;
+        if (found == null) {
+            return false;
+        }
+        List<BlockPos> path = new ArrayList<>();
+        for (BlockPos c = found; ; c = parent.get(c)) {
+            path.add(0, c);
+            if (c.equals(start)) {
+                break;
+            }
+        }
+        this.flyPath = path;
+        this.flyIndex = 0;
+        this.flyTo = waypoint(found);
+        this.flyBest = Double.MAX_VALUE;
+        this.flyTicks = 0;
+        return true;
     }
 
     private boolean freeToHover(ClientWorld world, BlockPos cell) {
