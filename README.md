@@ -164,6 +164,8 @@ The built-in engine also handles shapes that overhang or float, like spheres and
 - **Smooth turning** (Settings: Turn speed): the character turns its head toward each block it places or mines at a
   limited speed and only clicks once it faces it, instead of snapping to a new angle every block. *Instant* restores
   the old snapping.
+- **Creative flight** (Settings, on by default): when you can fly (creative mode, or a server that allows it), the
+  character flies straight to a spot within reach of each block instead of walking, pillaring or scaffolding.
 - **Creative supply** (Settings, on by default): in creative mode the builder spawns the blocks and scaffolding it
   needs into your hotbar instead of fetching them from storage. Does nothing in survival.
 - **Clear blocks in the way** (Settings, on by default): shapes mine whatever is in their cells (terrain, trees,

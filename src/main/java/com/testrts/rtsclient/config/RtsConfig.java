@@ -52,6 +52,8 @@ public final class RtsConfig {
     public boolean autoRepair = false;
     /** Built-in engine: place blocks against the empty cell itself, so nothing needs to be next to them. */
     public boolean airPlace = true;
+    /** When the player may fly (creative...), the builder flies to blocks instead of walking. */
+    public boolean creativeFlight = true;
     /** In creative mode, spawn the blocks a build needs instead of fetching them or stopping. */
     public boolean creativeSupply = true;
     /** Shapes (Fill mode) mine and replace whatever is in their cells instead of skipping them. */

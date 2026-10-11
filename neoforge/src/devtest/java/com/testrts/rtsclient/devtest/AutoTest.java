@@ -69,6 +69,8 @@ public final class AutoTest {
      */
     private static final java.util.Set<String> FROM_STORAGE = new java.util.HashSet<>();
     private static final int STORED_BRICKS = 7 * 64;
+    /** Scenarios run in creative mode (creative flight and creative supply). */
+    private static final java.util.Set<String> CREATIVE = new java.util.HashSet<>();
 
     private static void scenario(String name, BuildShape shape, BlockPos a, BlockPos b, int height, boolean hollow,
                                  String engine, boolean airPlace) {
@@ -111,6 +113,11 @@ public final class AutoTest {
         scenario("storage-dome", BuildShape.DOME, BlockPos.ZERO, new BlockPos(5, 0, 0), 1, true, "builtin", false);
         FROM_STORAGE.add("storage-box");
         FROM_STORAGE.add("storage-dome");
+        // Creative mode: flies to the blocks instead of walking and climbing.
+        scenario("fly-sphere", BuildShape.SPHERE, new BlockPos(0, 8, 0), new BlockPos(5, 8, 0), 1, true, "builtin", true);
+        scenario("fly-dome10", BuildShape.DOME, BlockPos.ZERO, new BlockPos(10, 0, 0), 1, true, "builtin", true);
+        CREATIVE.add("fly-sphere");
+        CREATIVE.add("fly-dome10");
         preset("p-machine-hall", "Machine hall");
         preset("p-power-room", "Power room");
         preset("p-storage-core", "Storage core");
@@ -321,6 +328,9 @@ public final class AutoTest {
                     String.format(bricks, 4)));
             cmd(mc, String.format(Locale.ROOT, "setblock -18 %d 11 minecraft:chest{Items:[%s,%s,%s,%s]}", y0,
                     String.format(dirt, 0), String.format(dirt, 1), String.format(bricks, 2), String.format(bricks, 3)));
+        }
+        if (CREATIVE.contains(s.name())) {
+            cmd(mc, "gamemode creative");
         }
         cmd(mc, String.format(Locale.ROOT, "tp @s %d %d %d", s.start().getX(), s.start().getY(), s.start().getZ()));
     }

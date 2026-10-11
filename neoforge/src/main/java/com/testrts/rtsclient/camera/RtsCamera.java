@@ -63,8 +63,10 @@ public final class RtsCamera {
 
         client.setCameraEntity(this.entity);
         // Third person (with no camera offset, see CameraMixin): nothing should treat this as the
-        // player's own eyes and draw their body or hand at the camera.
-        options.setCameraType(CameraType.THIRD_PERSON_BACK);
+        // player's own eyes and draw their body or hand at the camera. The front view, because
+        // third-person camera mods (Leawind's Third Person...) take over the back view and would
+        // steal the camera; CameraMixin turns the front view back around.
+        options.setCameraType(CameraType.THIRD_PERSON_FRONT);
         options.hideGui = true;
         client.gameRenderer.setRenderHand(false);
     }

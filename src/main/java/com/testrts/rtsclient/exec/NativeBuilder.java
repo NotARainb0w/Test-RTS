@@ -150,6 +150,12 @@ public final class NativeBuilder {
     private int breakTicks;
     /** Already paused once to fetch scaffolding for a block out of reach. */
     private boolean askedForScaffolding;
+    // Creative flight: where we're flying to, and for which block.
+    @Nullable
+    private Vec3d flyTo;
+    @Nullable
+    private BlockPos flyFor;
+    private int flyTicks;
     /** Ticks spent turning toward the block being placed. */
     private int turnedTicks;
     /** The block we're turning toward to place. */
@@ -371,7 +377,11 @@ public final class NativeBuilder {
                 ? this.walkTarget
                 : pickWalkTarget(world, player);
         if (target != null) {
-            walkStep(client, target, layerInfo);
+            if (canFly(player)) {
+                flyStep(client, target, layerInfo);
+            } else {
+                walkStep(client, target, layerInfo);
+            }
         }
         return true;
     }
@@ -762,6 +772,110 @@ public final class NativeBuilder {
         }
         BlockState now = world.getBlockState(p);
         return !now.isAir() && !now.isReplaceable();
+    }
+
+    // ------------------------------------------------------------------ creative flight
+
+    /** Fly to blocks instead of walking: the setting is on and the player may fly (creative...). */
+    private static boolean canFly(ClientPlayerEntity player) {
+        return com.testrts.rtsclient.config.RtsConfig.get().creativeFlight && player.getAbilities().allowFlying;
+    }
+
+    /**
+     * One step of flying to a free spot in the air within reach of {@code target}: turn toward it,
+     * fly there (jump/sneak for up and down), and climb over anything in the way.
+     */
+    private void flyStep(MinecraftClient client, BlockPos target, String info) {
+        ClientPlayerEntity player = client.player;
+        ClientWorld world = client.world;
+        this.walk = null;
+        this.search = null;
+        if (this.flyTo == null || !target.equals(this.flyFor)) {
+            this.flyFor = target.toImmutable();
+            this.flyTo = hoverSpot(world, player, target);
+            this.flyTicks = 0;
+            if (this.flyTo == null) {
+                unreachable(target);
+                return;
+            }
+        }
+        if (!player.getAbilities().flying) {
+            player.getAbilities().flying = true;
+            player.sendAbilitiesUpdate();
+        }
+        MovementInput input = MovementInput.acquire(player);
+        input.release();
+        if (++this.flyTicks > 20 * 20) {
+            // Something keeps us from getting there; try other blocks first.
+            this.flyTo = null;
+            warn("Can't fly to " + target.toShortString() + ", doing other blocks first");
+            unreachable(target);
+            return;
+        }
+        Vec3d pos = player.getPos();
+        double dx = this.flyTo.x - pos.x;
+        double dy = this.flyTo.y - pos.y;
+        double dz = this.flyTo.z - pos.z;
+        if (dx * dx + dy * dy + dz * dz < 0.36) {
+            this.flyTo = null; // there: the next tick works on what's in reach
+            return;
+        }
+        if (dx * dx + dz * dz > 1.0) {
+            float yaw = (float) (net.minecraft.util.math.MathHelper.atan2(dz, dx) * net.minecraft.util.math.MathHelper.DEGREES_PER_RADIAN) - 90.0F;
+            Look.toward(player, yaw, player.getPitch());
+        }
+        // Move toward the spot whichever way we face (strafing while the head turns).
+        float rad = player.getYaw() * net.minecraft.util.math.MathHelper.RADIANS_PER_DEGREE;
+        double forward = -dx * net.minecraft.util.math.MathHelper.sin(rad) + dz * net.minecraft.util.math.MathHelper.cos(rad);
+        double left = dx * net.minecraft.util.math.MathHelper.cos(rad) + dz * net.minecraft.util.math.MathHelper.sin(rad);
+        input.forward = forward > 0.15;
+        input.back = forward < -0.15;
+        input.left = left > 0.15;
+        input.right = left < -0.15;
+        input.jump = dy > 0.25 || player.horizontalCollision;
+        input.sneak = dy < -0.25 && !player.horizontalCollision;
+        this.status = "flying" + info;
+    }
+
+    /**
+     * Where to hover to work on {@code target}: a free spot about an arm's length away at eye level
+     * (or a little above or below), not inside anything the order still has to fill. Nearest to us.
+     */
+    @Nullable
+    private Vec3d hoverSpot(ClientWorld world, ClientPlayerEntity player, BlockPos target) {
+        Vec3d best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (double r : new double[]{2.6, 3.2, 1.8}) {
+            for (int i = 0; i < 16; i++) {
+                double a = i * Math.PI / 8.0;
+                for (int dy : new int[]{0, 1, -1, 2}) {
+                    // Feet one block below the target puts the eyes level with it.
+                    Vec3d feet = new Vec3d(target.getX() + 0.5 + Math.cos(a) * r, target.getY() - 1.0 + dy,
+                            target.getZ() + 0.5 + Math.sin(a) * r);
+                    BlockPos cell = BlockPos.ofFloored(feet.x, feet.y, feet.z);
+                    if (!freeToHover(world, cell) || !freeToHover(world, cell.up())) {
+                        continue;
+                    }
+                    double d = feet.squaredDistanceTo(player.getPos());
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = feet;
+                    }
+                }
+            }
+            if (best != null) {
+                return best;
+            }
+        }
+        return null;
+    }
+
+    private boolean freeToHover(ClientWorld world, BlockPos cell) {
+        if (!Walkability.passable(world, cell)) {
+            return false;
+        }
+        BlockState wanted = this.order.get(cell);
+        return wanted == null || wanted.isAir() || done(world, cell, wanted);
     }
 
     // ------------------------------------------------------------------ getting out

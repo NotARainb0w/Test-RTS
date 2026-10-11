@@ -3,9 +3,13 @@ package com.testrts.rtsclient.mixin;
 import com.testrts.rtsclient.RtsController;
 import net.minecraft.client.Camera;
 import net.minecraft.world.level.material.FogType;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.BlockGetter;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
@@ -14,6 +18,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  */
 @Mixin(Camera.class)
 public abstract class CameraMixin {
+    @Shadow
+    protected abstract void setRotation(float yRot, float xRot);
+
+    /** RTS mode uses the front view (see RtsCamera): look the way the RTS camera looks, not back at it. */
+    @Inject(method = "setup", at = @At("TAIL"))
+    private void rtsclient$unflipFrontView(BlockGetter level, Entity entity, boolean detached, boolean reverse,
+                                          float partialTick, CallbackInfo ci) {
+        if (RtsController.get().isActive() && reverse) {
+            setRotation(entity.getViewYRot(partialTick), entity.getViewXRot(partialTick));
+        }
+    }
+
     @Inject(method = "getFluidInCamera", at = @At("HEAD"), cancellable = true)
     private void rtsclient$noFluidFog(CallbackInfoReturnable<FogType> cir) {
         if (RtsController.get().isActive()) {

@@ -116,7 +116,33 @@ public final class RtsController {
         if (this.screen == null) {
             this.screen = new RtsScreen(this);
         }
+        keepUnblurred();
         client.setScreen(this.screen);
+    }
+
+    /**
+     * The Blur mod blurs the world behind every open screen, but the RTS screen is a view of the
+     * world. Put it on Blur's own exclusion list (like Blur does for chat). Only in memory: Blur's
+     * config file keeps it only if Blur's settings are saved afterwards.
+     */
+    private static void keepUnblurred() {
+        if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("blur")) {
+            return;
+        }
+        try {
+            java.lang.reflect.Field field = Class.forName("com.tterrag.blur.config.BlurConfig").getField("blurExclusions");
+            @SuppressWarnings("unchecked")
+            java.util.List<String> exclusions = (java.util.List<String>) field.get(null);
+            String name = RtsScreen.class.getName();
+            if (exclusions == null || !exclusions.contains(name)) {
+                java.util.List<String> withUs = exclusions == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(exclusions);
+                withUs.add(name);
+                field.set(null, withUs);
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+            // A Blur version that works differently: the RTS view just stays blurred.
+            RtsClientMod.LOGGER.debug("Couldn't exclude the RTS screen from Blur", e);
+        }
     }
 
     public void tick(MinecraftClient client) {

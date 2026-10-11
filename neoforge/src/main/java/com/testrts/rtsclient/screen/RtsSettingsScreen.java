@@ -90,6 +90,10 @@ public final class RtsSettingsScreen extends Screen {
                         "Built-in engine: place blocks with nothing next to them (domes, spheres, floating builds) without scaffolding. "
                                 + "Works on vanilla servers; some anti-cheat plugins may not allow it.",
                         () -> c.airPlace = !c.airPlace),
+                new Setting("Creative flight", () -> onOff(c.creativeFlight),
+                        "When you can fly (creative mode), your character flies straight to the blocks it builds "
+                                + "or mines instead of walking and climbing. Does nothing when you can't fly.",
+                        () -> c.creativeFlight = !c.creativeFlight),
                 new Setting("Creative supply", () -> onOff(c.creativeSupply),
                         "In creative mode, the builder spawns the blocks (and scaffolding) it needs into your hotbar "
                                 + "instead of fetching them from storage. Does nothing in survival.",

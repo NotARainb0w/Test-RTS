@@ -97,6 +97,15 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 - [ ] Shift+click deletes a saved queue; saving with an existing name replaces it
 - [ ] Other dimension / other world: their own saved queues, not this one's
 
+## Creative flight
+
+| Done | What | How | Expect |
+|---|---|---|---|
+| [ ] | Flies to blocks in creative | `-Pautotest=fly-sphere,fly-dome10` | Flies instead of pillaring, no scaffolding at all, complete; faster than the walking runs (sphere ~250-350 s walking) |
+| [ ] | Toggle | Settings > Creative flight off, creative mode | Walks and climbs like survival |
+| [ ] | Survival unaffected | Any build in survival | Walks as before (can't fly) |
+| [ ] | Server with /fly or flight allowed | Multiplayer | Flies when the server lets you |
+
 ## Creative supply
 
 - [ ] Creative mode, empty inventory: a build spawns its blocks into the hotbar and runs without "missing"
