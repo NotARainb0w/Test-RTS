@@ -97,7 +97,9 @@ public final class AutoTest {
         scenario("line", BuildShape.LINE, new BlockPos(-8, 4, 0), new BlockPos(8, 9, 4), 1, false, "builtin", true);
         scenario("dome6-noair", BuildShape.DOME, BlockPos.ZERO, new BlockPos(6, 0, 0), 1, true, "builtin", false);
         scenario("sphere5-noair", BuildShape.SPHERE, new BlockPos(0, 8, 0), new BlockPos(5, 8, 0), 1, true, "builtin", false);
-        scenario("dome6-baritone", BuildShape.DOME, BlockPos.ZERO, new BlockPos(6, 0, 0), 1, true, "baritone", true);
+        // Baritone builds: mid-air placing off, or the built-in engine takes over builds (Baritone can't do it).
+        scenario("dome6-baritone", BuildShape.DOME, BlockPos.ZERO, new BlockPos(6, 0, 0), 1, true, "baritone", false);
+        scenario("box-baritone", BuildShape.BOX, new BlockPos(-2, 0, -2), new BlockPos(2, 0, 2), 3, true, "baritone", false);
         // Starts inside: the finished dome closes around the player, who must open a doorway and close it from outside.
         scenario("dome6-inside", BuildShape.DOME, BlockPos.ZERO, new BlockPos(6, 0, 0), 1, true, "builtin", true, new BlockPos(1, 0, 1));
         scenario("pyramid", BuildShape.PYRAMID, BlockPos.ZERO, new BlockPos(5, 0, 0), 1, true, "builtin", true);
@@ -138,6 +140,7 @@ public final class AutoTest {
     private static Map<BlockPos, BlockState> order;
     private static BuildTask task;
     private static Path out;
+    private static int clearWaits;
 
     private AutoTest() {
     }
@@ -205,6 +208,13 @@ public final class AutoTest {
                 phase = Phase.START;
             }
             case START -> {
+                // The arena clear runs on the server; plan only once it has reached us, or leftovers of the
+                // last scenario count as "already built" (a dome came out with a hole in its top that way).
+                if (!arenaClear(mc) && ++clearWaits < 20) {
+                    wait = 10;
+                    return;
+                }
+                clearWaits = 0;
                 Scenario s = current;
                 RtsConfig cfg = RtsConfig.get();
                 cfg.engine = s.engine();
@@ -297,6 +307,21 @@ public final class AutoTest {
         flat.getLayersInfo().add(new FlatLayerInfo(1, Blocks.GRASS_BLOCK));
         flat.updateLayers();
         return WorldPresets.createNormalWorldDimensions(ra).replaceOverworldGenerator(ra, new FlatLevelSource(flat));
+    }
+
+    /** Nothing but air above the arena floor (chests of storage scenarios aside). */
+    private static boolean arenaClear(Minecraft mc) {
+        for (int x = -ARENA; x <= ARENA; x++) {
+            for (int z = -ARENA; z <= ARENA; z++) {
+                for (int y = O.getY(); y < O.getY() + 30; y++) {
+                    BlockState st = mc.level.getBlockState(new BlockPos(x, y, z));
+                    if (!st.isAir() && !st.is(Blocks.CHEST)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     private static void setup(Minecraft mc, Scenario s) {

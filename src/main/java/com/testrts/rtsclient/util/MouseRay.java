@@ -88,4 +88,31 @@ public final class MouseRay {
         BlockPos cell = BlockPos.ofFloored(at.x, y, at.z);
         return new BlockHitResult(at, dir.y < 0 ? Direction.UP : Direction.DOWN, cell, false);
     }
+
+    /**
+     * The mob (or other entity, never the player) under the cursor, nearer than {@code maxDistance}
+     * (pass the distance to the block under the cursor, so blocks in front hide what's behind them).
+     */
+    @Nullable
+    public static net.minecraft.entity.Entity pickEntity(RtsCamera camera, double mouseX, double mouseY, int width, int height,
+                                                         double maxDistance) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!camera.isEnabled() || client.world == null || client.player == null) {
+            return null;
+        }
+        Vec3d start = camera.position();
+        Vec3d end = start.add(direction(camera, mouseX, mouseY, width, height).multiply(maxDistance));
+        net.minecraft.entity.Entity best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (net.minecraft.entity.Entity e : client.world.getOtherEntities(client.player,
+                new net.minecraft.util.math.Box(start, end).expand(1.0), e -> e.canHit() && e.isAlive())) {
+            java.util.Optional<Vec3d> at = e.getBoundingBox().expand(e.getTargetingMargin() + 0.1).raycast(start, end);
+            if (at.isPresent() && start.squaredDistanceTo(at.get()) < bestDist) {
+                bestDist = start.squaredDistanceTo(at.get());
+                best = e;
+            }
+        }
+        return best;
+    }
 }
+

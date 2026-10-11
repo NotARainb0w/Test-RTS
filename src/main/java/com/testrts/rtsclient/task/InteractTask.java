@@ -11,17 +11,30 @@ public final class InteractTask implements RtsTask {
     private final BlockHitResult hit;
     private final String blockName;
     private final WalkPhase walk;
+    /** Use this item on the block (bone meal, a hoe, flint and steel...), or null for an empty hand. */
+    @org.jetbrains.annotations.Nullable
+    private final net.minecraft.item.Item item;
 
     public InteractTask(BlockHitResult hit, String blockName) {
         this.pos = hit.getBlockPos().toImmutable();
         this.hit = hit;
         this.blockName = blockName;
         this.walk = new WalkPhase(this.pos);
+        this.item = null;
+    }
+
+    public InteractTask(BlockHitResult hit, String blockName, @org.jetbrains.annotations.Nullable net.minecraft.item.Item item) {
+        this.pos = hit.getBlockPos().toImmutable();
+        this.hit = hit;
+        this.blockName = blockName;
+        this.walk = new WalkPhase(this.pos);
+        this.item = item;
     }
 
     @Override
     public String label() {
-        return "Use " + this.blockName;
+        return this.item == null ? "Use " + this.blockName
+                : "Use " + new net.minecraft.item.ItemStack(this.item).getName().getString() + " on " + this.blockName;
     }
 
     @Override
@@ -37,6 +50,10 @@ public final class InteractTask implements RtsTask {
         }
         if (r == WalkPhase.Result.UNREACHABLE) {
             Messages.warn("Can't reach " + this.blockName);
+            return Status.FAILED;
+        }
+        if (this.item != null && !com.testrts.rtsclient.exec.Inventories.hold(client, this.item)) {
+            Messages.warn(label() + ": you don't have it");
             return Status.FAILED;
         }
         Reach.interact(client, this.pos, this.hit);

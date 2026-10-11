@@ -13,6 +13,33 @@ base {
 repositories {
 }
 
+// Live tests (see src/devtest): only on the dev run's classpath, never in the jar.
+sourceSets {
+    devtest {
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
+loom {
+    mods {
+        rtsclient {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.devtest
+        }
+    }
+    runs {
+        client {
+            source sourceSets.devtest
+            // ./gradlew runClient -Pautotest=dome6,sphere5 (or all) [-Pautoquit]
+            if (project.hasProperty('autotest')) {
+                property 'rtsclient.autotest', project.property('autotest').toString()
+                property 'rtsclient.autotest.quit', project.hasProperty('autoquit').toString()
+            }
+        }
+    }
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
@@ -24,6 +51,9 @@ dependencies {
     def baritoneJars = fileTree(dir: 'libs', include: 'baritone-api-fabric-*.jar')
     modCompileOnly baritoneJars
     modLocalRuntime baritoneJars
+    // Baritone bundles its pathfinding library (nether-pathfinder) inside its jar, which the dev client
+    // doesn't unpack: extract it next to the Baritone jar in libs/ (CI only compiles, so it doesn't need it).
+    localRuntime fileTree(dir: 'libs', include: 'nether-pathfinder-*.jar')
 }
 
 processResources {

@@ -117,6 +117,9 @@ public final class RtsScreen extends Screen {
     private double pressX;
     private double pressY;
     private boolean dragging;
+    /** Interact: the mob under the cursor. */
+    @Nullable
+    private net.minecraft.world.entity.Entity hoverEntity;
     /** The cursor is on the air layer (not on a block). */
     private boolean hoverOnLayer;
     /** Air placement is on, but terrain in front of the layer took the cursor. */
@@ -759,6 +762,14 @@ public final class RtsScreen extends Screen {
         return air;
     }
 
+    /** The mob under the cursor, if nothing solid is in front of it. */
+    @Nullable
+    private net.minecraft.world.entity.Entity pickEntity(double mx, double my) {
+        BlockHitResult block = pick(mx, my);
+        double max = block != null ? block.getLocation().distanceTo(this.controller.camera().position()) + 0.5 : 128.0;
+        return com.testrts.rtsclient.util.MouseRay.pickEntity(this.controller.camera(), mx, my, this.width, this.height, max);
+    }
+
     private void toggleAir() {
         BuildSession s = this.session;
         s.airPlace = !s.airPlace;
@@ -900,6 +911,14 @@ public final class RtsScreen extends Screen {
         this.pressY = my;
         this.dragging = false;
         if (button == 0) {
+            if (this.session.tool == ToolMode.INTERACT) {
+                // A mob in front of the block under the cursor gets the click.
+                var mob = pickEntity(mx, my);
+                if (mob != null) {
+                    this.actions.interactEntity(mob);
+                    return true;
+                }
+            }
             BlockHitResult hit = pick(mx, my);
             if (hit != null && hasShiftDown() && this.session.tool == ToolMode.BUILD && this.session.anchorA == null) {
                 // Shift+click while building: mine that block without switching tools.
@@ -1085,6 +1104,10 @@ public final class RtsScreen extends Screen {
                 }
             }
             case GLFW.GLFW_KEY_X, GLFW.GLFW_KEY_BACKSPACE -> {
+                if (s.tool == ToolMode.INTERACT && !s.brush.isEmpty()) {
+                    s.brush = ItemStack.EMPTY;
+                    Messages.info("Interact: empty hand");
+                }
                 s.clearSelection();
                 s.pasteAnchor = null;
             }
@@ -1171,6 +1194,7 @@ public final class RtsScreen extends Screen {
     public void render(GuiGraphics ctx, int mouseX, int mouseY, float delta) {
         moveCamera();
         this.controller.setHover(overUi(mouseX, mouseY) ? null : pick(mouseX, mouseY));
+        this.hoverEntity = this.session.tool == ToolMode.INTERACT && !overUi(mouseX, mouseY) ? pickEntity(mouseX, mouseY) : null;
 
         // Panels first, widgets on top.
         Theme.panel(ctx, this.font, 0, 0, this.width, TOP_H, null);
@@ -1593,7 +1617,14 @@ public final class RtsScreen extends Screen {
                     chips.add("h" + s.height);
                 }
             }
-            case INTERACT -> chips.add("Click a block to walk over and use it");
+            case INTERACT -> {
+                Item use = WorldActions.interactItem(s);
+                chips.add(use == null ? "Click a block or mob - pick an item below to use it on them"
+                        : "Using " + new ItemStack(use).getHoverName().getString() + " - click a mob or block");
+                if (use != null) {
+                    chips.add("X: empty hand");
+                }
+            }
             case LINK -> chips.add("Click containers to link / unlink");
             case BLUEPRINT -> {
                 if (s.clipboard == null) {
@@ -1729,6 +1760,11 @@ public final class RtsScreen extends Screen {
             } else if (s.terrainMode == TerrainMode.FLATTEN && counts[1] > 0) {
                 materials = Map.of(WorldActions.flattenFill(s).getBlock().asItem(), counts[1]);
             }
+        } else if (s.tool == ToolMode.INTERACT && this.hoverEntity != null) {
+            Item use = WorldActions.interactItem(s);
+            boolean attack = com.testrts.rtsclient.task.EntityTask.attacks(use, this.hoverEntity);
+            lines.add(Component.literal(com.testrts.rtsclient.task.EntityTask.describe(use, this.hoverEntity))
+                    .withStyle(attack ? ChatFormatting.RED : ChatFormatting.AQUA));
         } else if (s.tool.usesShapes() && s.anchorA != null) {
             OrderPlanner.Plan plan = WorldOverlay.lastPlan();
             if (plan == null) {

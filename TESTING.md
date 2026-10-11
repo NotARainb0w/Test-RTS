@@ -4,14 +4,15 @@ Everything here compiles on both loaders. The automated scenarios below were run
 batches; bugs found along the way were fixed and re-run); ticked rows passed. The rest still needs trying in game.
 Tick items off as they pass; note anything odd next to them.
 
-Automated scenarios run in the NeoForge dev client (see "Live tests" in the README):
+Testing is done on **Fabric** from now on. Automated scenarios run in the Fabric dev client (see "Live tests" in
+the README):
 
 ```
-cd neoforge
 ./gradlew runClient -Pautotest=<names> -Pautoquit
 ```
 
-Results land in `neoforge/run/autotest/results.txt`, screenshots in `neoforge/run/screenshots/`. A scenario passes
+Results land in `run/autotest/results.txt`, screenshots in `run/screenshots/`. (The ticked results below were
+measured on NeoForge, before the switch; re-run on Fabric to confirm.) A scenario passes
 when every block is placed, nothing is left over (scaffolding) and the player isn't stuck inside.
 
 ## Building engine
@@ -97,6 +98,19 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 - [ ] Shift+click deletes a saved queue; saving with an existing name replaces it
 - [ ] Other dimension / other world: their own saved queues, not this one's
 
+## Interact with items (Fabric)
+
+| Done | What | How | Expect |
+|---|---|---|---|
+| [ ] | Shear a sheep | Interact tool, pick Shears in the item bar, click a sheep | Walks over (following it), shears it once |
+| [ ] | Attack a mob | Pick a sword (or axe), click a zombie | Follows and hits it on cooldown until it's dead |
+| [ ] | Empty hand on a hostile mob | X for empty hand, click a zombie | Attacks with the best sword/axe you carry |
+| [ ] | Empty hand on a villager | Click a villager | Opens trading |
+| [ ] | Other items on mobs | Bucket on a cow, lead on a horse, wheat on cows, name tag | Milks / leashes / breeds / names |
+| [ ] | Items on blocks | Bone meal on a sapling, hoe on dirt, flint and steel on a portal frame | Uses the item on the clicked face |
+| [ ] | Hover label | Hover a mob with the Interact tool | "Shear Sheep" (blue) / "Attack Zombie" (red) next to the cursor |
+| [ ] | Blocks in front | A mob behind a wall | The wall gets the click, not the mob |
+
 ## Creative flight
 
 | Done | What | How | Expect |
@@ -122,7 +136,6 @@ when every block is placed, nothing is left over (scaffolding) and the player is
 - [ ] Air mode: the second point of a dome/sphere stays on the layer
 - [ ] Bottom bar: no rows of empty frames, quick bar still pinnable
 
-## Fabric
+## Fabric packs
 
-All of the above is also in the Fabric build, but the harness only runs on NeoForge. Spot-check on Fabric: a
-dome, smooth turning, one new shape, export, the tree planter and the UI.
+- [ ] Prominence II: no blur behind the RTS view (Blur mod), camera moves (Leawind's Third Person installed)

@@ -63,6 +63,15 @@ public final class RtsClientMod implements ClientModInitializer {
             com.testrts.rtsclient.task.QueueStore.autosave();
             StorageManager.get().flush();
         });
+
+        // Live tests (src/devtest, dev runs only; not part of the release jar).
+        if (System.getProperty("rtsclient.autotest") != null) {
+            try {
+                Class.forName("com.testrts.rtsclient.devtest.AutoTest").getMethod("install").invoke(null);
+            } catch (ReflectiveOperationException e) {
+                LOGGER.error("Couldn't start the live tests", e);
+            }
+        }
     }
 
     private static void onTick(MinecraftClient client) {

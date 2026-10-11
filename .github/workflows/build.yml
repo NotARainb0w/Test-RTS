@@ -22,7 +22,7 @@ jobs:
       - name: Download Baritone API (compile-only)
         run: |
           set -e
-          for v in $(grep '^baritone_version=' gradle.properties | cut -d= -f2) 1.10.2 1.10.1; do
+          for v in $(grep '^baritone_version=' gradle.properties | cut -d= -f2) 1.10.5 1.10.1; do
             url="https://github.com/cabaletta/baritone/releases/download/v$v/baritone-api-fabric-$v.jar"
             if curl -fsSL -o "libs/baritone-api-fabric-$v.jar" "$url"; then
               echo "Downloaded $url"

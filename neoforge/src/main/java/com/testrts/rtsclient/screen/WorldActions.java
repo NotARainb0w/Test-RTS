@@ -69,6 +69,17 @@ public final class WorldActions {
     // ------------------------------------------------------------------ clicks
 
     /** Left click on a block with the current tool. */
+    /** The item Interact uses: the selected item unless it's a block (blocks go to Build). Null: empty hand. */
+    @Nullable
+    public static Item interactItem(BuildSession s) {
+        return s.brush.isEmpty() || s.brush.getItem() instanceof BlockItem ? null : s.brush.getItem();
+    }
+
+    /** Interact clicked a mob: walk over and use the selected item on it, or attack it. */
+    public void interactEntity(net.minecraft.world.entity.Entity entity) {
+        queue(new com.testrts.rtsclient.task.EntityTask(entity, interactItem(this.session)));
+    }
+
     public void primary(BlockHitResult hit) {
         ClientLevel world = world();
         if (world == null) {
@@ -96,7 +107,7 @@ public final class WorldActions {
             case DESTROY -> shapeClick(hit.getBlockPos());
             case INTERACT -> {
                 BlockState state = world.getBlockState(hit.getBlockPos());
-                queue(new InteractTask(hit, state.getBlock().getName().getString()));
+                queue(new InteractTask(hit, state.getBlock().getName().getString(), interactItem(s)));
             }
             case LINK -> {
                 if (!StorageManager.isContainer(world, hit.getBlockPos())) {

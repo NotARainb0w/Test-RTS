@@ -84,7 +84,11 @@ Both have the same features and controls.
     switches between a gable roof (two slopes) and a hip roof (four slopes). Use stairs as the block for a sloped
     roof (matching slabs and planks are picked automatically for the ridge and gable ends).
 - **Destroy**: the same shapes, but mines the blocks. Afterwards the character picks up the drops.
-- **Interact**: click any block (chest, door, lever, crafting table...). Your character walks over and uses it.
+- **Interact**: click any block (chest, door, lever, crafting table...) or mob. Your character walks over and uses
+  it with the item picked in the item bar: shears shear a sheep, a bucket milks a cow, a lead leashes, wheat breeds;
+  a sword or axe attacks the mob (following it) until it's dead; bone meal, a hoe or flint and steel work on blocks.
+  With nothing picked (X for an empty hand) it right-clicks, and attacks hostile mobs with the best weapon you carry.
+  Hovering a mob shows what will happen.
 - **Link storage**: click containers to add them to your storage network.
 - **Blueprint**: click two corners to copy a region (saved to `config/rtsclient/blueprints/`). Saved
   blueprints are listed on the left (Shift+click deletes). **Save...** keeps the current blueprint (a copy, a
@@ -234,13 +238,15 @@ For NeoForge, put `baritone-api-neoforge-<version>.jar` (1.11.x, MC 1.21) in `ne
 
 CI downloads the jars automatically and uploads both mods as workflow artifacts.
 
-### Live tests (NeoForge)
+### Live tests
 
-`neoforge/src/devtest` holds a harness that is only on the dev run's classpath (never in the jar). It creates a
-flat survival world, builds each scenario with the real task queue and engine, and writes the outcome (missing
-blocks, leftover scaffolding, time, health) to `neoforge/run/autotest/results.txt` plus a screenshot each:
+`src/devtest` (Fabric) and `neoforge/src/devtest` (NeoForge) hold the same harness; it is only on the dev run's
+classpath (never in the jar). It creates a flat survival world, builds each scenario with the real task queue and
+engine, and writes the outcome (missing blocks, leftover scaffolding, time, health) to `run/autotest/results.txt`
+plus a screenshot each. Testing is done on Fabric:
 
 ```
-cd neoforge
 ./gradlew runClient -Pautotest=dome6,sphere5,floor -Pautoquit   # or -Pautotest=all
 ```
+
+(The NeoForge copy runs the same way from `neoforge/`.)
