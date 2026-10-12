@@ -44,6 +44,39 @@ public final class BuildTask implements RtsTask {
         this.clearing = clearing;
     }
 
+    /**
+     * Take every block of {@code item} out of this order (the Materials list's remove button). If the order
+     * is being built, the builder stops and starts again without them.
+     *
+     * @return how many positions were removed
+     */
+    public int removeItem(Item item) {
+        int before = this.blocks.size();
+        this.blocks.values().removeIf(s -> s.getBlock().asItem() == item);
+        return changed(before - this.blocks.size());
+    }
+
+    /** Take these positions out of the order (Destroy over the hologram: a doorway in a queued box). */
+    public int removePositions(java.util.Collection<BlockPos> positions) {
+        int before = this.blocks.size();
+        for (BlockPos p : positions) {
+            this.blocks.remove(p);
+        }
+        return changed(before - this.blocks.size());
+    }
+
+    private int changed(int removed) {
+        if (removed > 0) {
+            this.bounds = null;
+            this.left = -1;
+            if (this.started) {
+                Engine.stop();
+                this.started = false;
+            }
+        }
+        return removed;
+    }
+
     public Map<BlockPos, BlockState> blocks() {
         return Collections.unmodifiableMap(this.blocks);
     }

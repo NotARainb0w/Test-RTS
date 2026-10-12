@@ -11,3 +11,6 @@ libs/*.jar
 /neoforge/.gradle/
 /neoforge/run/
 neoforge/libs/*.jar
+
+# IDE (VS Code Java) build output
+/bin/

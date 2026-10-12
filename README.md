@@ -70,6 +70,11 @@ Both have the same features and controls.
 orders wait for Start again. To have orders start as soon as they're queued, turn on **Start orders right away**
 in Settings.
 
+**Editing queued builds.** With the **Destroy** tool you can point at the hologram (ghost blocks) of queued
+orders, even in mid-air: whatever ghost blocks a Destroy shape covers are taken out of their orders instead of
+being built - e.g. a 1x2 Wall shape on the side of a queued box makes a doorway. Real blocks in the shape are
+still cleared as usual.
+
 **Build hologram.** Outside RTS mode, the ghost blocks of queued builds stay visible so you can place blocks by
 hand; blocks that are already right drop out of the ghost within a second. Toggle it with **H** (rebindable in
 Controls) or the **Build hologram** setting.
@@ -97,7 +102,7 @@ builder too). If a modded block opens its screen anyway, it's closed again and t
 
 - **Build**: pick a block from the item bar, then click. Shapes: Block, Line, Floor, Wall, Box, Circle,
   Cylinder, Sphere, Dome (half sphere), Pyramid, Cone, Torus, Arch (Height = how high it rises; solid makes a
-  gateway), Bridge (deck with a hump and railings; Height = width), Stairs (one up per block, stair blocks face up the
+  gateway), Bridge (Height = width; the **Bridge** button next to Mode picks a look: Classic in the brush block with matching railings, or Medieval, Viaduct, Garden, Stone, Overgrown and Covered with their own materials, pillars going down to the ground or river bed), Stairs (one up per block, stair blocks face up the
   stairs; Height = width), Spiral (spiral staircase around a centre), Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
   level you click). Two-point shapes: click A, click B, then click again or press Enter.
   - **Modes**: *Fill* only fills empty space; *Replace* turns everything in the shape into the brush;
@@ -115,7 +120,11 @@ builder too). If a modded block opens its screen anyway, it's closed again and t
     domes and towers), *Layers*, *Stripes* or *Checker*.
   - **Roof** (smart roof): press *Roof*, then click the top of any wall of a room. The walls are followed round
     to find the room's size and a roof with a one-block overhang is laid on it, ready to build (Enter). *Style*
-    switches between a gable roof (two slopes) and a hip roof (four slopes). Use stairs as the block for a sloped
+    cycles the roof: Gable (two slopes), Steep gable (A-frame), Barn (gambrel), Lean-to (one slope), Hip (four
+    slopes), Mansard (steep sides, flat top) and Flat (with a parapet). *Look* picks the materials and details: Brush (your
+    block), Cottage (spruce with a dark oak outline and a cobblestone chimney), Witch (teal copper, blackstone
+    outline, flared eaves, spikes on the ridge), Snowy (mixed stone with white patches, dark oak outline) or Medieval
+    (deepslate tiles, spruce outline, stone chimney). The named looks don't need a block picked. Use stairs as the block for a sloped
     roof (matching slabs and planks are picked automatically for the ridge and gable ends).
 - **Destroy**: the same shapes, but mines the blocks. Afterwards the character picks up the drops.
 - **Interact**: click any block (chest, door, lever, crafting table...) or mob. Your character walks over and uses
@@ -227,7 +236,7 @@ summary with Scan nearby / Re-index / Sort / Smelt buttons.
   paused. Orders still queued when you leave the world or quit are kept as *Last session*, and you're reminded of
   them when you come back.
 - **Materials** lists everything the queued orders still need against what you carry and what's in storage, and
-  *Fetch all* gets it in one trip.
+  *Fetch all* gets it in one trip. The **✕** on a row (click twice) takes that block out of every queued order.
 - **Repair** checks finished builds for blocks that never got placed or were broken since, and queues orders to
   fill them in (Settings: *Auto-repair builds* does this by itself when there's nothing else to do).
 - **Sort** reorganises linked chests so each item type has its own chest; with the Link tool each chest shows a
@@ -244,7 +253,9 @@ inside an area with the Protect tool to remove it. Areas show as red outlines an
 
 ## Storage
 
-The item bar at the bottom shows **your inventory plus everything in linked containers**. Gold counts mean the
+The item bar at the bottom shows **your inventory plus everything in linked containers**. The tabs next to the search box pick
+where (All / Inventory / Storage) and what kind: **Blocks** (placeable), **Tools** (tools, weapons and other gear
+that wears out) or **Misc** (everything else); click a kind again to show every kind. Gold counts mean the
 item is only in storage.
 
 - **Link storage** works on any block with an inventory: vanilla chests and barrels, and modded storage such as
@@ -279,6 +290,14 @@ walks to any chest:
   the wireless terminal, or at a linked terminal / grid). The storage panel shows how the network is reached.
 - Turn it off with **Use AE2 for materials** in Settings. It's all treated as one network per world.
 
+
+### Backpacks
+
+The backpack you wear or carry is used first, before AE2, Refined Storage or chests - no walking: it opens for a
+moment, what the build needs is shift-clicked out, and it closes again. NeoForge (ATM10): **Sophisticated
+Backpacks** (in the inventory, worn or in a Curios slot). Fabric (Prominence II): **Traveler's Backpack** (worn, or
+carried in the inventory). Its contents count in the item bar once it has been opened, and **Index** reads it.
+Turn it off with **Use backpacks** in Settings.
 
 ### Refined Storage (NeoForge)
 

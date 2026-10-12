@@ -18,6 +18,8 @@ public final class BuildSession {
     public boolean hollow;
     /** Dome, pyramid and cone upside down (see {@link BuildShape#invertible()}). */
     public boolean inverted;
+    /** The look of the Bridge shape. */
+    public BridgeStyle bridgeStyle = BridgeStyle.MEDIEVAL;
     public int height = 3;
     public ItemStack brush = ItemStack.EMPTY;
     public final PlacementOrientation orientation = new PlacementOrientation();
@@ -55,6 +57,7 @@ public final class BuildSession {
     /** The next click picks a room to put a roof on. */
     public boolean roofPick;
     public RoofPlanner.Style roofStyle = RoofPlanner.Style.GABLE;
+    public RoofPlanner.Look roofLook = RoofPlanner.Look.BRUSH;
     /** While moving a building: the source box (min, max) that is cleared once the copy is placed. */
     public BlockPos moveFrom;
     public BlockPos moveTo;

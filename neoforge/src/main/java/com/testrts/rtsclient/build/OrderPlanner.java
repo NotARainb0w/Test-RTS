@@ -69,11 +69,18 @@ public final class OrderPlanner {
      */
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                           boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
-                          java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted) {
+                          java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                          BridgeStyle bridgeStyle) {
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, BridgeStyle.CLASSIC);
+        }
+
         public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                        boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
                        java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern) {
-            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, false);
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, false, BridgeStyle.CLASSIC);
         }
     }
 
@@ -84,11 +91,11 @@ public final class OrderPlanner {
             brush = mix.get(0);
         }
         return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix,
-                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern, s.inverted);
+                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern, s.inverted, s.bridgeStyle);
     }
 
     public static Plan plan(ClientLevel world, Request r) {
-        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1, r.inverted());
+        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1, r.inverted(), r.bridgeStyle());
         boolean truncated = shape.truncated() || shape.positions().size() > r.limit();
         Map<BlockPos, BlockState> changes = new LinkedHashMap<>();
         if (truncated) {
@@ -106,7 +113,10 @@ public final class OrderPlanner {
             return plan(changes, shape.positions(), false);
         }
         BlockState brush = r.brush();
-        if (brush == null) {
+        // Styled shapes (bridges) name their own blocks, so they don't need a brush.
+        boolean ownBlocks = shape.roles().values().stream()
+                .anyMatch(role -> role.startsWith(ShapeGenerator.BLOCK) || role.startsWith(ShapeGenerator.DOWN));
+        if (brush == null && !ownBlocks) {
             return plan(changes, shape.positions(), false);
         }
         // Pattern brushes: each block once (in the order added) and the shape's height, for layered patterns.
@@ -118,8 +128,35 @@ public final class OrderPlanner {
             maxY = Math.max(maxY, p.getY());
         }
         for (BlockPos p : shape.positions()) {
-            BlockState want = pick(r, p, distinct, minY, maxY);
             String role = shape.roles().get(p);
+            if (role != null && (role.startsWith(ShapeGenerator.BLOCK) || role.startsWith(ShapeGenerator.DOWN))) {
+                // Styled shapes name their own blocks; pillars run down through air and water to the ground.
+                boolean pillar = role.startsWith(ShapeGenerator.DOWN);
+                BlockState exact = parseState(role.substring(pillar ? ShapeGenerator.DOWN.length() : ShapeGenerator.BLOCK.length()));
+                if (exact == null) {
+                    continue;
+                }
+                BlockPos q = p;
+                for (int depth = 0; depth < 64 && q.getY() >= world.getMinBuildHeight(); depth++, q = q.below()) {
+                    BlockState current = world.getBlockState(q);
+                    boolean empty = current.isAir() || current.canBeReplaced();
+                    if (depth > 0 && !empty) {
+                        break;
+                    }
+                    if (!com.testrts.rtsclient.task.MaterialPlanner.matches(current, exact)
+                            && (empty || r.clearInTheWay() && !(current.getBlock() instanceof LiquidBlock) && current.getDestroySpeed(world, q) >= 0)) {
+                        changes.put(q.immutable(), exact);
+                    }
+                    if (!pillar) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            BlockState want = pick(r, p, distinct, minY, maxY);
+            if (want == null) {
+                continue;
+            }
             if (ShapeGenerator.RAIL.equals(role)) {
                 want = railingFor(want);
             } else if (ShapeGenerator.LAMP.equals(role)) {
@@ -149,6 +186,32 @@ public final class OrderPlanner {
             }
         }
         return plan(changes, shape.positions(), false);
+    }
+
+    /** "minecraft:oak_stairs[facing=east,half=bottom]" as a block state (unknown properties are left out). */
+    @Nullable
+    static BlockState parseState(String spec) {
+        String id = spec;
+        String props = "";
+        int open = spec.indexOf('[');
+        if (open >= 0) {
+            id = spec.substring(0, open);
+            props = spec.substring(open + 1, spec.length() - 1);
+        }
+        net.minecraft.resources.ResourceLocation key = net.minecraft.resources.ResourceLocation.tryParse(id);
+        if (key == null || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(key)) {
+            return null;
+        }
+        BlockState state = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(key).defaultBlockState();
+        if (!props.isEmpty()) {
+            for (String kv : props.split(",")) {
+                int eq = kv.indexOf('=');
+                if (eq > 0) {
+                    state = BuildSession.withProperty(state, kv.substring(0, eq), kv.substring(eq + 1));
+                }
+            }
+        }
+        return state;
     }
 
     /** The brush, or with a mix the pattern's pick for this position (stable, so preview = build). */
@@ -215,6 +278,13 @@ public final class OrderPlanner {
         }
         if (path.endsWith("_bricks") || path.endsWith("_tiles")) {
             names.add(path.substring(0, path.length() - 1) + "_stairs");
+        }
+        // Logs and wood: the planks' stairs (oak log: oak stairs); quartz/purpur block: quartz/purpur stairs.
+        String base = path.replace("stripped_", "");
+        for (String suffix : new String[]{"_log", "_wood", "_stem", "_hyphae", "_block"}) {
+            if (base.endsWith(suffix)) {
+                names.add(base.substring(0, base.length() - suffix.length()) + "_stairs");
+            }
         }
         names.add(path + "_stairs");
         for (String name : names) {

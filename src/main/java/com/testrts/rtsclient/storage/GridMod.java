@@ -64,6 +64,16 @@ public interface GridMod {
     /** Whether a linked terminal is still there. */
     boolean isTerminalAt(@Nullable BlockEntity be, Direction side);
 
+    /** Worth trying the wireless way even when no such item is seen in the inventory (worn backpacks). */
+    default boolean alwaysTry() {
+        return false;
+    }
+
+    /** Something carried (a backpack), not a network reached through terminals. */
+    default boolean portable() {
+        return false;
+    }
+
     static Map<Item, Long> totals(List<Entry> entries) {
         Map<Item, Long> out = new LinkedHashMap<>();
         for (Entry e : entries) {

@@ -133,6 +133,10 @@ public final class RtsSettingsScreen extends Screen {
                                 + "plain right-click on what your crosshair is on. Blocks that would face the wrong way from where you look "
                                 + "are left for hold-X or the builder. Off: anything in reach, any facing, mid-air allowed (singleplayer).",
                         () -> c.serverSafePlacing = !c.serverSafePlacing),
+                new Setting("Use backpacks", () -> onOff(c.useBackpacks),
+                        "Take building materials out of the backpack you wear or carry (Traveler's Backpack) before anything else - "
+                                + "no walking. It opens for a moment and closes again.",
+                        () -> c.useBackpacks = !c.useBackpacks),
                 new Setting("Use AE2 for materials", () -> onOff(c.useAe2),
                         "With Applied Energistics 2: fetch building materials through a wireless terminal you carry "
                                 + "(works from anywhere in range), or from ME terminals you linked with the Link tool, before chests.",

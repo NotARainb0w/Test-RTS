@@ -86,6 +86,9 @@ public final class RtsScreen extends Screen {
 
     private enum Tab { ALL, INVENTORY, STORAGE }
 
+    /** What kind of item the bar shows (on top of where it is); null = every kind. */
+    private enum Category { BLOCKS, TOOLS, MISC }
+
     private record PaletteEntry(Item item, ItemStack display, int inventory, int stored) {
         int total() {
             return this.inventory + this.stored;
@@ -99,6 +102,7 @@ public final class RtsScreen extends Screen {
     private TextFieldWidget search;
     private String searchText = "";
     private Tab tab = Tab.ALL;
+    private Category category;
     private List<PaletteEntry> palette = new ArrayList<>();
     private int paletteRefresh;
     private int gridScroll;
@@ -414,11 +418,17 @@ public final class RtsScreen extends Screen {
                 section(y, "OPTIONS");
                 y += 11;
                 if (s.tool == ToolMode.BUILD) {
-                    button("Mode", s.mode.description() + " [M]", x, y, full, ROW - 1, () -> {
+                    button("Mode", s.mode.description() + " [M]", x, y, col, ROW - 1, () -> {
                         s.mode = s.mode.next();
                         s.clearSelection();
                         clearAndInit();
                     }).dynamic(() -> "Mode: " + s.mode.label()).left();
+                    button("Bridge", "Bridge look (for the Bridge shape): " + s.bridgeStyle.description(), x + col + 2, y, full - col - 2, ROW - 1,
+                            () -> {
+                                s.bridgeStyle = s.bridgeStyle.next();
+                                Messages.info("Bridge: " + s.bridgeStyle.label() + " - " + s.bridgeStyle.description());
+                            })
+                            .enabled(() -> s.shape == BuildShape.BRIDGE).dynamic(() -> s.bridgeStyle.label()).left();
                     y += ROW;
                 }
                 button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, col, ROW - 1,
@@ -472,8 +482,17 @@ public final class RtsScreen extends Screen {
                             Messages.info("Roof: click the top of a wall of the room");
                         }
                     }).selected(() -> s.roofPick).icon(new ItemStack(Items.OAK_STAIRS));
-                    button("Style", "Gable: two slopes and closed ends. Hip: slopes on all four sides.", x + col + 2, y, col, ROW - 1,
-                            () -> s.roofStyle = s.roofStyle.next()).dynamic(() -> s.roofStyle.label());
+                    button("Style", "Roof style (click to cycle): Gable, Steep gable, Barn, Lean-to, Hip, Mansard, Flat", x + col + 2, y, col, ROW - 1,
+                            () -> {
+                                s.roofStyle = s.roofStyle.next();
+                                Messages.info("Roof: " + s.roofStyle.label() + " - " + s.roofStyle.description());
+                            }).dynamic(() -> s.roofStyle.label());
+                    y += ROW;
+                    button("Look", "Roof look (click to cycle): Brush (your block), Cottage, Witch, Snowy, Medieval", x, y, full, ROW - 1,
+                            () -> {
+                                s.roofLook = s.roofLook.next();
+                                Messages.info("Roof look: " + s.roofLook.label() + " - " + s.roofLook.description());
+                            }).dynamic(() -> "Look: " + s.roofLook.label()).left();
                     y += ROW + 3;
                     y = initStatePicker(x, y, full);
                 }
@@ -731,6 +750,27 @@ public final class RtsScreen extends Screen {
             }).selected(() -> this.tab == t);
             tx += w + 2;
         }
+        // Kind of item: placeable blocks, tools (anything that wears out), the rest. Again to show all kinds.
+        tx += 6;
+        for (Category c : Category.values()) {
+            String label = switch (c) {
+                case BLOCKS -> "Blocks";
+                case TOOLS -> "Tools";
+                case MISC -> "Misc";
+            };
+            String tip = switch (c) {
+                case BLOCKS -> "Only blocks you can place (click again for every kind)";
+                case TOOLS -> "Only tools, weapons and other gear that wears out (click again for every kind)";
+                case MISC -> "Only everything else: food, materials, items (click again for every kind)";
+            };
+            int w = this.textRenderer.getWidth(label) + 12;
+            button(label, tip, tx, headerY(), w, 14, () -> {
+                this.category = this.category == c ? null : c;
+                this.gridScroll = 0;
+                refreshPalette();
+            }).selected(() -> this.category == c);
+            tx += w + 2;
+        }
     }
 
     @Override
@@ -772,10 +812,38 @@ public final class RtsScreen extends Screen {
      * points at nothing), the cursor can also target empty cells on a flat layer in mid-air.
      */
     @Nullable
+    /** The first ghost block of a queued build along the cursor ray, if it's nearer than {@code real}. */
+    private BlockHitResult pickGhost(double mx, double my, BlockHitResult real) {
+        var world = this.client.world;
+        if (world == null || TaskQueue.get().isEmpty()) {
+            return null;
+        }
+        var cam = this.controller.camera();
+        net.minecraft.util.math.Vec3d start = cam.position();
+        net.minecraft.util.math.Vec3d dir = MouseRay.direction(cam, mx, my, this.width, this.height);
+        double reach = real != null ? Math.sqrt(real.getPos().squaredDistanceTo(start)) + 0.5 : 256.0;
+        net.minecraft.util.math.Vec3d end = start.add(dir.multiply(reach));
+        BlockPos ghost = net.minecraft.world.BlockView.raycast(start, end, world, (w, p) -> WorldActions.isQueuedGhost(world, p) ? p.toImmutable() : null, w -> null);
+        if (ghost == null) {
+            return null;
+        }
+        net.minecraft.util.math.Direction face = net.minecraft.util.math.Direction.getFacing(-dir.x, -dir.y, -dir.z);
+        net.minecraft.util.math.Vec3d at = net.minecraft.util.math.Vec3d.ofCenter(ghost).add(face.getOffsetX() * 0.5, face.getOffsetY() * 0.5, face.getOffsetZ() * 0.5);
+        return new net.minecraft.util.hit.BlockHitResult(at, face, ghost, false);
+    }
+
     private BlockHitResult pick(double mx, double my) {
         var cam = this.controller.camera();
         BlockHitResult hit = MouseRay.pick(cam, mx, my, this.width, this.height, false);
         BuildSession s = this.session;
+        if (s.tool == ToolMode.DESTROY) {
+            // Destroy can point at the hologram of queued builds (to cut blocks out of them) in front of
+            // real blocks.
+            BlockHitResult ghost = pickGhost(mx, my, hit);
+            if (ghost != null) {
+                return ghost;
+            }
+        }
         this.hoverOnLayer = false;
         this.terrainInFront = false;
         // Drawing a shape in air mode: the next point stays on the air layer even where terrain is in
@@ -830,6 +898,14 @@ public final class RtsScreen extends Screen {
 
     // ------------------------------------------------------------------ palette
 
+    private static Category categoryOf(PaletteEntry e) {
+        if (e.item() instanceof BlockItem) {
+            return Category.BLOCKS;
+        }
+        // Tools, weapons, shears, armour, modded gear: anything with durability.
+        return e.display().isDamageable() ? Category.TOOLS : Category.MISC;
+    }
+
     private void refreshPalette() {
         this.paletteRefresh = 0;
         if (this.client == null || this.client.player == null) {
@@ -859,6 +935,9 @@ public final class RtsScreen extends Screen {
         String query = this.search == null ? "" : this.search.getText().trim().toLowerCase(Locale.ROOT);
         List<PaletteEntry> list = new ArrayList<>();
         for (PaletteEntry e : entries.values()) {
+            if (this.category != null && categoryOf(e) != this.category) {
+                continue;
+            }
             if (query.isEmpty() || e.display().getName().getString().toLowerCase(Locale.ROOT).contains(query)
                     || Registries.ITEM.getId(e.item()).getPath().contains(query)) {
                 list.add(e);
@@ -1679,6 +1758,10 @@ public final class RtsScreen extends Screen {
             int terminals = me.terminals().size();
             if (!wireless && terminals == 0) {
                 parts.add(name + ": carry a wireless " + me.mod().terminalName() + " or link one");
+                continue;
+            }
+            if (me.mod().portable()) {
+                parts.add(name + ": " + (me.indexed() ? me.items().size() + " types" : "not opened yet"));
                 continue;
             }
             String how = wireless ? "wireless" : terminals + " linked";

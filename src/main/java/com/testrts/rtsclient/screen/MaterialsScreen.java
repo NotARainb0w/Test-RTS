@@ -105,6 +105,54 @@ public final class MaterialsScreen extends Screen {
         addDrawableChild(new RtsButton(this.panelX1 - PAD - 60, by, 60, 16, "Back", this::close));
     }
 
+    /** The item whose remove button was clicked once, and when (a second click within 3 s removes it). */
+    private Item armed;
+    private long armedAt;
+
+    /** Remove every block of {@code item} from the queued build orders; orders left empty come off the queue. */
+    private void removeFromQueue(Item item) {
+        int removed = 0;
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                removed += build.removeItem(item);
+                if (build.blocks().isEmpty()) {
+                    TaskQueue.get().remove(this.client, build);
+                }
+            }
+        }
+        Messages.info("Removed " + removed + "x " + item.getName().getString() + " from the queued orders");
+    }
+
+    /** x of the remove button column, and whether {@code (mx, my)} is on a row's button (that row's index, else -1). */
+    private int removeRowAt(double mx, double my) {
+        int x1 = this.panelX1 - PAD;
+        if (mx < x1 - 12 || mx > x1 || my < this.listY0) {
+            return -1;
+        }
+        int r = (int) ((my - this.listY0) / ROW_H);
+        int i = this.scroll + r;
+        return r < visibleRows() && i < this.lines.size() ? i : -1;
+    }
+
+    @Override
+    public boolean mouseClicked(double mx, double my, int button) {
+        int i = button == 0 ? removeRowAt(mx, my) : -1;
+        if (i >= 0) {
+            Item item = this.lines.get(i).item();
+            long now = System.currentTimeMillis();
+            if (item == this.armed && now - this.armedAt <= 3000) {
+                this.armed = null;
+                removeFromQueue(item);
+                clearAndInit();
+            } else {
+                this.armed = item;
+                this.armedAt = now;
+            }
+            return true;
+        }
+        return super.mouseClicked(mx, my, button);
+    }
+
     private int visibleRows() {
         return Math.max(1, (this.listY1 - this.listY0) / ROW_H);
     }
@@ -122,9 +170,9 @@ public final class MaterialsScreen extends Screen {
         int x0 = this.panelX0 + PAD;
         int x1 = this.panelX1 - PAD;
         int hy = this.panelY0 + Theme.HEADER_H + 5;
-        int cNeed = x1 - 110;
-        int cHave = x1 - 72;
-        int cStore = x1 - 34;
+        int cNeed = x1 - 124;
+        int cHave = x1 - 86;
+        int cStore = x1 - 48;
         ctx.drawText(this.textRenderer, "ITEM", x0 + 20, hy, Theme.TEXT_FAINT, false);
         ctx.drawText(this.textRenderer, "NEED", cNeed, hy, Theme.TEXT_FAINT, false);
         ctx.drawText(this.textRenderer, "HAVE", cHave, hy, Theme.TEXT_FAINT, false);
@@ -150,6 +198,11 @@ public final class MaterialsScreen extends Screen {
             boolean coverable = l.shortBy() <= l.stored();
             ctx.drawText(this.textRenderer, Integer.toString(l.need()), cNeed, y + 5, Theme.TEXT, false);
             ctx.drawText(this.textRenderer, Integer.toString(l.have()), cHave, y + 5, shortItem ? Theme.GOLD : Theme.GOOD, false);
+            boolean armedRow = l.item() == this.armed && System.currentTimeMillis() - this.armedAt <= 3000;
+            if (armedRow) {
+                ctx.drawText(this.textRenderer, "Remove?", x1 - 54, y + 5, Theme.BAD, false);
+            }
+            ctx.drawText(this.textRenderer, "\u2715", x1 - 9, y + 5, armedRow ? Theme.BAD : Theme.TEXT_FAINT, false);
             ctx.drawText(this.textRenderer, Integer.toString(l.stored()), cStore, y + 5,
                     !shortItem ? Theme.TEXT_DIM : coverable ? Theme.GOOD : Theme.BAD, false);
         }

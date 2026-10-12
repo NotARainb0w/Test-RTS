@@ -108,6 +108,16 @@ transmitter) and fill it with 448 stone bricks and 128 dirt: `cd neoforge && ./g
 | [ ] | AE2 + RS | Both networks, items split between them | AE2 first, then RS, then chests |
 | [ ] | ATM10 | Real RS network in ATM10 | Same as the dev client |
 
+## Backpacks
+
+| Done | What | How | Result |
+|---|---|---|---|
+| [ ] | Sophisticated Backpacks (ATM10) | Bricks only in a backpack (inventory, then worn / Curios), build a box | Backpack opens for a moment, bricks come out, it closes, the build goes on; no walking |
+| [ ] | Traveler's Backpack (Prominence) | Bricks only in a worn Traveler's Backpack, then one carried in the inventory | Same; worn one opens like its key, carried one by using it |
+| [ ] | No backpack | Backpack mod installed, none carried | One "didn't open" at most per session, then chests / ME as usual |
+| [ ] | Upgrades untouched | Backpack with upgrades / tools in its slots | Only stored items are taken; upgrades, tools and filters stay |
+| [ ] | Index | Index with a backpack | Its contents show in the item bar |
+
 ## Modded storage (ATM10)
 
 | Done | What | How | Result |
@@ -147,6 +157,13 @@ transmitter) and fill it with 448 stone bricks and 128 dirt: `cd neoforge && ./g
 | [ ] | Index reads networks | Carry a wireless terminal / grid (or link an ME terminal / RS grid), press Index | "Read ME/RS network" in the queue, terminal opens and closes, item bar shows the network's items; "Indexed N container(s) and M storage network(s)" |
 | [ ] | Re-index | Re-index with networks already read | Reads every reachable network again |
 | [ ] | Mining range on a server | Clear order on the ATM10 server | Blocks stay mined (no popping back); if one does, "The server put X back - mining it from closer" and it's mined from close up |
+| [ ] | Materials: remove a block | Materials, click the ✕ on a row twice | "Remove?" after the first click; then that block is gone from every queued order, the hologram and the list; emptied orders leave the queue; a running build restarts without it |
+| [ ] | Stairs shape | Stairs with oak planks, stone bricks, an oak log as the brush | Steps are oak / stone brick / oak stairs facing up, full blocks underneath (hollow: stairs only) |
+| [ ] | Cut a doorway | Queue a hollow box (don't start), Destroy tool + Wall shape on its side over the ghost blocks | Cursor lands on the ghost blocks; "Removed N block(s) from the queued orders", the hologram has the gap; the build leaves it open |
+| [ ] | Ghost + real | Destroy shape covering both ghost blocks and real ones | Ghosts removed from the orders, real blocks get a clear order |
+| [ ] | Roof styles | Build a 7x9 room, Roof with oak stairs, each Style | Gable / Steep / Barn / Lean-to have closed ends (lean-to also its high side), Hip and Mansard slope on all sides (Mansard falls back to Hip on small rooms), Flat has a slab parapet |
+| [ ] | Roof looks | Same room, Look = Cottage / Witch / Snowy / Medieval with Gable and Steep | Dark outline on the eaves, end rows, ridge and gable ends; Witch: flared eaves + rods on the ridge; Snowy: mixed stairs with white patches; Cottage / Medieval: chimney with a campfire through the roof |
+| [ ] | Bridge styles | Bridge shape over a river, each look (Bridge button next to Mode), no brush picked | Preview shows the look; Medieval/Viaduct/Garden/Stone/Overgrown/Covered build with their own blocks, pillars reach the river bed, stairs face along the hump, the Covered roof meets at a ridge |
 | [ ] | Protected clear | `protect-clear` (NeoForge): stone block, half protected, cleared | Protected half stays, the rest is mined |
 | [ ] | Protect tool | Tool 8, two corners around a base, then order a big clear / quarry over it | Red outline; nothing inside is broken ("in a protected area"); click inside to remove |
 | [ ] | Protect + Baritone | Same with the Baritone engine | Baritone can't break inside (blocked), may route around |
@@ -156,6 +173,7 @@ transmitter) and fill it with 448 stone bricks and 128 dirt: `cd neoforge && ./g
 | [ ] | Inverted shapes | Dome / pyramid / cone, I or the Inverted button | Built upside down in the same space (funnel, bowl); preview updates |
 | [ ] | Inverted digging | Destroy tool, cut view down, inverted dome / cone clicked at the deepest point of a pit | Red preview widening upward from the click to the surface; clearing digs the pit |
 | [ ] | Forget all | Storage panel, click twice | Every link, ME/RS terminal and remembered content forgotten |
+| [ ] | Item bar kinds | Item bar: Blocks / Tools / Misc, combined with Inventory / Storage and search | Blocks only placeable blocks, Tools pickaxes/swords/armour/modded tools, Misc the rest; clicking the selected kind again shows all |
 | [ ] | Controls panel | F1, or the ? button in RTS mode | Panel with every control, two columns on small screens; click or F1/Esc closes it |
 
 ## Patterns

@@ -1640,43 +1640,28 @@ public final class NativeBuilder {
     private Placed place(Minecraft client, BlockPos pos, BlockState wanted) {
         LocalPlayer player = client.player;
         ClientLevel world = client.level;
-        Direction toSupport = support(world, pos);
-        BlockHitResult hit;
-        Vec3 hitVec;
-        float[] rotation;
-        if (toSupport != null) {
-            BlockPos supportPos = pos.relative(toSupport);
-            Direction face = toSupport.getOpposite();
-            hitVec = Vec3.atCenterOf(pos).add(toSupport.getStepX() * 0.5, toSupport.getStepY() * 0.5, toSupport.getStepZ() * 0.5);
-            hit = new BlockHitResult(hitVec, face, supportPos, false);
-            // Vanilla decides the placed state from where the player looks. Try the four directions
-            // (and up/down) until the block would come out the way the order wants it.
-            rotation = rotationFor(player, wanted, hit);
-        } else if (com.testrts.rtsclient.config.RtsConfig.get().airPlace) {
-            // Nothing to attach to: click the empty cell itself. The server places a block in a
-            // replaceable cell that is clicked directly, so no neighbour (or scaffolding) is needed.
-            // Try each face of the cell, since the clicked face decides slab/stair halves.
-            hit = null;
-            hitVec = null;
-            rotation = null;
-            Vec3 eye = player.getEyePosition();
-            Direction toward = Direction.getNearest(eye.x - (pos.getX() + 0.5), eye.y - (pos.getY() + 0.5), eye.z - (pos.getZ() + 0.5));
-            Direction[] faces = {toward, Direction.UP, Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
-            for (Direction f : faces) {
-                Vec3 v = Vec3.atCenterOf(pos).add(f.getStepX() * 0.5, f.getStepY() * 0.5, f.getStepZ() * 0.5);
-                BlockHitResult h = new BlockHitResult(v, f, pos, false);
-                float[] r = rotationFor(player, wanted, h);
-                if (hit == null || r != null) {
-                    hit = h;
-                    hitVec = v;
-                    rotation = r;
-                }
-                if (r != null) {
-                    break;
-                }
-            }
-        } else {
+        // Every way to click this spot: each solid neighbour's face (and the empty cell itself with mid-air
+        // placing), at the middle and the upper / lower half. Where the click lands decides slab and stair
+        // halves, the look direction the facing: take the first click + look that gives the wanted block.
+        List<BlockHitResult> tries = placementHits(world, player, pos);
+        if (tries.isEmpty()) {
             return Placed.FAILED;
+        }
+        BlockHitResult hit = null;
+        Vec3 hitVec = null;
+        float[] rotation = null;
+        for (BlockHitResult h : tries) {
+            float[] r = rotationFor(player, wanted, h);
+            if (r != null) {
+                hit = h;
+                hitVec = h.getLocation();
+                rotation = r;
+                break;
+            }
+        }
+        if (hit == null) {
+            hit = tries.get(0);
+            hitVec = hit.getLocation();
         }
         if (rotation == null) {
             if (this.strict && !wanted.getBlock().defaultBlockState().equals(wanted)) {
@@ -1692,6 +1677,55 @@ public final class NativeBuilder {
         return Placed.DONE;
     }
 
+    /** Clicks that put a block into {@code pos}: see {@link #place}. Supported faces first, the cell itself last. */
+    private static List<BlockHitResult> placementHits(ClientLevel world, LocalPlayer player, BlockPos pos) {
+        List<BlockHitResult> out = new ArrayList<>();
+        for (Direction d : SUPPORT_ORDER) {
+            BlockPos n = pos.relative(d);
+            if (!clickable(world, n)) {
+                continue;
+            }
+            Direction face = d.getOpposite();
+            Vec3 mid = Vec3.atCenterOf(pos).add(d.getStepX() * 0.5, d.getStepY() * 0.5, d.getStepZ() * 0.5);
+            out.add(new BlockHitResult(mid, face, n, false));
+            if (face.getAxis().isHorizontal()) {
+                out.add(new BlockHitResult(mid.add(0, 0.3, 0), face, n, false));
+                out.add(new BlockHitResult(mid.add(0, -0.3, 0), face, n, false));
+            }
+        }
+        if (com.testrts.rtsclient.config.RtsConfig.get().airPlace) {
+            // Nothing (or nothing that works) to attach to: click the empty cell itself. The server places a
+            // block in a replaceable cell that is clicked directly.
+            Vec3 eye = player.getEyePosition();
+            Direction toward = Direction.getNearest(eye.x - (pos.getX() + 0.5), eye.y - (pos.getY() + 0.5), eye.z - (pos.getZ() + 0.5));
+            for (Direction f : new Direction[]{toward, Direction.UP, Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST}) {
+                Vec3 mid = Vec3.atCenterOf(pos).add(f.getStepX() * 0.5, f.getStepY() * 0.5, f.getStepZ() * 0.5);
+                out.add(new BlockHitResult(mid, f, pos, false));
+                if (f.getAxis().isHorizontal()) {
+                    out.add(new BlockHitResult(mid.add(0, 0.3, 0), f, pos, false));
+                    out.add(new BlockHitResult(mid.add(0, -0.3, 0), f, pos, false));
+                }
+            }
+        }
+        return out;
+    }
+
+    /**
+     * The block that would be placed is {@code wanted} as far as an order cares: same block, same facing,
+     * half, axis... Neighbour-driven properties (stair corner shapes, fence connections) don't count.
+     */
+    static boolean sameOrientation(BlockState wanted, @Nullable BlockState result) {
+        if (result == null || result.getBlock() != wanted.getBlock()) {
+            return false;
+        }
+        for (net.minecraft.world.level.block.state.properties.Property<?> p : wanted.getProperties()) {
+            if (ORIENTATION.contains(p.getName()) && result.hasProperty(p) && !result.getValue(p).equals(wanted.getValue(p))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** A neighbour we may click to place against: solid, and not something that opens a screen. */
     static boolean clickable(ClientLevel world, BlockPos n) {
         if (!world.hasChunkAt(n)) {
@@ -1703,7 +1737,8 @@ public final class NativeBuilder {
 
     /** Properties that say which way a block points; others (fence connections...) follow the neighbours. */
     private static final java.util.Set<String> ORIENTATION = java.util.Set.of(
-            "facing", "axis", "half", "type", "face", "rotation", "hinge", "attachment", "orientation", "vertical_direction");
+            "facing", "axis", "half", "type", "face", "rotation", "hinge", "attachment", "orientation", "vertical_direction",
+            "hanging");
 
     /**
      * Whether clicking {@code hit} with the player's real view (no turning) puts {@code wanted} down
@@ -1739,7 +1774,7 @@ public final class NativeBuilder {
             float[] natural = Look.anglesTo(player, hit.getLocation());
             player.setYRot(natural[0]);
             player.setXRot(natural[1]);
-            if (wanted.equals(wanted.getBlock().getStateForPlacement(new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, hit)))) {
+            if (sameOrientation(wanted, wanted.getBlock().getStateForPlacement(new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, hit)))) {
                 return natural;
             }
             for (float pitch : PITCHES) {
@@ -1747,7 +1782,7 @@ public final class NativeBuilder {
                     player.setYRot(yaw);
                     player.setXRot(pitch);
                     BlockState result = wanted.getBlock().getStateForPlacement(new BlockPlaceContext(player, InteractionHand.MAIN_HAND, stack, hit));
-                    if (wanted.equals(result)) {
+                    if (sameOrientation(wanted, result)) {
                         return new float[]{yaw, pitch};
                     }
                 }

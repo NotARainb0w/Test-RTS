@@ -95,7 +95,8 @@ public final class WorldActions {
         }
         switch (s.tool) {
             case BUILD -> {
-                if (!(s.brush.getItem() instanceof BlockItem) && s.mix.isEmpty()) {
+                boolean styledBridge = s.shape == com.testrts.rtsclient.build.BuildShape.BRIDGE && s.bridgeStyle != com.testrts.rtsclient.build.BridgeStyle.CLASSIC;
+                if (!(s.brush.getItem() instanceof BlockItem) && s.mix.isEmpty() && !styledBridge) {
                     Messages.warn("Pick a block from the bar below first (or middle-click a block in the world)");
                     return;
                 }
@@ -216,12 +217,52 @@ public final class WorldActions {
         boolean clearing = s.tool == ToolMode.DESTROY;
         String label = OrderPlanner.label(request, plan.changes().size());
         s.clearSelection();
+        int unqueued = 0;
+        if (clearing) {
+            // Destroy over the hologram of queued builds: those blocks come out of the orders (a doorway in
+            // a queued box). Real blocks in the shape are still cleared below.
+            var shape = com.testrts.rtsclient.build.ShapeGenerator.generate(request.shape(), request.a(), request.b(), request.height(),
+                    request.hollow(), request.limit() + 1, request.inverted(), request.bridgeStyle());
+            unqueued = removeFromQueuedBuilds(shape.positions());
+            if (unqueued > 0) {
+                Messages.info("Removed " + unqueued + " block(s) from the queued orders");
+            }
+        }
         if (plan.changes().isEmpty()) {
-            Messages.info("Nothing to do there");
+            if (unqueued == 0) {
+                Messages.info("Nothing to do there");
+            }
             return;
         }
         pushUndo(label, plan.changes());
         queue(new BuildTask(label, plan.changes(), clearing));
+    }
+
+    /** Take {@code positions} out of every queued build order; orders left empty come off the queue. */
+    private int removeFromQueuedBuilds(java.util.Collection<BlockPos> positions) {
+        int removed = 0;
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                removed += build.removePositions(positions);
+                if (build.blocks().isEmpty()) {
+                    TaskQueue.get().remove(this.client, build);
+                }
+            }
+        }
+        return removed;
+    }
+
+    /** A queued build wants a block at {@code p} that isn't there yet (a ghost block of the hologram). */
+    public static boolean isQueuedGhost(ClientWorld world, BlockPos p) {
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                BlockState wanted = build.blocks().get(p);
+                if (wanted != null && !com.testrts.rtsclient.task.MaterialPlanner.matches(world.getBlockState(p), wanted)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void pushUndo(String label, Map<BlockPos, BlockState> order) {
@@ -425,13 +466,12 @@ public final class WorldActions {
         BuildSession s = this.session;
         ClientWorld world = world();
         BlockState brush = s.brushState(0F);
-        if (world == null || brush == null) {
-            Messages.warn("Pick a roof block first (stairs work best, e.g. oak stairs)");
+        if (world == null) {
             return;
         }
         String[] error = new String[1];
         com.testrts.rtsclient.build.RoofPlanner.Roof roof = com.testrts.rtsclient.build.RoofPlanner.plan(
-                world, hit.getBlockPos(), brush, s.roofStyle, error);
+                world, hit.getBlockPos(), brush, s.roofStyle, s.roofLook, error);
         if (roof == null) {
             Messages.warn(error[0]);
             return;
@@ -446,7 +486,7 @@ public final class WorldActions {
         s.moveTo = null;
         s.clearSelection();
         s.pasteAnchor = roof.origin();
-        Messages.success(s.roofStyle.label() + " roof for a " + roof.width() + " x " + roof.depth()
+        Messages.success(roof.blueprint().name() + " for a " + roof.width() + " x " + roof.depth()
                 + " room - Enter or click to build, arrows to nudge, X to cancel");
     }
 

@@ -72,6 +72,8 @@ public final class RtsConfig {
      * terminals you linked, before walking to chests.
      */
     public boolean useAe2 = true;
+    /** Take building materials out of a carried / worn backpack (Sophisticated / Traveler's Backpack) first. */
+    public boolean useBackpacks = true;
     /** With Refined Storage: the same through a wireless (crafting) grid or linked grids. */
     public boolean useRefinedStorage = true;
     /** Start orders as soon as they're queued (off: they wait for the Start button). */

@@ -51,6 +51,8 @@ public final class MeNetwork {
     /** A wireless terminal has opened for us here before (it may live in a Curios/Trinkets slot). */
     private boolean wirelessWorked;
     private long wirelessFailedAt;
+    /** A storage tried without seeing it (a worn backpack) didn't open this session. */
+    private boolean alwaysTryFailed;
     private String worldKey;
     private boolean dirty;
     private int saveCooldown;
@@ -222,6 +224,7 @@ public final class MeNetwork {
         this.indexedAt = 0;
         this.wirelessWorked = false;
         this.wirelessFailedAt = 0;
+        this.alwaysTryFailed = false;
     }
 
     /** Forget everything about this world's network (links, contents, wireless). */
@@ -373,15 +376,18 @@ public final class MeNetwork {
         if (this.wirelessFailedAt != 0 && System.currentTimeMillis() - this.wirelessFailedAt < WIRELESS_RETRY_MS) {
             return false;
         }
-        return this.wirelessWorked || carriesWirelessTerminal(client.player);
+        // A worn backpack can't be seen: try it, but after it didn't open only once one is carried or used again.
+        return this.wirelessWorked || carriesWirelessTerminal(client.player) || this.mod.alwaysTry() && !this.alwaysTryFailed;
     }
 
     public void wirelessFailed() {
         this.wirelessFailedAt = System.currentTimeMillis();
+        this.alwaysTryFailed = true;
     }
 
     public void wirelessOpened() {
         this.wirelessFailedAt = 0;
+        this.alwaysTryFailed = false;
         if (!this.wirelessWorked) {
             this.wirelessWorked = true;
             markDirty();

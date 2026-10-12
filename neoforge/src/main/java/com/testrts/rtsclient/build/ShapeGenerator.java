@@ -44,6 +44,12 @@ public final class ShapeGenerator {
      *                 shape widens upward from there (see {@link BuildShape#invertible()})
      */
     public static Result generate(BuildShape shape, BlockPos a, BlockPos b, int height, boolean hollow, int limit, boolean inverted) {
+        return generate(shape, a, b, height, hollow, limit, inverted, BridgeStyle.CLASSIC);
+    }
+
+    /** @param bridgeStyle the look of the Bridge shape (see {@link BridgeStyle}) */
+    public static Result generate(BuildShape shape, BlockPos a, BlockPos b, int height, boolean hollow, int limit, boolean inverted,
+                                  BridgeStyle bridgeStyle) {
         Collector out = new Collector(limit);
         if (height == 0) {
             height = 1;
@@ -62,7 +68,13 @@ public final class ShapeGenerator {
             case CONE -> cone(out, a, b, height, hollow);
             case TORUS -> torus(out, a, b, height, hollow);
             case ARCH -> arch(out, a, b, height, hollow);
-            case BRIDGE -> bridge(out, a, b, height, hollow);
+            case BRIDGE -> {
+                if (bridgeStyle == null || bridgeStyle == BridgeStyle.CLASSIC) {
+                    bridge(out, a, b, height, hollow);
+                } else {
+                    styledBridge(out, a, b, height, bridgeStyle);
+                }
+            }
             case STAIRS -> stairs(out, a, b, height, hollow);
             case SPIRAL -> spiral(out, a, b, height, hollow);
             case VEIN -> vein(out, a);
@@ -96,6 +108,337 @@ public final class ShapeGenerator {
         java.util.Map<BlockPos, String> roles = new java.util.HashMap<>();
         out.roles.forEach((p, r) -> roles.put(new BlockPos(p.getX(), sum - p.getY(), p.getZ()), r));
         return new Result(positions, out.truncated, facing, roles);
+    }
+
+    // ------------------------------------------------------------------ styled bridges
+
+    /** Role prefix: this exact block ("block:minecraft:oak_stairs[facing=east]"), whatever the brush. */
+    public static final String BLOCK = "block:";
+    /** Role prefix: this block, repeated downward through air and water until it reaches ground (pillars). */
+    public static final String DOWN = "down:";
+
+    /** Places the blocks of one styled bridge; the deck goes from A to B, Height is its width. */
+    private static final class Bridge {
+        final Collector out;
+        final boolean alongX;
+        final String run;
+        final String across;
+        final String forward;
+        final String back;
+        /** Lateral directions: toward lower and higher {@code w}. */
+        final String neg;
+        final String pos;
+        boolean full = true;
+
+        Bridge(Collector out, BlockPos a, BlockPos b) {
+            this.out = out;
+            this.alongX = Math.abs(b.getX() - a.getX()) >= Math.abs(b.getZ() - a.getZ());
+            this.run = this.alongX ? "x" : "z";
+            this.across = this.alongX ? "z" : "x";
+            this.forward = heading(a, b);
+            this.back = switch (this.forward) {
+                case "east" -> "west";
+                case "west" -> "east";
+                case "north" -> "south";
+                default -> "north";
+            };
+            this.neg = this.alongX ? "north" : "west";
+            this.pos = this.alongX ? "south" : "east";
+        }
+
+        private int x(int[] c, int w) {
+            return this.alongX ? c[0] : c[0] + w;
+        }
+
+        private int z(int[] c, int w) {
+            return this.alongX ? c[1] + w : c[1];
+        }
+
+        /** Exact block at lateral offset {@code w} of cell {@code c}. RUN / ACROSS in the spec become log axes. */
+        void put(int[] c, int w, int y, String spec) {
+            if (this.full && !this.out.addRole(x(c, w), y, z(c, w), BLOCK + axes(spec))) {
+                this.full = false;
+            }
+        }
+
+        /** A pillar: this block here and down to the ground. */
+        void down(int[] c, int w, int y, String spec) {
+            if (this.full && !this.out.addRole(x(c, w), y, z(c, w), DOWN + axes(spec))) {
+                this.full = false;
+            }
+        }
+
+        private String axes(String spec) {
+            return spec.replace("RUN", this.run).replace("ACROSS", this.across);
+        }
+    }
+
+    /** Deck heights along the run, with a hump in the middle of {@code hump} blocks at most. */
+    private static int[] deckHeights(BlockPos a, BlockPos b, int steps, double hump) {
+        int[] ys = new int[steps + 1];
+        for (int i = 0; i <= steps; i++) {
+            double t = (double) i / steps;
+            ys[i] = a.getY() + (int) Math.round((b.getY() - a.getY()) * t + Math.sin(Math.PI * t) * hump);
+        }
+        return ys;
+    }
+
+    /** A stable "random" number 0..n-1 for a position (so the preview matches the build). */
+    private static int hash(int x, int y, int z, int n) {
+        int h = x * 73856093 ^ y * 19349663 ^ z * 83492791;
+        h ^= h >>> 13;
+        h *= 0x5bd1e995;
+        return Math.floorMod(h ^ h >>> 15, n);
+    }
+
+    private static void styledBridge(Collector out, BlockPos a, BlockPos b, int height, BridgeStyle style) {
+        java.util.List<int[]> cells = run(a, b);
+        if (cells.isEmpty()) {
+            return;
+        }
+        int steps = Math.max(1, cells.get(cells.size() - 1)[2]);
+        int width = Math.max(1, Math.abs(height));
+        int lo = -(width - 1) / 2;
+        int hi = lo + width - 1;
+        int railLo = lo - 1;
+        int railHi = hi + 1;
+        Bridge br = new Bridge(out, a, b);
+        double hump = switch (style) {
+            case GARDEN -> Math.min(2.5, steps / 4.0);
+            case VIADUCT -> 0.0;
+            case COVERED -> Math.min(1.0, steps / 12.0);
+            default -> Math.min(2.0, steps / 10.0);
+        };
+        int[] ys = deckHeights(a, b, steps, hump);
+        // Stone bridges: arches between piers, about every 10 blocks (Viaduct: every 7, deeper).
+        int arches = Math.max(1, (int) Math.round(steps / (style == BridgeStyle.VIADUCT ? 7.0 : 10.0)));
+        double archLen = (double) steps / arches;
+        int archDepth = style == BridgeStyle.VIADUCT ? 5 : 3;
+        int mid = steps / 2;
+        for (int[] c : cells) {
+            int i = c[2];
+            int y = ys[i];
+            String stairDir = i < steps && ys[i + 1] > y ? br.forward : i > 0 && ys[i - 1] > y ? br.back : null;
+            boolean end = i == 0 || i == steps;
+            switch (style) {
+                case MEDIEVAL -> {
+                    boolean post = end || i % 4 == 0;
+                    for (int w = lo; w <= hi; w++) {
+                        String deck = w == lo || w == hi ? "minecraft:stripped_spruce_log[axis=RUN]"
+                                : i % 4 == 2 ? "minecraft:dark_oak_planks" : "minecraft:spruce_planks";
+                        br.put(c, w, y, deck);
+                        if (stairDir != null) {
+                            br.put(c, w, y + 1, "minecraft:spruce_stairs[facing=" + stairDir + "]");
+                        }
+                    }
+                    if (post) {
+                        // Cross beam under the deck, from railing to railing.
+                        for (int w = railLo; w <= railHi; w++) {
+                            br.put(c, w, y - 1, "minecraft:stripped_spruce_log[axis=ACROSS]");
+                        }
+                    }
+                    for (int side : new int[]{railLo, railHi}) {
+                        int outer = side == railLo ? railLo - 1 : railHi + 1;
+                        String in = side == railLo ? br.pos : br.neg;
+                        br.put(c, side, y, "minecraft:spruce_log[axis=RUN]");
+                        // A lip along the outside (an upside-down stair), so the edge isn't a flat wall.
+                        br.put(c, outer, y, "minecraft:spruce_stairs[facing=" + in + ",half=top]");
+                        if (post) {
+                            br.put(c, side, y + 1, "minecraft:stripped_spruce_log[axis=y]");
+                            br.put(c, side, y + 2, "minecraft:spruce_fence");
+                            br.put(c, side, y + 3, "minecraft:lantern");
+                            br.down(c, side, y - 2, "minecraft:spruce_log[axis=y]");
+                        } else {
+                            br.put(c, side, y + 1, "minecraft:spruce_fence");
+                            // Knee braces from the pillar up to the deck, next to each post.
+                            if (i % 4 == 1) {
+                                br.put(c, side, y - 1, "minecraft:spruce_stairs[facing=" + br.back + ",half=top]");
+                            } else if (i % 4 == 3) {
+                                br.put(c, side, y - 1, "minecraft:spruce_stairs[facing=" + br.forward + ",half=top]");
+                            }
+                        }
+                    }
+                }
+                case VIADUCT, STONE, OVERGROWN -> {
+                    boolean mossy = style == BridgeStyle.OVERGROWN;
+                    boolean viaduct = style == BridgeStyle.VIADUCT;
+                    int seg = (int) Math.floor(i / archLen);
+                    int segStart = (int) Math.round(seg * archLen);
+                    int segEnd = (int) Math.round((seg + 1) * archLen);
+                    double t = (i - seg * archLen) / archLen;
+                    boolean pier = end || i == segStart || i == segEnd;
+                    int depth = pier ? 0 : (int) Math.round(archDepth * (1.0 - Math.sin(Math.PI * t)));
+                    String towardPier = t < 0.5 ? br.back : br.forward;
+                    boolean capStep = end || i % 4 == 0;
+                    String stairsBlock = mossy ? "minecraft:mossy_stone_brick_stairs" : "minecraft:stone_brick_stairs";
+                    String path = viaduct ? "minecraft:polished_andesite" : mossy ? "minecraft:mossy_cobblestone" : "minecraft:polished_andesite";
+                    for (int w = railLo; w <= railHi; w++) {
+                        boolean edge = w == railLo || w == railHi;
+                        String brick = mossy ? stoneMix(c, w, y) : "minecraft:stone_bricks";
+                        if (!edge) {
+                            String deck = w == 0 && width >= 3 ? path : brick;
+                            br.put(c, w, y, deck);
+                            if (stairDir != null) {
+                                br.put(c, w, y + 1, stairsBlock + "[facing=" + stairDir + "]");
+                            }
+                            if (mossy && stairDir == null && hash(c[0] + w, y + 1, c[1], 6) == 0) {
+                                br.put(c, w, y + 1, "minecraft:moss_carpet");
+                            }
+                        } else {
+                            String in = w == railLo ? br.pos : br.neg;
+                            int outer = w == railLo ? railLo - 1 : railHi + 1;
+                            br.put(c, w, y, brick);
+                            // Cornice: an upside-down stair along the outside of the deck.
+                            br.put(c, outer, y, stairsBlock + "[facing=" + in + ",half=top]");
+                            if (viaduct) {
+                                if (pier) {
+                                    br.put(c, w, y + 1, "minecraft:chiseled_stone_bricks");
+                                    br.put(c, w, y + 2, "minecraft:stone_brick_wall");
+                                    br.put(c, w, y + 3, "minecraft:lantern");
+                                } else if (i % 2 == 0) {
+                                    br.put(c, w, y + 1, "minecraft:stone_bricks");
+                                    br.put(c, w, y + 2, "minecraft:stone_brick_slab");
+                                } else {
+                                    br.put(c, w, y + 1, "minecraft:stone_brick_wall");
+                                }
+                            } else if (capStep) {
+                                br.put(c, w, y + 1, brick);
+                                br.put(c, w, y + 2, mossy && hash(c[0], y, c[1], 3) == 0 ? "minecraft:azalea_leaves" : "minecraft:stone_brick_slab");
+                            } else {
+                                br.put(c, w, y + 1, mossy ? "minecraft:mossy_stone_brick_wall" : "minecraft:stone_brick_wall");
+                                if (mossy && hash(c[0], y + 2, c[1], 4) == 0) {
+                                    br.put(c, w, y + 2, "minecraft:azalea_leaves");
+                                }
+                            }
+                        }
+                    }
+                    // Under the deck: the arch (curved with upside-down stairs, keystone at the crown), or a pier.
+                    for (int w = railLo - 1; w <= railHi + 1; w++) {
+                        boolean outerCol = w < railLo || w > railHi;
+                        String brick = mossy ? stoneMix(c, w, y - 1) : "minecraft:stone_bricks";
+                        if (pier) {
+                            if (!outerCol || viaduct) {
+                                // Viaduct piers get buttresses past the railing.
+                                br.put(c, w, y - 1, viaduct ? "minecraft:chiseled_stone_bricks" : brick);
+                                br.down(c, w, y - 2, brick);
+                            }
+                        } else if (!outerCol) {
+                            if (depth == 0) {
+                                br.put(c, w, y - 1, "minecraft:chiseled_stone_bricks");
+                            }
+                            for (int d = 1; d <= depth; d++) {
+                                String block = mossy ? stoneMix(c, w, y - d) : "minecraft:stone_bricks";
+                                br.put(c, w, y - d, d == depth ? stairsBlock + "[facing=" + towardPier + ",half=top]" : block);
+                            }
+                        }
+                    }
+                }
+                case GARDEN -> {
+                    for (int w = lo; w <= hi; w++) {
+                        br.put(c, w, y, "minecraft:spruce_planks");
+                        if (stairDir != null) {
+                            br.put(c, w, y + 1, "minecraft:spruce_stairs[facing=" + stairDir + "]");
+                        }
+                    }
+                    for (int side : new int[]{railLo, railHi}) {
+                        int outer = side == railLo ? railLo - 1 : railHi + 1;
+                        String in = side == railLo ? br.pos : br.neg;
+                        br.put(c, side, y, "minecraft:stripped_spruce_log[axis=RUN]");
+                        br.put(c, outer, y, "minecraft:spruce_stairs[facing=" + in + ",half=top]");
+                        if (end) {
+                            // End posts: a lantern on one, a leafy top on the other side.
+                            br.put(c, side, y + 1, "minecraft:spruce_log[axis=y]");
+                            br.put(c, side, y + 2, side == railLo ? "minecraft:lantern" : "minecraft:flowering_azalea_leaves");
+                            br.down(c, side, y - 1, "minecraft:spruce_log[axis=y]");
+                        } else if (i == mid) {
+                            // The gateway: tall posts, a stepped double beam, chains with lanterns hanging inside.
+                            for (int k = 1; k <= 4; k++) {
+                                br.put(c, side, y + k, "minecraft:spruce_log[axis=y]");
+                            }
+                            br.down(c, side, y - 1, "minecraft:spruce_log[axis=y]");
+                        } else {
+                            br.put(c, side, y + 1, "minecraft:spruce_fence");
+                        }
+                    }
+                    if (i == mid) {
+                        for (int w = railLo - 1; w <= railHi + 1; w++) {
+                            boolean tip = w == railLo - 1 || w == railHi + 1;
+                            br.put(c, w, y + 5, tip ? "minecraft:dark_oak_stairs[facing=" + (w < 0 ? br.pos : br.neg) + ",half=top]"
+                                    : "minecraft:dark_oak_planks");
+                            if (w >= railLo && w <= railHi) {
+                                br.put(c, w, y + 6, "minecraft:dark_oak_slab");
+                            }
+                        }
+                        for (int w : new int[]{lo, hi}) {
+                            br.put(c, w, y + 4, "minecraft:chain[axis=y]");
+                            br.put(c, w, y + 3, "minecraft:lantern[hanging=true]");
+                        }
+                    }
+                }
+                case COVERED -> {
+                    boolean post = end || i % 3 == 0;
+                    for (int w = lo; w <= hi; w++) {
+                        br.put(c, w, y, "minecraft:oak_planks");
+                        if (stairDir != null) {
+                            br.put(c, w, y + 1, "minecraft:oak_stairs[facing=" + stairDir + "]");
+                        }
+                        if (post) {
+                            // Tie beams across under the roof; a lantern hangs from the middle one.
+                            br.put(c, w, y + 4, "minecraft:stripped_oak_log[axis=ACROSS]");
+                        }
+                    }
+                    if (post && lo <= 0 && 0 <= hi) {
+                        br.put(c, 0, y + 3, "minecraft:lantern[hanging=true]");
+                    }
+                    if (end || i % 6 == 0) {
+                        // Solid stone pier under the whole deck.
+                        for (int w = railLo; w <= railHi; w++) {
+                            br.down(c, w, y - 1, "minecraft:stone_bricks");
+                        }
+                    }
+                    for (int side : new int[]{railLo, railHi}) {
+                        br.put(c, side, y, "minecraft:stripped_oak_log[axis=RUN]");
+                        if (post) {
+                            for (int k = 1; k <= 3; k++) {
+                                br.put(c, side, y + k, "minecraft:oak_log[axis=y]");
+                            }
+                        } else {
+                            br.put(c, side, y + 1, "minecraft:oak_fence");
+                        }
+                        br.put(c, side, y + 4, "minecraft:stripped_oak_log[axis=RUN]");
+                    }
+                    // Gable roof of cherry stairs over the whole width, ridge of planks.
+                    for (int k = 0; ; k++) {
+                        int left = railLo - 1 + k;
+                        int right = railHi + 1 - k;
+                        int ry = y + 4 + k;
+                        if (left > right) {
+                            break;
+                        }
+                        if (left == right) {
+                            br.put(c, left, ry, "minecraft:cherry_planks");
+                            break;
+                        }
+                        br.put(c, left, ry, "minecraft:cherry_stairs[facing=" + br.pos + "]");
+                        br.put(c, right, ry, "minecraft:cherry_stairs[facing=" + br.neg + "]");
+                    }
+                }
+                default -> {
+                }
+            }
+            if (!br.full) {
+                return;
+            }
+        }
+    }
+
+    /** Overgrown bricks: mostly mossy, some cracked, some plain. */
+    private static String stoneMix(int[] c, int w, int y) {
+        return switch (hash(c[0] + w, y, c[1] - w, 5)) {
+            case 0, 1 -> "minecraft:mossy_stone_bricks";
+            case 2 -> "minecraft:cracked_stone_bricks";
+            default -> "minecraft:stone_bricks";
+        };
     }
 
     private static final class Collector {
@@ -574,7 +917,11 @@ public final class ShapeGenerator {
                 int x = alongX ? c[0] : c[0] + w;
                 int z = alongX ? c[1] + w : c[1];
                 boolean deck = w >= lo && w <= hi;
-                if (deck && stair != null ? !out.addRole(x, y, z, STAIR) || !out.addFacing(x, y, z, stair) : !out.add(x, y, z)) {
+                if (!out.add(x, y, z)) {
+                    return;
+                }
+                // A step up: the stair sits on top of the lower deck block (walk deck, stair, next deck).
+                if (deck && stair != null && (!out.addRole(x, y + 1, z, STAIR) || !out.addFacing(x, y + 1, z, stair))) {
                     return;
                 }
                 if (w == railLo || w == railHi) {
@@ -615,7 +962,8 @@ public final class ShapeGenerator {
                         }
                     }
                 }
-                if (!out.add(x, y, z, dir)) {
+                // The step itself is the stair version of the brush (oak planks: oak stairs), facing up.
+                if (!out.addRole(x, y, z, STAIR) || !out.addFacing(x, y, z, dir)) {
                     return;
                 }
             }
