@@ -164,6 +164,13 @@ public final class PathFollower {
             return State.STUCK;
         }
         MovementInput input = MovementInput.acquire(player);
+        if (player.getAbilities().flying) {
+            // Flying (a flight item in survival, or creative): the route is for walking, so come down
+            // first. Holding sneak descends; the game turns flight off once we touch the ground.
+            input.release();
+            input.sneak = true;
+            return State.WALKING;
+        }
         if (this.start == null) {
             this.start = Walkability.feetNode(world, player);
         }
@@ -485,9 +492,11 @@ public final class PathFollower {
         }
         Vec3 face = Vec3.atCenterOf(p).add(this.breakingSide.getStepX() * 0.5, this.breakingSide.getStepY() * 0.5,
                 this.breakingSide.getStepZ() * 0.5);
-        if (!Look.at(client.player, face) && !this.breakStarted) {
+        boolean aimed = Look.at(client.player, face);
+        if (!this.breakStarted && !Mining.aimed(client, face, aimed)) {
             return; // still turning toward it
         }
+        Mining.skipPause(client);
         if (!this.breakStarted) {
             this.breakStarted = true;
             client.gameMode.startDestroyBlock(p, this.breakingSide);

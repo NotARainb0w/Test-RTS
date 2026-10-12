@@ -69,7 +69,12 @@ public final class OrderPlanner {
      */
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                           boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
-                          java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern) {
+                          java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted) {
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, false);
+        }
     }
 
     public static Request request(BuildSession s, BlockPos a, BlockPos b, float cameraYaw, int limit) {
@@ -79,11 +84,11 @@ public final class OrderPlanner {
             brush = mix.get(0);
         }
         return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix,
-                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern);
+                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern, s.inverted);
     }
 
     public static Plan plan(ClientLevel world, Request r) {
-        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1);
+        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1, r.inverted());
         boolean truncated = shape.truncated() || shape.positions().size() > r.limit();
         Map<BlockPos, BlockState> changes = new LinkedHashMap<>();
         if (truncated) {

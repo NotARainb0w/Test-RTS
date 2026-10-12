@@ -77,6 +77,14 @@ public final class AutoTest {
     /** Controller of the test network (energy cell south, drive east, access point on top, terminal cable west). */
     private static final BlockPos ME_CONTROLLER = O.offset(-10, 0, 8);
     private static int meStage;
+    /**
+     * Scenarios whose bricks and dirt are only in a Refined Storage network on the other side of the arena:
+     * through a bound wireless crafting grid (RS Quartz Arsenal) or at a crafting grid linked with the Link tool.
+     */
+    private static final java.util.Set<String> FROM_RS = new java.util.HashSet<>();
+    /** Creative controller of the RS test network (disk drive east, crafting grid west, wireless transmitter on top). */
+    private static final BlockPos RS_CONTROLLER = O.offset(-10, 0, -8);
+    private static int rsStage;
     /** Scenarios run in creative mode (creative flight and creative supply). */
     private static final java.util.Set<String> CREATIVE = new java.util.HashSet<>();
 
@@ -131,6 +139,13 @@ public final class AutoTest {
         // Only an ae2wtlib terminal (pattern encoding): AE2's own hotkey can't open it, ae2wtlib's must.
         scenario("me-wtlib", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
         FROM_ME.add("me-wtlib");
+        // Materials from a Refined Storage network (needs RS and RS Quartz Arsenal in run/mods).
+        scenario("rs-wireless", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        scenario("rs-grid", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
+        FROM_RS.add("rs-wireless");
+        FROM_RS.add("rs-grid");
+        // A stone block, half of it protected, cleared: the protected half must stay.
+        scenario("protect-clear", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 2, 3), 1, false, "builtin", true);
         // Same, but keeping the stone and dirt every scenario starts with (a full inventory: blocks and tools
         // have to be swapped into the hand from the main inventory).
         scenario("me-terminal-full", BuildShape.BOX, new BlockPos(-3, 0, -3), new BlockPos(3, 0, 3), 4, true, "builtin", true);
@@ -230,7 +245,7 @@ public final class AutoTest {
             case START -> {
                 // The arena clear runs on the server; plan only once it has reached us, or leftovers of the
                 // last scenario count as "already built" (a dome came out with a hole in its top that way).
-                if (!arenaClear(mc) && ++clearWaits < 20) {
+                if (!current.name().equals("protect-clear") && !arenaClear(mc) && ++clearWaits < 20) {
                     wait = 10;
                     return;
                 }
@@ -239,7 +254,7 @@ public final class AutoTest {
                 if (FROM_ME.contains(s.name()) && meStage < 2) {
                     // Build the network, let it boot, then fill it and hand out the terminal.
                     if (meStage == 0) {
-                        com.testrts.rtsclient.storage.MeNetwork.get().reset();
+                        forgetStorage();
                         meBuild(mc);
                         wait = 60;
                     } else {
@@ -259,11 +274,37 @@ public final class AutoTest {
                     return;
                 }
                 meStage = 0;
+                if (FROM_RS.contains(s.name()) && rsStage < 3) {
+                    // Build the network and hand over a disk (it gets its storage in the inventory), put the
+                    // disk in the drive, then fill the network and hand out / link what the scenario uses.
+                    if (rsStage == 0) {
+                        forgetStorage();
+                        rsBuild(mc);
+                        wait = 40;
+                    } else if (rsStage == 1) {
+                        rsDisk(mc);
+                        wait = 40;
+                    } else {
+                        rsFill(mc, s.name().equals("rs-wireless"));
+                        if (s.name().equals("rs-grid")) {
+                            BlockPos g = RS_CONTROLLER.west();
+                            var side = com.testrts.rtsclient.storage.Rs2.GRID.terminalSideAt(mc.level.getBlockEntity(g),
+                                    net.minecraft.world.phys.Vec3.atCenterOf(g).add(0, 0, -0.5), net.minecraft.core.Direction.NORTH);
+                            report("    Link tool on the RS crafting grid: " + (side != null ? "linked" : "NOT a grid"));
+                            com.testrts.rtsclient.storage.MeNetwork.of(com.testrts.rtsclient.storage.Rs2.GRID).toggle(g,
+                                    side != null ? side : net.minecraft.core.Direction.NORTH);
+                        }
+                        wait = 20;
+                    }
+                    rsStage++;
+                    return;
+                }
+                rsStage = 0;
                 RtsConfig cfg = RtsConfig.get();
                 cfg.engine = s.engine();
                 cfg.airPlace = s.airPlace();
                 OrderPlanner.Request r = new OrderPlanner.Request(ToolMode.BUILD, s.shape(), BuildMode.FILL, s.a(), s.b(),
-                        s.height(), s.hollow(), (FROM_STORAGE.contains(s.name()) || FROM_ME.contains(s.name()) ? Blocks.STONE_BRICKS : Blocks.STONE).defaultBlockState(),
+                        s.height(), s.hollow(), (FROM_STORAGE.contains(s.name()) || FROM_ME.contains(s.name()) || FROM_RS.contains(s.name()) ? Blocks.STONE_BRICKS : Blocks.STONE).defaultBlockState(),
                         null, 100_000, List.of(), true,
                         com.testrts.rtsclient.build.MixPattern.RANDOM);
                 if (s.preset() != null) {
@@ -281,10 +322,27 @@ public final class AutoTest {
                 } else {
                     order = OrderPlanner.plan(mc.level, r).changes();
                 }
+                if (s.name().equals("protect-clear")) {
+                    // Clear the whole block, with x <= 0 protected.
+                    com.testrts.rtsclient.build.Protection.get().clear();
+                    com.testrts.rtsclient.build.Protection.get().add(com.testrts.rtsclient.build.Protection.Area.of(O.offset(-3, 0, -3), O.offset(0, 0, 3)));
+                    order = new java.util.LinkedHashMap<>();
+                    for (BlockPos p : BlockPos.betweenClosed(O.offset(-3, 0, -3), O.offset(3, 2, 3))) {
+                        order.put(p.immutable(), Blocks.AIR.defaultBlockState());
+                    }
+                    task = new BuildTask("autotest " + s.name(), order, true);
+                    TaskQueue.get().add(task);
+                    TaskQueue.get().start();
+                    ticks = 0;
+                    minHealth = mc.player.getHealth();
+                    log("start %s: %d blocks to clear, x <= 0 protected", s.name(), order.size());
+                    phase = Phase.RUN;
+                    return;
+                }
                 if (FROM_STORAGE.contains(s.name())) {
                     // Like pressing Scan nearby: link the chests and read them; the build then fetches.
                     new com.testrts.rtsclient.screen.WorldActions(mc, RtsController.get()).scanNearby();
-                } else if (FROM_ME.contains(s.name())) {
+                } else if (FROM_ME.contains(s.name()) || FROM_RS.contains(s.name())) {
                     // Nothing to give: the build has to get its bricks from the network.
                 } else if (s.preset() == null) {
                     // Railings, lanterns...: anything besides the stone every scenario gets.
@@ -389,7 +447,7 @@ public final class AutoTest {
         cmd(mc, "give @s dirt 256");
         cmd(mc, "give @s diamond_pickaxe");
         cmd(mc, "give @s diamond_shovel");
-        if (FROM_ME.contains(s.name()) && !s.name().endsWith("-full")) {
+        if ((FROM_ME.contains(s.name()) || FROM_RS.contains(s.name())) && !s.name().endsWith("-full")) {
             // Bricks and scaffolding dirt are only in the AE2 network.
             cmd(mc, "clear @s minecraft:stone");
             cmd(mc, "clear @s minecraft:dirt");
@@ -408,6 +466,9 @@ public final class AutoTest {
         }
         if (CREATIVE.contains(s.name())) {
             cmd(mc, "gamemode creative");
+        }
+        if (s.name().equals("protect-clear")) {
+            cmd(mc, String.format(Locale.ROOT, "fill -3 %d -3 3 %d 3 stone", y0, y0 + 2));
         }
         cmd(mc, String.format(Locale.ROOT, "tp @s %d %d %d", s.start().getX(), s.start().getY(), s.start().getZ()));
     }
@@ -444,7 +505,7 @@ public final class AutoTest {
                     boolean otherHalf = order.containsKey(p.below())
                             && level.getBlockState(p).getBlock() == level.getBlockState(p.below()).getBlock();
                     boolean ours = FROM_STORAGE.contains(current.name()) && level.getBlockState(p).is(Blocks.CHEST)
-                            || FROM_ME.contains(current.name()) && isAe2(level.getBlockState(p));
+                            || (FROM_ME.contains(current.name()) || FROM_RS.contains(current.name())) && isAe2(level.getBlockState(p));
                     if (!level.getBlockState(p).isAir() && !order.containsKey(p) && !otherHalf && !ours) {
                         stray++;
                         if (strays.size() < 12) {
@@ -477,6 +538,33 @@ public final class AutoTest {
                     com.testrts.rtsclient.storage.MeNetwork.get().wirelessUsable(mc),
                     com.testrts.rtsclient.storage.MeNetwork.get().terminals().size()));
         }
+        if (current.name().equals("protect-clear")) {
+            int kept = 0;
+            int keptProtected = 0;
+            int protectedTotal = 0;
+            for (BlockPos p : order.keySet()) {
+                boolean prot = p.getX() <= 0;
+                boolean stone = level.getBlockState(p).is(Blocks.STONE);
+                if (prot) {
+                    protectedTotal++;
+                    if (stone) {
+                        keptProtected++;
+                    }
+                } else if (stone) {
+                    kept++;
+                }
+            }
+            report(String.format(Locale.ROOT, "    PROTECT: %d of %d protected blocks still stone (want all), %d unprotected left (want 0) -> %s",
+                    keptProtected, protectedTotal, kept, keptProtected == protectedTotal && kept == 0 ? "OK" : "WRONG"));
+            com.testrts.rtsclient.build.Protection.get().clear();
+        }
+        if (FROM_RS.contains(current.name())) {
+            var rs = com.testrts.rtsclient.storage.MeNetwork.of(com.testrts.rtsclient.storage.Rs2.GRID);
+            int carried = mc.player.getInventory().countItem(net.minecraft.world.item.Items.STONE_BRICKS);
+            report(String.format(Locale.ROOT, "    RS: stone bricks %d left in the network (of %d), %d carried, %d placed; client sees %d, wireless=%s, grids=%d",
+                    rsCount(mc, net.minecraft.world.item.Items.STONE_BRICKS), STORED_BRICKS, carried, order.size() - missing,
+                    rs.count(net.minecraft.world.item.Items.STONE_BRICKS), rs.wirelessUsable(mc), rs.terminals().size()));
+        }
         if (!missed.isEmpty()) {
             report("    missed: " + missed.stream().map(p -> p.subtract(O).toShortString()).toList());
         }
@@ -488,7 +576,8 @@ public final class AutoTest {
     // ------------------------------------------------------------------ AE2 test network (server side, by reflection)
 
     private static boolean isAe2(BlockState st) {
-        return net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).getNamespace().equals("ae2");
+        String ns = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(st.getBlock()).getNamespace();
+        return ns.equals("ae2") || ns.equals("refinedstorage");
     }
 
     private static net.minecraft.world.item.Item ae2Item(String id) {
@@ -623,6 +712,130 @@ public final class AutoTest {
                     Class.forName("appeng.api.config.Actionable"), Class.forName("appeng.api.networking.security.IActionSource"))
                     .invoke(storage, itemKey(item), Long.MAX_VALUE, actionable("SIMULATE"), noSource());
         });
+        return out[0];
+    }
+
+    // ------------------------------------------------------------------ Refined Storage test network
+
+    /** Forget every link and remembered content (left over from earlier scenarios or runs). */
+    private static void forgetStorage() {
+        com.testrts.rtsclient.storage.StorageManager.get().unlinkAll();
+        for (com.testrts.rtsclient.storage.MeNetwork n : com.testrts.rtsclient.storage.MeNetwork.all()) {
+            n.reset();
+        }
+    }
+
+    private static net.minecraft.world.item.Item modItem(String id) {
+        return net.minecraft.core.registries.BuiltInRegistries.ITEM.get(net.minecraft.resources.ResourceLocation.parse(id));
+    }
+
+    private static BlockState modBlock(String id) {
+        return net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse(id)).defaultBlockState();
+    }
+
+    /** Creative controller, disk drive, crafting grid and wireless transmitter; a 64k disk into the inventory. */
+    private static void rsBuild(Minecraft mc) {
+        onServer(mc, "RS network", (level, player) -> {
+            BlockPos c = RS_CONTROLLER;
+            level.setBlockAndUpdate(c, modBlock("refinedstorage:creative_controller"));
+            level.setBlockAndUpdate(c.east(), modBlock("refinedstorage:disk_drive"));
+            level.setBlockAndUpdate(c.west(), modBlock("refinedstorage:crafting_grid"));
+            // The transmitter's state is the one a player placing it on top of the controller would get, so its
+            // direction (and with it, the side it connects on) is what RS expects.
+            var transmitter = new net.minecraft.world.item.ItemStack(modItem("refinedstorage:wireless_transmitter"));
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, transmitter);
+            var top = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(c).add(0, 0.5, 0),
+                    net.minecraft.core.Direction.UP, c, false);
+            var block = ((net.minecraft.world.item.BlockItem) transmitter.getItem()).getBlock();
+            BlockState placedState = block.getStateForPlacement(new net.minecraft.world.item.context.BlockPlaceContext(
+                    player, net.minecraft.world.InteractionHand.MAIN_HAND, transmitter, top));
+            player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
+            level.setBlockAndUpdate(c.above(), placedState);
+            log("RS wireless transmitter placed as %s", level.getBlockState(c.above()));
+            // A new disk gets its storage while it ticks in an inventory.
+            player.getInventory().setItem(30, new net.minecraft.world.item.ItemStack(modItem("refinedstorage:64k_storage_disk")));
+            log("RS network placed at %s", c.toShortString());
+        });
+    }
+
+    private static void rsDisk(Minecraft mc) {
+        onServer(mc, "RS disk", (level, player) -> {
+            var disk = player.getInventory().getItem(30).copy();
+            player.getInventory().setItem(30, net.minecraft.world.item.ItemStack.EMPTY);
+            Object drive = level.getBlockEntity(RS_CONTROLLER.east());
+            var inv = (net.minecraft.world.Container) drive.getClass().getMethod("getDiskInventory").invoke(drive);
+            inv.setItem(0, disk);
+            log("RS disk in the drive: %s", disk);
+        });
+    }
+
+    /** The RS network the block at {@code pos} is part of, or null. */
+    private static Object rsNetwork(net.minecraft.server.level.ServerLevel level, BlockPos pos) throws ReflectiveOperationException {
+        Object be = level.getBlockEntity(pos);
+        Class<?> containerClass = Class.forName("com.refinedmods.refinedstorage.common.api.support.network.AbstractNetworkNodeContainerBlockEntity");
+        if (!containerClass.isInstance(be)) {
+            return null;
+        }
+        var field = containerClass.getDeclaredField("mainNetworkNode");
+        field.setAccessible(true);
+        Object node = field.get(be);
+        return Class.forName("com.refinedmods.refinedstorage.api.network.node.NetworkNode").getMethod("getNetwork").invoke(node);
+    }
+
+    private static Object rsStorage(net.minecraft.server.level.ServerLevel level) throws ReflectiveOperationException {
+        Object network = rsNetwork(level, RS_CONTROLLER);
+        if (network == null) {
+            throw new IllegalStateException("the controller has no network");
+        }
+        Class<?> component = Class.forName("com.refinedmods.refinedstorage.api.network.storage.StorageNetworkComponent");
+        return Class.forName("com.refinedmods.refinedstorage.api.core.component.ComponentAccessor")
+                .getMethod("getComponent", Class.class).invoke(network, component);
+    }
+
+    private static Object rsKey(net.minecraft.world.item.Item item) throws ReflectiveOperationException {
+        return Class.forName("com.refinedmods.refinedstorage.common.support.resource.ItemResource")
+                .getConstructor(net.minecraft.world.item.Item.class).newInstance(item);
+    }
+
+    private static long rsMove(Object storage, String method, Object key, long amount, String action) throws ReflectiveOperationException {
+        Class<?> keyClass = Class.forName("com.refinedmods.refinedstorage.api.resource.ResourceKey");
+        Class<?> actionClass = Class.forName("com.refinedmods.refinedstorage.api.core.Action");
+        Class<?> actorClass = Class.forName("com.refinedmods.refinedstorage.api.storage.Actor");
+        Object actor = actorClass.getField("EMPTY").get(null);
+        String iface = method.equals("insert") ? "InsertableStorage" : "ExtractableStorage";
+        return (long) Class.forName("com.refinedmods.refinedstorage.api.storage." + iface).getMethod(method, keyClass, long.class, actionClass, actorClass)
+                .invoke(storage, key, amount, actionClass.getField(action).get(null), actor);
+    }
+
+    /** Bricks and dirt into the network; for the wireless test, a bound creative wireless crafting grid. */
+    private static void rsFill(Minecraft mc, boolean wireless) {
+        onServer(mc, "RS fill", (level, player) -> {
+            Object storage = rsStorage(level);
+            log("RS transmitter on the controller's network: %s", rsNetwork(level, RS_CONTROLLER.above()) == rsNetwork(level, RS_CONTROLLER)
+                    && rsNetwork(level, RS_CONTROLLER) != null);
+            long bricks = rsMove(storage, "insert", rsKey(net.minecraft.world.item.Items.STONE_BRICKS), STORED_BRICKS, "EXECUTE");
+            long dirt = rsMove(storage, "insert", rsKey(net.minecraft.world.item.Items.DIRT), 128, "EXECUTE");
+            log("RS network filled: %d stone bricks, %d dirt", bricks, dirt);
+            if (wireless) {
+                var stack = new net.minecraft.world.item.ItemStack(modItem("refinedstorage_quartz_arsenal:creative_wireless_crafting_grid"));
+                player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, stack);
+                BlockPos drive = RS_CONTROLLER.east();
+                var hit = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(drive).add(0, 0.5, 0),
+                        net.minecraft.core.Direction.UP, drive, false);
+                var result = stack.useOn(new net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND, hit));
+                var bound = player.getItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND).copy();
+                player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, net.minecraft.world.item.ItemStack.EMPTY);
+                // Out of the hotbar, so it isn't in the way of the blocks being placed.
+                player.getInventory().setItem(20, bound);
+                log("RS wireless crafting grid bound (%s) and given", result);
+            }
+        });
+    }
+
+    /** How many of {@code item} the RS network holds right now (asked on the server). */
+    private static long rsCount(Minecraft mc, net.minecraft.world.item.Item item) {
+        long[] out = {-1};
+        onServer(mc, "RS count", (level, player) -> out[0] = rsMove(rsStorage(level), "extract", rsKey(item), Long.MAX_VALUE, "SIMULATE"));
         return out[0];
     }
 

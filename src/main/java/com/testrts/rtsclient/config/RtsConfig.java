@@ -54,6 +54,17 @@ public final class RtsConfig {
     public boolean airPlace = true;
     /** When the player may fly (creative...), the builder flies to blocks instead of walking. */
     public boolean creativeFlight = true;
+    /**
+     * Also fly to blocks in survival when an item lets you fly (Angel Ring, flight charms...). Off: the
+     * builder walks there (it lands first if you're flying). Mining in the air is 5x slower in survival.
+     */
+    public boolean flySurvival = false;
+    /**
+     * Built-in engine mining speed. 0 Normal: aim exactly, the game's 5-tick pause between blocks.
+     * 1 Fast: start once roughly facing the block (still turning), no pause. 2 Fastest: start right away
+     * while turning, no pause (closest to Baritone). Strict anti-cheat plugins may notice the missing pause.
+     */
+    public int miningSpeed = 1;
     /** In creative mode, spawn the blocks a build needs instead of fetching them or stopping. */
     public boolean creativeSupply = true;
     /**
@@ -61,6 +72,8 @@ public final class RtsConfig {
      * terminals you linked, before walking to chests.
      */
     public boolean useAe2 = true;
+    /** With Refined Storage: the same through a wireless (crafting) grid or linked grids. */
+    public boolean useRefinedStorage = true;
     /** Start orders as soon as they're queued (off: they wait for the Start button). */
     public boolean autoStart = false;
     /** Outside RTS mode, show the ghost blocks of queued builds (to place blocks by hand). Toggle: H. */

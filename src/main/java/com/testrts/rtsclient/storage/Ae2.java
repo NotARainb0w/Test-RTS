@@ -32,6 +32,88 @@ public final class Ae2 {
     public record Entry(long serial, Item item, long amount) {
     }
 
+    /** AE2 as one of the storage mods the builder takes items from. */
+    public static final GridMod GRID = new GridMod() {
+        @Override
+        public String name() {
+            return "ME";
+        }
+
+        @Override
+        public String terminalName() {
+            return "ME terminal";
+        }
+
+        @Override
+        public String fileSuffix() {
+            return "me";
+        }
+
+        @Override
+        public boolean enabled() {
+            return com.testrts.rtsclient.config.RtsConfig.get().useAe2 && Ae2.loaded();
+        }
+
+        @Override
+        public int color() {
+            return 0x33D9FF;
+        }
+
+        @Override
+        public boolean isTerminal(@Nullable ScreenHandler menu) {
+            return Ae2.isTerminal(menu);
+        }
+
+        @Override
+        public boolean hasContents(ScreenHandler menu) {
+            return Ae2.hasContents(menu);
+        }
+
+        @Override
+        public List<GridMod.Entry> entries(ScreenHandler menu) {
+            List<GridMod.Entry> out = new ArrayList<>();
+            for (Ae2.Entry e : Ae2.entries(menu)) {
+                out.add(new GridMod.Entry(e.serial(), e.item(), e.amount()));
+            }
+            return out;
+        }
+
+        @Override
+        public boolean takeStack(ScreenHandler menu, Object handle) {
+            return Ae2.takeStack(menu, (Long) handle);
+        }
+
+        @Override
+        public boolean isWireless(ScreenHandler menu) {
+            return Ae2.isWireless(menu);
+        }
+
+        @Override
+        public boolean isWirelessItem(ItemStack stack) {
+            return Ae2.isWirelessTerminal(stack);
+        }
+
+        @Override
+        public List<String> wirelessOpeners() {
+            return Ae2.wirelessHotkeys();
+        }
+
+        @Override
+        public boolean openWireless(String opener) {
+            return Ae2.pressHotkey(opener);
+        }
+
+        @Override
+        public @Nullable Direction terminalSideAt(@Nullable BlockEntity be, net.minecraft.util.math.Vec3d hit, Direction clickedSide) {
+            return Ae2.terminalSideAt(be, hit, clickedSide);
+        }
+
+        @Override
+        public boolean isTerminalAt(@Nullable BlockEntity be, Direction side) {
+            return Ae2.isTerminalPart(be, side);
+        }
+    };
+
     private static boolean tried;
     private static boolean ok;
     private static Class<?> menuClass;

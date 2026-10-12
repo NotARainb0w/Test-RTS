@@ -113,12 +113,17 @@ public final class WorldActions {
             }
             case LINK -> {
                 var partHost = world.getBlockEntity(hit.getBlockPos());
-                var meSide = com.testrts.rtsclient.storage.Ae2.terminalSideAt(partHost, hit.getLocation(), hit.getDirection());
-                if (meSide != null) {
-                    // An AE2 ME terminal (plain, crafting, pattern...): materials can be fetched from its network.
-                    boolean linked = com.testrts.rtsclient.storage.MeNetwork.get().toggle(hit.getBlockPos(), meSide);
-                    Messages.info((linked ? "Linked ME terminal " : "Unlinked ME terminal ") + hit.getBlockPos().toShortString());
-                    return;
+                for (com.testrts.rtsclient.storage.MeNetwork network : com.testrts.rtsclient.storage.MeNetwork.all()) {
+                    if (!network.enabled()) {
+                        continue;
+                    }
+                    var meSide = network.mod().terminalSideAt(partHost, hit.getLocation(), hit.getDirection());
+                    if (meSide != null) {
+                        // An AE2 ME terminal or a Refined Storage grid: materials can be fetched from its network.
+                        boolean linked = network.toggle(hit.getBlockPos(), meSide);
+                        Messages.info((linked ? "Linked " : "Unlinked ") + network.mod().terminalName() + " " + hit.getBlockPos().toShortString());
+                        return;
+                    }
                 }
                 if (com.testrts.rtsclient.storage.Ae2.isPartHost(partHost)) {
                     Messages.warn("No ME terminal there - click the terminal itself");
@@ -134,6 +139,15 @@ public final class WorldActions {
             case BLUEPRINT -> blueprintClick(hit);
             case TERRAIN -> regionClick(hit.getBlockPos(), this::confirmTerrain);
             case MEASURE -> measureClick(hit.getBlockPos());
+            case PROTECT -> {
+                var area = com.testrts.rtsclient.build.Protection.get().areaAt(hit.getBlockPos());
+                if (area != null && this.session.anchorA == null) {
+                    com.testrts.rtsclient.build.Protection.get().remove(area);
+                    Messages.info("Protected area " + area.width() + "x" + area.depth() + " removed");
+                } else {
+                    regionClick(hit.getBlockPos(), this::confirmProtect);
+                }
+            }
         }
     }
 
@@ -337,6 +351,18 @@ public final class WorldActions {
     }
 
     // ------------------------------------------------------------------ terrain
+
+    /** Protect tool: the rectangle between the two corners, at every height. */
+    private void confirmProtect() {
+        BuildSession s = this.session;
+        if (s.anchorA == null || s.anchorB == null) {
+            return;
+        }
+        var area = com.testrts.rtsclient.build.Protection.Area.of(s.anchorA, s.anchorB);
+        s.clearSelection();
+        com.testrts.rtsclient.build.Protection.get().add(area);
+        Messages.success("Protected " + area.width() + "x" + area.depth() + " (all heights): the builder won't break blocks there");
+    }
 
     private void confirmTerrain() {
         BuildSession s = this.session;
@@ -570,7 +596,9 @@ public final class WorldActions {
             return;
         }
         StorageManager.get().pruneMissing(world());
-        com.testrts.rtsclient.storage.MeNetwork.get().pruneMissing(world());
+        for (com.testrts.rtsclient.storage.MeNetwork n : com.testrts.rtsclient.storage.MeNetwork.all()) {
+            n.pruneMissing(world());
+        }
         int added = StorageManager.get().scanNearby(world(), this.client.player.blockPosition(), RtsConfig.get().scanRadius);
         int unread = StorageManager.get().unindexed().size();
         if (unread == 0) {
@@ -588,12 +616,20 @@ public final class WorldActions {
         if (this.client.player == null) {
             return;
         }
-        if (StorageManager.get().linked().isEmpty()) {
-            Messages.warn("No linked storage. Use Link storage mode or Scan nearby first");
+        boolean networks = false;
+        boolean unreadNetworks = false;
+        for (com.testrts.rtsclient.storage.MeNetwork n : com.testrts.rtsclient.storage.MeNetwork.all()) {
+            if (n.reachable(this.client)) {
+                networks = true;
+                unreadNetworks |= !n.indexed();
+            }
+        }
+        if (StorageManager.get().linked().isEmpty() && !networks) {
+            Messages.warn("No linked storage. Use Link storage mode or Scan nearby first (or carry a wireless terminal)");
             return;
         }
-        if (onlyNew && StorageManager.get().unindexed().isEmpty()) {
-            Messages.info("Every linked container is already indexed");
+        if (onlyNew && StorageManager.get().unindexed().isEmpty() && !unreadNetworks) {
+            Messages.info("Every linked container and storage network is already indexed");
             return;
         }
         queue(new IndexStorageTask(this.client.player.blockPosition(), onlyNew));

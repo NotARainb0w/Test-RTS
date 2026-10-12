@@ -42,11 +42,12 @@ Both have the same features and controls.
 | **Left click** | Act with the current tool (below) |
 | Right click | Walk your character to that spot |
 | Middle click | Pick that block as the brush |
-| 1-7 | Tools: Build, Destroy, Interact, Link storage, Blueprint, Terrain, Measure |
+| 1-8 | Tools: Build, Destroy, Interact, Link storage, Blueprint, Terrain, Measure, Protect |
 | Ctrl+0-9 / Shift+0-9 | Save the camera position to a slot / jump back to it |
 | `[` `]` | Previous / next shape |
 | M | Build mode (Fill / Replace / Replace type / Cover), or Terrain mode (Flatten / Light up) |
 | R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
+| I | Dome, pyramid or cone upside down: where you click is the bottom (the tip) and it widens upward - a funnel or bowl to build, or a pit to dig (click its deepest point; cut view helps) |
 | N | Mirror the blueprint being pasted |
 | B, Alt+scroll | Air placement on/off, move its layer up/down |
 | P | Preset buildings |
@@ -233,6 +234,14 @@ summary with Scan nearby / Re-index / Sort / Smelt buttons.
   label with what it holds. **Smelt** collects finished smelting from nearby furnaces, blast furnaces and smokers
   and loads them again with ores, sand, cobblestone or food from storage plus fuel. Messages appear as coloured toasts.
 
+## Protected areas
+
+The **Protect** tool (8) keeps the builder from breaking anything in your base: click two corners, and that
+rectangle is protected at every height (so nothing gets tunnelled underneath either). The builder never digs,
+clears or mines a protected block - those are skipped with a message - and while orders run, the game itself is
+stopped from breaking blocks there (that covers Baritone too). Placing into empty space is still allowed. Click
+inside an area with the Protect tool to remove it. Areas show as red outlines and are saved per world.
+
 ## Storage
 
 The item bar at the bottom shows **your inventory plus everything in linked containers**. Gold counts mean the
@@ -249,7 +258,8 @@ item is only in storage.
 - **Store inv** puts everything outside your hotbar (except pinned items) into linked storage.
 - **Pin** items with right-click to keep them on the quick bar.
 
-Storage links and contents are saved per world/server and dimension in `config/rtsclient/storage/`.
+Storage links and contents are saved per world/server and dimension in `config/rtsclient/storage/`. Links to storage that has been removed are dropped by themselves within a few seconds. **Forget all**
+(click twice) forgets every link, terminal and remembered content in the world.
 
 ### Applied Energistics 2
 
@@ -265,8 +275,23 @@ walks to any chest:
   there's no wireless terminal, the builder walks to the nearest linked one instead. Linked terminals show as
   a cyan plate.
 - The item bar counts what the network holds, from the last time any terminal was open (yours or the
-  builder's). The storage panel shows how the network is reached.
+  builder's). **Index** reads networks that haven't been read yet, **Re-index** reads them all again (through
+  the wireless terminal, or at a linked terminal / grid). The storage panel shows how the network is reached.
 - Turn it off with **Use AE2 for materials** in Settings. It's all treated as one network per world.
+
+
+### Refined Storage (NeoForge)
+
+With Refined Storage 2 (as in ATM10), the same works through RS:
+
+- **Wireless grid**: carry a wireless grid or a wireless crafting grid (RS Quartz Arsenal), bound to your network
+  and in range of a Wireless Transmitter, in any slot (Curios too). The builder opens it where it stands, takes
+  what the build needs and closes it.
+- **Grids**: with the Link tool, click a grid or crafting grid. Without a wireless grid, the builder walks to the
+  nearest linked one. Linked grids show with an orange outline.
+- AE2 is tried first, then RS, then chests. Turn it off with **Use Refined Storage** in Settings.
+
+Prominence II (Fabric 1.20.1) has no Refined Storage, so the Fabric version only supports AE2.
 
 ## Settings
 

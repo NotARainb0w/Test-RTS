@@ -215,6 +215,11 @@ public final class HarvestTask implements RtsTask {
         if (!com.testrts.rtsclient.exec.Look.at(client.player, Vec3d.ofCenter(spot.pos())) && this.breakTicks == 0) {
             return Status.RUNNING;
         }
+        if (com.testrts.rtsclient.build.Protection.get().isProtected(spot.pos())) {
+            Messages.warn("Not harvesting " + spot.pos().toShortString() + ": it's in a protected area");
+            this.target = null;
+            return Status.RUNNING;
+        }
         if (this.breakTicks++ == 0) {
             client.interactionManager.attackBlock(spot.pos(), Direction.UP);
         } else {

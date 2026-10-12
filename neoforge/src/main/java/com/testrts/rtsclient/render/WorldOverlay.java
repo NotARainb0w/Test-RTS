@@ -152,9 +152,14 @@ public final class WorldOverlay {
         if (showShape) {
             BlockPos b = session.anchorB != null ? session.anchorB : hover != null ? targetFor(session, hover) : session.anchorA;
             requestShapePreview(session, session.anchorA, b, controller.camera().yaw());
-            PreviewMesh mesh = session.tool == ToolMode.DESTROY ? SHAPE_CLEAR : SHAPE_GHOST;
-            (session.tool == ToolMode.DESTROY ? SHAPE_GHOST : SHAPE_CLEAR).clear();
-            mesh.draw(matrices, projection, cam);
+            if (session.tool == ToolMode.DESTROY) {
+                // The whole shape: glass where it's empty, red over what will be mined.
+                SHAPE_GHOST.draw(matrices, projection, cam);
+                SHAPE_CLEAR.draw(matrices, projection, cam);
+            } else {
+                SHAPE_CLEAR.clear();
+                SHAPE_GHOST.draw(matrices, projection, cam);
+            }
         } else {
             SHAPE_GHOST.clear();
             SHAPE_CLEAR.clear();
@@ -238,17 +243,39 @@ public final class WorldOverlay {
             }
             LevelRenderer.renderLineBox(matrices, lines, box, 1.0F, c.indexed() ? 0.75F : 0.5F, 0.1F, storageAlpha);
         }
-        // Linked ME terminals: a cyan plate on the terminal's face.
-        for (com.testrts.rtsclient.storage.MeNetwork.Terminal t : com.testrts.rtsclient.storage.MeNetwork.get().terminals()) {
-            BlockPos p = t.pos();
-            if (p.distToCenterSqr(cam.x, cam.y, cam.z) > 160 * 160) {
+        // Protected areas: red columns around the camera's height (they go from the bottom of the world to the top).
+        float protectAlpha = session.tool == ToolMode.PROTECT ? 0.9F : 0.35F;
+        for (com.testrts.rtsclient.build.Protection.Area area : com.testrts.rtsclient.build.Protection.get().areas()) {
+            double cx = Math.max(area.minX(), Math.min(cam.x, area.maxX() + 1));
+            double cz = Math.max(area.minZ(), Math.min(cam.z, area.maxZ() + 1));
+            if ((cx - cam.x) * (cx - cam.x) + (cz - cam.z) * (cz - cam.z) > 200 * 200) {
                 continue;
             }
-            net.minecraft.core.Direction d = t.side();
-            double inset = 0.85;
-            AABB plate = new AABB(p).deflate(0.1).inflate(0.02);
-            plate = plate.contract(-d.getStepX() * inset, -d.getStepY() * inset, -d.getStepZ() * inset);
-            LevelRenderer.renderLineBox(matrices, lines, plate, 0.2F, 0.85F, 1.0F, storageAlpha);
+            int y0 = (int) Math.floor(cam.y) - 48;
+            AABB box = new AABB(area.minX(), y0, area.minZ(), area.maxX() + 1, y0 + 96, area.maxZ() + 1);
+            LevelRenderer.renderLineBox(matrices, lines, box, 1.0F, 0.25F, 0.25F, protectAlpha);
+        }
+        // Linked storage-network terminals: AE2 ones as a plate on the terminal's face (cyan), RS grids as
+        // the whole block (orange).
+        for (com.testrts.rtsclient.storage.MeNetwork network : com.testrts.rtsclient.storage.MeNetwork.all()) {
+            int rgb = network.mod().color();
+            float r = (rgb >> 16 & 255) / 255.0F;
+            float g = (rgb >> 8 & 255) / 255.0F;
+            float bl = (rgb & 255) / 255.0F;
+            boolean plateOnFace = network.mod() == com.testrts.rtsclient.storage.Ae2.GRID;
+            for (com.testrts.rtsclient.storage.MeNetwork.Terminal t : network.terminals()) {
+                BlockPos p = t.pos();
+                if (p.distToCenterSqr(cam.x, cam.y, cam.z) > 160 * 160) {
+                    continue;
+                }
+                AABB plate = new AABB(p).inflate(0.03);
+                if (plateOnFace) {
+                    net.minecraft.core.Direction d = t.side();
+                    double inset = 0.85;
+                    plate = new AABB(p).deflate(0.1).inflate(0.02).contract(-d.getStepX() * inset, -d.getStepY() * inset, -d.getStepZ() * inset);
+                }
+                LevelRenderer.renderLineBox(matrices, lines, plate, r, g, bl, storageAlpha);
+            }
         }
 
         for (RtsTask task : TaskQueue.get().snapshot()) {
@@ -316,6 +343,7 @@ public final class WorldOverlay {
                 case BLUEPRINT -> new float[]{1.0F, 0.84F, 0.3F};
                 case TERRAIN -> new float[]{0.55F, 0.85F, 0.35F};
                 case MEASURE -> new float[]{0.85F, 0.55F, 1.0F};
+                case PROTECT -> new float[]{1.0F, 0.25F, 0.25F};
             };
             // Pulsing outline with a faint outer glow, so the cursor reads at a glance.
             float pulse = (float) (0.5 - 0.5 * Math.cos((System.currentTimeMillis() % 1200) / 1200.0 * Math.PI * 2.0));
@@ -441,6 +469,21 @@ public final class WorldOverlay {
             lastPlan = plan;
             return new PreviewMesh.Blocks(plan.changes(), plan.truncated());
         }, true);
+        if (s.tool == ToolMode.DESTROY) {
+            // Show the shape itself too, as glass in its empty cells, so it can be seen where there's
+            // nothing (yet) to mine.
+            SHAPE_GHOST.request(java.util.List.of("destroy-shape", request), () -> {
+                var shape = com.testrts.rtsclient.build.ShapeGenerator.generate(request.shape(), request.a(), request.b(),
+                        request.height(), request.hollow(), request.limit() + 1, request.inverted());
+                java.util.Map<BlockPos, net.minecraft.world.level.block.state.BlockState> glass = new java.util.LinkedHashMap<>();
+                for (BlockPos p : shape.positions()) {
+                    if (world.getBlockState(p).isAir()) {
+                        glass.put(p, net.minecraft.world.level.block.Blocks.GLASS.defaultBlockState());
+                    }
+                }
+                return new PreviewMesh.Blocks(glass, shape.truncated());
+            }, true);
+        }
     }
 
     /** The most recent preview plan (sizes for the hint line). */

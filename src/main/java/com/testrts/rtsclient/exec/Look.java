@@ -63,6 +63,14 @@ public final class Look {
         return toward(player, r[0], r[1]);
     }
 
+    /** Whether the player already looks within {@code degrees} of {@code target} (no turning). */
+    public static boolean roughly(ClientPlayerEntity player, Vec3d target, float degrees) {
+        float[] r = anglesTo(player, target);
+        float dYaw = MathHelper.wrapDegrees(r[0] - player.getYaw());
+        float dPitch = r[1] - player.getPitch();
+        return dYaw * dYaw + dPitch * dPitch <= degrees * degrees;
+    }
+
     /** Yaw and pitch that look from the player's eyes at {@code target}. */
     public static float[] anglesTo(ClientPlayerEntity player, Vec3d target) {
         Vec3d eye = player.getEyePos();

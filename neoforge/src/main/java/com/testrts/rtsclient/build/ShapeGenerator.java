@@ -36,6 +36,14 @@ public final class ShapeGenerator {
      *               downward (handy for digging). Never zero.
      */
     public static Result generate(BuildShape shape, BlockPos a, BlockPos b, int height, boolean hollow, int limit) {
+        return generate(shape, a, b, height, hollow, limit, false);
+    }
+
+    /**
+     * @param inverted dome, pyramid or cone upside down: the clicked level is the bottom (the tip), the
+     *                 shape widens upward from there (see {@link BuildShape#invertible()})
+     */
+    public static Result generate(BuildShape shape, BlockPos a, BlockPos b, int height, boolean hollow, int limit, boolean inverted) {
         Collector out = new Collector(limit);
         if (height == 0) {
             height = 1;
@@ -60,7 +68,34 @@ public final class ShapeGenerator {
             case VEIN -> vein(out, a);
             case HOLE -> hole(out, a);
         }
+        if (inverted && shape.invertible()) {
+            return flipped(out);
+        }
         return new Result(out.positions, out.truncated, out.facing, out.roles);
+    }
+
+    /**
+     * The shape upside down within its own height: the tip of a pyramid or cone ends up at the clicked
+     * level and the base on top (a funnel); a dome becomes a bowl.
+     */
+    private static Result flipped(Collector out) {
+        int minY = Integer.MAX_VALUE;
+        int maxY = Integer.MIN_VALUE;
+        for (BlockPos p : out.positions) {
+            minY = Math.min(minY, p.getY());
+            maxY = Math.max(maxY, p.getY());
+        }
+        // Mirror within the shape's own height: the bottom stays at the clicked level.
+        int sum = minY + maxY;
+        Set<BlockPos> positions = new LinkedHashSet<>();
+        for (BlockPos p : out.positions) {
+            positions.add(new BlockPos(p.getX(), sum - p.getY(), p.getZ()));
+        }
+        java.util.Map<BlockPos, String> facing = new java.util.HashMap<>();
+        out.facing.forEach((p, f) -> facing.put(new BlockPos(p.getX(), sum - p.getY(), p.getZ()), f));
+        java.util.Map<BlockPos, String> roles = new java.util.HashMap<>();
+        out.roles.forEach((p, r) -> roles.put(new BlockPos(p.getX(), sum - p.getY(), p.getZ()), r));
+        return new Result(positions, out.truncated, facing, roles);
     }
 
     private static final class Collector {

@@ -93,6 +93,21 @@ cell, boosted access point, terminal on a cable) and fill it with 448 stone bric
 | [ ] | NeoForge (ATM10) | Wireless terminal fetch in ATM10 | Same as the dev client |
 | [ ] | Fabric | Same scenarios on Fabric (harness not ported yet) | Same as NeoForge |
 
+## Refined Storage (NeoForge dev client has RS 2.0.9 + RS Quartz Arsenal 1.0.8)
+
+NeoForge live tests build an RS network (creative controller, disk drive with a 64k disk, crafting grid, wireless
+transmitter) and fill it with 448 stone bricks and 128 dirt: `cd neoforge && ./gradlew runClient -Pautotest=rs-wireless,rs-grid -Pautoquit`.
+
+| Done | What | How | Result |
+|---|---|---|---|
+| [x] | Wireless crafting grid | `rs-wireless`: only a bound creative wireless crafting grid carried | PASS 146/146 in 76s; opened twice (bricks, then scaffolding dirt), 192 bricks out = 146 placed + 46 carried, client count matches |
+| [x] | Linked grid | `rs-grid`: crafting grid linked, no wireless | PASS 146/146 in 58s; walks to the grid, 192 bricks out = 146 placed + 46 carried |
+| [ ] | Plain wireless grid | RS's own wireless grid instead | Opens and fetches the same way |
+| [ ] | Curios slot | Wireless grid in a Curios slot (ATM10) | Found and opened |
+| [ ] | Out of range | No wireless transmitter in range | Gives up quickly, falls back to a linked grid or chests |
+| [ ] | AE2 + RS | Both networks, items split between them | AE2 first, then RS, then chests |
+| [ ] | ATM10 | Real RS network in ATM10 | Same as the dev client |
+
 ## Modded storage (ATM10)
 
 | Done | What | How | Result |
@@ -129,6 +144,18 @@ cell, boosted access point, terminal on a cable) and fill it with 448 stone bric
 | [ ] | Server-safe X | Server-safe on: look at a block face next to a ghost, hold X | Places like a normal right-click into the ghost cell; nothing when the crosshair isn't next to a ghost |
 | [ ] | Anti-cheat server | Hold Z / X on a server with Grim or NCP, server-safe on | No flags or rubber-banding |
 | [ ] | Speed | Server-safe off, Hold-Z place speed 20 | About 20 blocks a second; with server-safe on, 5 |
+| [ ] | Index reads networks | Carry a wireless terminal / grid (or link an ME terminal / RS grid), press Index | "Read ME/RS network" in the queue, terminal opens and closes, item bar shows the network's items; "Indexed N container(s) and M storage network(s)" |
+| [ ] | Re-index | Re-index with networks already read | Reads every reachable network again |
+| [ ] | Mining range on a server | Clear order on the ATM10 server | Blocks stay mined (no popping back); if one does, "The server put X back - mining it from closer" and it's mined from close up |
+| [ ] | Protected clear | `protect-clear` (NeoForge): stone block, half protected, cleared | Protected half stays, the rest is mined |
+| [ ] | Protect tool | Tool 8, two corners around a base, then order a big clear / quarry over it | Red outline; nothing inside is broken ("in a protected area"); click inside to remove |
+| [ ] | Protect + Baritone | Same with the Baritone engine | Baritone can't break inside (blocked), may route around |
+| [ ] | Survival flight item | ATM10 survival with an Angel Ring, flying, give a build order | Lands first, then walks; with "Fly with flight items" on, flies to blocks |
+| [ ] | Removed storage | Link a chest / ME terminal / RS grid, break it | "... are gone - unlinked" within a few seconds; the builder never walks to it |
+| [ ] | Cursor offset | RTS mode while flying / sprinting / with Speed | Cursor highlight stays under the mouse (view uses the plain FOV setting) |
+| [ ] | Inverted shapes | Dome / pyramid / cone, I or the Inverted button | Built upside down in the same space (funnel, bowl); preview updates |
+| [ ] | Inverted digging | Destroy tool, cut view down, inverted dome / cone clicked at the deepest point of a pit | Red preview widening upward from the click to the surface; clearing digs the pit |
+| [ ] | Forget all | Storage panel, click twice | Every link, ME/RS terminal and remembered content forgotten |
 | [ ] | Controls panel | F1, or the ? button in RTS mode | Panel with every control, two columns on small screens; click or F1/Esc closes it |
 
 ## Patterns

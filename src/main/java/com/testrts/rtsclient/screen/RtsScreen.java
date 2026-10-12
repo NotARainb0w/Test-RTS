@@ -65,6 +65,11 @@ import java.util.Map;
 public final class RtsScreen extends Screen {
     // Layout
     private static final int TOP_H = 24;
+    /** Smallest screen (in GUI pixels) the RTS UI fits on; below that it is drawn scaled down. */
+    private static final int MIN_W = 560;
+    private static final int MIN_H = 380;
+    /** How much the UI is scaled down (1 = not at all); mouse positions are divided by it. */
+    private float uiScale = 1.0F;
     private static final int LEFT_W = 134;
     private static final int RIGHT_W = 164;
     private static final int SLOT = 18;
@@ -108,6 +113,8 @@ public final class RtsScreen extends Screen {
     private int shapeNameY = -1;
     private int ordersTop;
     private int ordersBottom;
+    /** When Forget all was clicked once; a second click within 3 seconds confirms. */
+    private long forgetArmedAt;
     private int storageTop;
     private List<Blueprint> blueprints = new ArrayList<>();
     private boolean blueprintsLoaded;
@@ -203,6 +210,7 @@ public final class RtsScreen extends Screen {
             case BLUEPRINT -> Items.MAP;
             case TERRAIN -> Items.GRASS_BLOCK;
             case MEASURE -> Items.SPYGLASS;
+            case PROTECT -> Items.SHIELD;
         });
     }
 
@@ -231,6 +239,14 @@ public final class RtsScreen extends Screen {
 
     @Override
     protected void init() {
+        // Small window or big GUI scale: lay the UI out for at least MIN_W x MIN_H and draw it scaled down
+        // to fit, instead of panels overlapping or running off the screen. Always from the real size, since
+        // init() also runs again on tool changes.
+        int realW = this.client.getWindow().getScaledWidth();
+        int realH = this.client.getWindow().getScaledHeight();
+        this.uiScale = Math.min(1.0F, Math.min((float) realW / MIN_W, (float) realH / MIN_H));
+        this.width = Math.round(realW / this.uiScale);
+        this.height = Math.round(realH / this.uiScale);
         this.lastFrameNanos = System.nanoTime();
         this.actions = new WorldActions(this.client, this.controller);
 
@@ -345,11 +361,21 @@ public final class RtsScreen extends Screen {
         button("Smelt", "Collect finished smelting from nearby furnaces, then load them with ores/food from storage and fuel",
                 rx + half + 2, sy + 36, half, 16, () -> WorldActions.queue(new com.testrts.rtsclient.task.SmeltTask()))
                 .icon(new ItemStack(Items.FURNACE));
-        button("Unlink all", "Forget every storage link", rx + half + 2, sy + 18, half, 16, () -> {
+        button("Forget all", "Forget every linked storage in this world: chests and other containers, ME terminals, RS grids, "
+                + "what they hold and the wireless terminals that worked. Click twice to confirm.", rx + half + 2, sy + 18, half, 16, () -> {
+            long now = System.currentTimeMillis();
+            if (now - this.forgetArmedAt > 3000) {
+                this.forgetArmedAt = now;
+                Messages.warn("Click Forget all again to forget every linked storage in this world");
+                return;
+            }
+            this.forgetArmedAt = 0;
             StorageManager.get().unlinkAll();
-            com.testrts.rtsclient.storage.MeNetwork.get().unlinkAll();
-            Messages.info("Storage links cleared");
-        });
+            for (com.testrts.rtsclient.storage.MeNetwork n : com.testrts.rtsclient.storage.MeNetwork.all()) {
+                n.reset();
+            }
+            Messages.info("Forgot every linked storage");
+        }).glyph(Glyphs.CROSS, Theme.BAD).dynamic(() -> System.currentTimeMillis() - this.forgetArmedAt <= 3000 ? "Sure?" : "Forget all");
     }
 
     private void section(int y, String name) {
@@ -395,8 +421,13 @@ public final class RtsScreen extends Screen {
                     }).dynamic(() -> "Mode: " + s.mode.label()).left();
                     y += ROW;
                 }
-                button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, full, ROW - 1,
+                button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, col, ROW - 1,
                         () -> s.hollow = !s.hollow).selected(() -> s.hollow).dynamic(() -> s.hollow ? "Hollow: on" : "Hollow: off").left();
+                button("Inverted", "Dome, pyramid and cone upside down: where you click is the bottom (the tip) and it widens upward - a funnel "
+                                + "or bowl to build, or a pit to dig (click its deepest point; cut view [V] helps) [I]",
+                        x + col + 2, y, full - col - 2, ROW - 1, () -> s.inverted = !s.inverted)
+                        .selected(() -> s.inverted && s.shape.invertible()).enabled(() -> s.shape.invertible())
+                        .dynamic(() -> s.inverted ? "Inverted" : "Upright").left();
                 y += ROW;
                 button("-", "Move the air layer down [Alt+scroll]", x, y, 16, ROW - 1, () -> s.airY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly()
                         .enabled(() -> s.airPlace);
@@ -885,6 +916,8 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
+        mx /= this.uiScale;
+        my /= this.uiScale;
         if (this.showControls && !(my < TOP_H && mx >= this.width - PAD - 42 && mx < this.width - PAD - 20)) {
             this.showControls = false;
             return true;
@@ -947,6 +980,10 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
+        mx /= this.uiScale;
+        my /= this.uiScale;
+        dx /= this.uiScale;
+        dy /= this.uiScale;
         if (this.dragTask != null && button == 0) {
             if (Math.abs(my - this.dragFromY) > DRAG_THRESHOLD) {
                 this.dragMoved = true;
@@ -971,6 +1008,8 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseReleased(double mx, double my, int button) {
+        mx /= this.uiScale;
+        my /= this.uiScale;
         if (this.dragTask != null && button == 0) {
             if (this.dragMoved) {
                 int row = Math.max(0, (int) ((my - this.ordersTop + (CARD_H + 2) / 2.0) / (CARD_H + 2)));
@@ -1009,6 +1048,8 @@ public final class RtsScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mx, double my, double amount) {
+        mx /= this.uiScale;
+        my /= this.uiScale;
         if (my >= bottomY()) {
             int rows = (this.palette.size() + gridCols() - 1) / gridCols();
             this.gridScroll = MathHelper.clamp(this.gridScroll - (int) Math.signum(amount), 0, Math.max(0, rows - GRID_ROWS));
@@ -1025,8 +1066,11 @@ public final class RtsScreen extends Screen {
         if (hasControlDown()) {
             if (this.session.tool == ToolMode.TERRAIN) {
                 this.session.terrainClearHeight = MathHelper.clamp(this.session.terrainClearHeight + (amount > 0 ? 1 : -1), 1, 64);
-            } else {
+            } else if (this.session.shape.usesHeight()) {
                 this.session.adjustHeight(amount > 0 ? 1 : -1);
+                Messages.info(this.session.shape.label() + " height " + this.session.height);
+            } else {
+                Messages.info(this.session.shape.label() + " has no height: its size comes from the second point you click");
             }
             return true;
         }
@@ -1114,6 +1158,12 @@ public final class RtsScreen extends Screen {
                 }
             }
             case GLFW.GLFW_KEY_H -> s.hollow = !s.hollow;
+            case GLFW.GLFW_KEY_I -> {
+                if (s.shape.invertible()) {
+                    s.inverted = !s.inverted;
+                    Messages.info(s.shape.label() + (s.inverted ? " upside down" : " upright"));
+                }
+            }
             case GLFW.GLFW_KEY_B -> toggleAir();
             case GLFW.GLFW_KEY_P -> this.client.setScreen(new PresetScreen(this));
             case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> this.actions.confirm();
@@ -1203,6 +1253,17 @@ public final class RtsScreen extends Screen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        if (this.uiScale >= 1.0F) {
+            renderScaled(ctx, mouseX, mouseY, delta);
+            return;
+        }
+        ctx.getMatrices().push();
+        ctx.getMatrices().scale(this.uiScale, this.uiScale, 1.0F);
+        renderScaled(ctx, Math.round(mouseX / this.uiScale), Math.round(mouseY / this.uiScale), delta);
+        ctx.getMatrices().pop();
+    }
+
+    private void renderScaled(DrawContext ctx, int mouseX, int mouseY, float delta) {
         moveCamera();
         this.controller.setHover(overUi(mouseX, mouseY) ? null : pick(mouseX, mouseY));
         this.hoverEntity = this.session.tool == ToolMode.INTERACT && !overUi(mouseX, mouseY) ? pickEntity(mouseX, mouseY) : null;
@@ -1259,10 +1320,11 @@ public final class RtsScreen extends Screen {
             {"Left click", "Use the current tool"},
             {"Right click", "Walk your character there"},
             {"Middle click", "Pick that block as the brush"},
-            {"1-7", "Build, Destroy, Interact, Link, Blueprint, Terrain, Measure"},
+            {"1-8", "Build, Destroy, Interact, Link, Blueprint, Terrain, Measure, Protect"},
             {"[  ]", "Previous / next shape"},
             {"M", "Build mode / terrain mode"},
             {"R / H", "Rotate / hollow on-off"},
+            {"I", "Dome, pyramid, cone upside down"},
             {"N", "Mirror the blueprint being pasted"},
             {"B, Alt+scroll", "Mid-air placing, move its layer"},
             {"Ctrl+scroll", "Shape height"},
@@ -1604,17 +1666,25 @@ public final class RtsScreen extends Screen {
 
     /** One line about the AE2 network, or null without AE2 (or with it turned off). */
     private String meStatus() {
-        com.testrts.rtsclient.storage.MeNetwork me = com.testrts.rtsclient.storage.MeNetwork.get();
-        if (!com.testrts.rtsclient.storage.MeNetwork.enabled() || this.client.player == null) {
+        if (this.client == null || this.client.player == null) {
             return null;
         }
-        boolean wireless = me.wirelessUsable(this.client);
-        int terminals = me.terminals().size();
-        if (!wireless && terminals == 0) {
-            return "ME: carry a wireless terminal or link an ME terminal";
+        List<String> parts = new ArrayList<>();
+        for (com.testrts.rtsclient.storage.MeNetwork me : com.testrts.rtsclient.storage.MeNetwork.all()) {
+            if (!me.enabled()) {
+                continue;
+            }
+            String name = me.mod().name();
+            boolean wireless = me.wirelessUsable(this.client);
+            int terminals = me.terminals().size();
+            if (!wireless && terminals == 0) {
+                parts.add(name + ": carry a wireless " + me.mod().terminalName() + " or link one");
+                continue;
+            }
+            String how = wireless ? "wireless" : terminals + " linked";
+            parts.add(name + " (" + how + "): " + (me.indexed() ? me.items().size() + " types" : "not opened yet"));
         }
-        String how = wireless ? "wireless" : terminals + " terminal" + (terminals == 1 ? "" : "s");
-        return "ME (" + how + "): " + (me.indexed() ? me.items().size() + " item types" : "not opened yet");
+        return parts.isEmpty() ? null : String.join(" | ", parts);
     }
 
     private void drawDockBackgrounds(DrawContext ctx) {
@@ -1746,6 +1816,8 @@ public final class RtsScreen extends Screen {
             }
             case TERRAIN -> chips.add(s.terrainMode.label() + ": click two corners");
             case MEASURE -> chips.add("Click two points");
+            case PROTECT -> chips.add(com.testrts.rtsclient.build.Protection.get().areas().isEmpty() ? "Click two corners of your base"
+                    : com.testrts.rtsclient.build.Protection.get().areas().size() + " protected - click inside one to remove it");
         }
         if (s.roofPick) {
             chips.add("click a wall top for the " + s.roofStyle.label().toLowerCase(Locale.ROOT) + " roof");

@@ -20,8 +20,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Pulls items out of storage: first the AE2 network (wireless terminal, or the nearest linked ME
- * terminal) when there is one, then linked containers, visiting the nearest ones that have what we need.
+ * Pulls items out of storage: first the storage networks (AE2, Refined Storage: wireless terminal, or
+ * the nearest linked terminal / grid) when there are any, then linked containers, visiting the nearest ones that have what we need.
  */
 public final class FetchTask implements RtsTask {
     private static final int CLICKS_PER_TICK = 6;
@@ -32,7 +32,9 @@ public final class FetchTask implements RtsTask {
     private RtsTask visit;
     /** AE2 network: tried (or found nothing to try), and how many terminals we tried to open. */
     private boolean meDone;
-    private int meAttempts;
+    /** Per network: tries so far (wireless, then a terminal), and whether it's been dealt with. */
+    private final Map<MeNetwork, Integer> meAttempts = new java.util.HashMap<>();
+    private final java.util.Set<MeNetwork> meFinished = new java.util.HashSet<>();
     private Map<Item, Integer> before;
 
     public FetchTask(Map<Item, Integer> wanted) {
@@ -60,8 +62,8 @@ public final class FetchTask implements RtsTask {
             if (s == Status.RUNNING) {
                 return Status.RUNNING;
             }
-            if (this.visit instanceof MeFetchTask && s == Status.DONE) {
-                this.meDone = true;
+            if (this.visit instanceof MeFetchTask me && s == Status.DONE) {
+                this.meFinished.add(me.network());
             }
             settle(player.getInventory());
             this.visit = null;
@@ -77,7 +79,7 @@ public final class FetchTask implements RtsTask {
         if (!this.meDone) {
             MeFetchTask me = meVisit(client, player.getBlockPos());
             if (me != null) {
-                this.meAttempts++;
+                this.meAttempts.merge(me.network(), 1, Integer::sum);
                 this.before = counts(player.getInventory());
                 this.visit = me;
                 return Status.RUNNING;
@@ -96,28 +98,32 @@ public final class FetchTask implements RtsTask {
     }
 
     /**
-     * Get what the AE2 network may have: through the wireless terminal, or if that can't be used
-     * (or just failed), at the nearest linked ME terminal. Null when there's nothing to try.
+     * Get what a storage network (AE2, then Refined Storage) may have: through its wireless terminal, or
+     * if that can't be used (or just failed), at its nearest linked terminal. Null when there's nothing to try.
      */
     private MeFetchTask meVisit(MinecraftClient client, BlockPos near) {
-        MeNetwork me = MeNetwork.get();
-        if (this.meAttempts >= 2 || !me.reachable(client)) {
-            return null;
-        }
-        Map<Item, Integer> fromMe = new LinkedHashMap<>();
-        this.remaining.forEach((item, n) -> {
-            if (me.mightHave(client, item)) {
-                fromMe.put(item, n);
+        for (MeNetwork me : MeNetwork.all()) {
+            if (this.meFinished.contains(me) || this.meAttempts.getOrDefault(me, 0) >= 2 || !me.reachable(client)) {
+                continue;
             }
-        });
-        if (fromMe.isEmpty()) {
-            return null;
+            Map<Item, Integer> fromMe = new LinkedHashMap<>();
+            this.remaining.forEach((item, n) -> {
+                if (me.mightHave(client, item)) {
+                    fromMe.put(item, n);
+                }
+            });
+            if (fromMe.isEmpty()) {
+                continue;
+            }
+            if (me.wirelessUsable(client)) {
+                return new MeFetchTask(me, fromMe, null);
+            }
+            MeNetwork.Terminal terminal = me.nearestTerminal(near);
+            if (terminal != null) {
+                return new MeFetchTask(me, fromMe, terminal);
+            }
         }
-        if (me.wirelessUsable(client)) {
-            return new MeFetchTask(fromMe);
-        }
-        MeNetwork.Terminal terminal = me.nearestTerminal(near);
-        return terminal == null ? null : new MeFetchTask(fromMe, terminal);
+        return null;
     }
 
     private BlockPos nextContainer(BlockPos near) {

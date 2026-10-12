@@ -48,6 +48,11 @@ public enum BuildShape {
         return this.supportsHollow;
     }
 
+    /** Shapes that can be built upside down (tip at the bottom: funnels, bowls). */
+    public boolean invertible() {
+        return this == DOME || this == PYRAMID || this == CONE;
+    }
+
     public boolean usesHeight() {
         return this.usesHeight;
     }

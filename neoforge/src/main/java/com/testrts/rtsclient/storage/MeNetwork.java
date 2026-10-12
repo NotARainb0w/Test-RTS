@@ -30,12 +30,12 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The player's Applied Energistics 2 network: the ME terminals they linked, whether a wireless
- * terminal reaches it, and the last contents we saw in any of its terminals. Treated as one network
- * per world: whatever terminal was opened last tells us what it holds.
+ * The player's storage network of one mod ({@link GridMod}: AE2, Refined Storage): the terminals they
+ * linked, whether a wireless terminal reaches it, and the last contents we saw in any of its terminals.
+ * One network per mod and world: whatever terminal was opened last tells us what it holds.
  */
 public final class MeNetwork {
-    private static final MeNetwork INSTANCE = new MeNetwork();
+    private static final List<MeNetwork> ALL = Grids.all().stream().map(MeNetwork::new).toList();
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     /** After a wireless terminal didn't open, don't try again for this long. */
     private static final long WIRELESS_RETRY_MS = 60_000;
@@ -56,9 +56,78 @@ public final class MeNetwork {
     private int saveCooldown;
     @Nullable
     private AbstractContainerMenu seenHandler;
+    /** Ticks the terminal in {@link #seenHandler} has been open. */
+    private int seenTicks;
 
+    private final GridMod mod;
+
+    private MeNetwork(GridMod mod) {
+        this.mod = mod;
+    }
+
+    /** Every storage mod's network, in the order the builder tries them. */
+    public static List<MeNetwork> all() {
+        return ALL;
+    }
+
+    /** The AE2 network. */
     public static MeNetwork get() {
-        return INSTANCE;
+        return of(Ae2.GRID);
+    }
+
+    public static MeNetwork of(GridMod mod) {
+        for (MeNetwork n : ALL) {
+            if (n.mod == mod) {
+                return n;
+            }
+        }
+        throw new IllegalArgumentException(mod.name());
+    }
+
+    public GridMod mod() {
+        return this.mod;
+    }
+
+    public static void tickAll(Minecraft client) {
+        for (MeNetwork n : ALL) {
+            n.tick(client);
+        }
+    }
+
+    public static void flushAll() {
+        for (MeNetwork n : ALL) {
+            n.flush();
+        }
+    }
+
+    /** Last known count across every network. */
+    public static int countAll(Item item) {
+        long sum = 0;
+        for (MeNetwork n : ALL) {
+            sum += n.count(item);
+        }
+        return (int) Math.min(Integer.MAX_VALUE, sum);
+    }
+
+    /** Some network might give us {@code item} (see {@link #mightHave}). */
+    public static boolean anyMightHave(Minecraft client, Item item) {
+        for (MeNetwork n : ALL) {
+            if (n.mightHave(client, item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The network (if any) with a terminal at {@code pos}. */
+    @Nullable
+    public static MeNetwork linkedAt(BlockPos pos) {
+        for (MeNetwork n : ALL) {
+            if (n.isLinked(pos)) {
+                return n;
+            }
+        }
+        return null;
     }
 
     /** JSON shape on disk. */
@@ -85,19 +154,64 @@ public final class MeNetwork {
         if (this.dirty && --this.saveCooldown <= 0) {
             flush();
         }
+        // Only while the mod is there: without it nothing would count as a terminal.
+        if (client.level != null && enabled() && ++this.pruneTicks >= 20) {
+            this.pruneTicks = 0;
+            int gone = pruneGone(client.level);
+            if (gone > 0) {
+                com.testrts.rtsclient.util.Messages.info(gone + " linked " + this.mod.terminalName() + "(s) are gone - unlinked");
+            }
+        }
         // Any ME terminal the player has open (ours or opened by hand) shows us what the network holds.
         LocalPlayer player = client.player;
         AbstractContainerMenu open = player == null ? null : player.containerMenu;
-        if (open != null && open != player.inventoryMenu && Ae2.isTerminal(open) && Ae2.hasContents(open)) {
+        if (open != null && open != player.inventoryMenu && this.mod.isTerminal(open) && this.mod.hasContents(open)) {
             if (this.seenHandler != open) {
                 this.seenHandler = open;
-                if (Ae2.isWireless(open)) {
+                this.seenTicks = 0;
+                if (this.mod.isWireless(open)) {
                     wirelessOpened();
                 }
             }
-            record(Ae2.totals(Ae2.entries(open)));
+            this.seenTicks++;
+            Map<Item, Long> contents = GridMod.totals(this.mod.entries(open));
+            // A terminal that just opened may not have its items yet: an empty list only counts once
+            // it has stayed empty for a few seconds.
+            if (!contents.isEmpty() || this.seenTicks >= 60) {
+                record(contents);
+            }
         } else {
             this.seenHandler = null;
+        }
+    }
+
+    /** How long a linked terminal must be missing before it's unlinked (chunk data can arrive late). */
+    private static final long GONE_MS = 3000;
+    private final Map<BlockPos, Long> missingSince = new java.util.HashMap<>();
+    private int pruneTicks;
+
+    /** Unlink terminals that were removed: chunk loaded, no terminal there, for a few seconds in a row. */
+    private int pruneGone(ClientLevel world) {
+        long now = System.currentTimeMillis();
+        int before = this.terminals.size();
+        this.terminals.removeIf(t -> {
+            if (!world.hasChunkAt(t.pos) || this.mod.isTerminalAt(world.getBlockEntity(t.pos), t.side)) {
+                this.missingSince.remove(t.pos);
+                return false;
+            }
+            return now - this.missingSince.computeIfAbsent(t.pos, p -> now) >= GONE_MS;
+        });
+        int removed = before - this.terminals.size();
+        if (removed > 0) {
+            markDirty();
+        }
+        return removed;
+    }
+
+    /** Forget the terminal at {@code pos} (it isn't there any more). */
+    public void unlink(BlockPos pos) {
+        if (this.terminals.removeIf(t -> t.pos.equals(pos))) {
+            markDirty();
         }
     }
 
@@ -131,7 +245,7 @@ public final class MeNetwork {
     }
 
     private Path file() {
-        return Platform.configDir().resolve("rtsclient").resolve("storage").resolve(this.worldKey + ".me.json");
+        return Platform.configDir().resolve("rtsclient").resolve("storage").resolve(this.worldKey + "." + this.mod.fileSuffix() + ".json");
     }
 
     private void load() {
@@ -221,7 +335,7 @@ public final class MeNetwork {
     /** Drops links whose block is loaded but no longer holds a terminal on that face. */
     public int pruneMissing(ClientLevel world) {
         int before = this.terminals.size();
-        this.terminals.removeIf(t -> world.hasChunkAt(t.pos) && !Ae2.isTerminalPart(world.getBlockEntity(t.pos), t.side));
+        this.terminals.removeIf(t -> world.hasChunkAt(t.pos) && !this.mod.isTerminalAt(world.getBlockEntity(t.pos), t.side));
         int removed = before - this.terminals.size();
         if (removed > 0) {
             markDirty();
@@ -236,15 +350,15 @@ public final class MeNetwork {
 
     // ---------------------------------------------------------------- reaching it
 
-    /** Using AE2 for materials is on and the mod is there. */
-    public static boolean enabled() {
-        return RtsConfig.get().useAe2 && Ae2.loaded();
+    /** The mod is there and using it for materials is on. */
+    public boolean enabled() {
+        return this.mod.enabled();
     }
 
-    public static boolean carriesWirelessTerminal(LocalPlayer player) {
+    public boolean carriesWirelessTerminal(LocalPlayer player) {
         Inventory inv = player.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (Ae2.isWirelessTerminal(inv.getItem(i))) {
+            if (this.mod.isWirelessItem(inv.getItem(i))) {
                 return true;
             }
         }
@@ -274,7 +388,7 @@ public final class MeNetwork {
         }
     }
 
-    /** Some way to reach the network: a wireless terminal or a linked ME terminal. */
+    /** Some way to reach the network: a wireless terminal or a linked terminal. */
     public boolean reachable(Minecraft client) {
         return enabled() && (wirelessUsable(client) || !this.terminals.isEmpty());
     }
@@ -285,7 +399,7 @@ public final class MeNetwork {
         return this.indexed;
     }
 
-    /** Last known count, 0 if unknown or not there (or AE2 use is off). */
+    /** Last known count, 0 if unknown or not there (or this mod is off). */
     public int count(Item item) {
         if (!enabled()) {
             return 0;

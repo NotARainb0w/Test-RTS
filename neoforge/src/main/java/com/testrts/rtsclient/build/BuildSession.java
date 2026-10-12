@@ -16,6 +16,8 @@ public final class BuildSession {
     @Nullable
     public net.minecraft.world.level.block.Block replaceTarget;
     public boolean hollow;
+    /** Dome, pyramid and cone upside down (see {@link BuildShape#invertible()}). */
+    public boolean inverted;
     public int height = 3;
     public ItemStack brush = ItemStack.EMPTY;
     public final PlacementOrientation orientation = new PlacementOrientation();

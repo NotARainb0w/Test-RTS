@@ -80,12 +80,12 @@ public final class RtsClientMod {
             com.testrts.rtsclient.task.QueueStore.autosave();
             TaskQueue.get().clear(client);
             StorageManager.get().flush();
-            com.testrts.rtsclient.storage.MeNetwork.get().flush();
+            com.testrts.rtsclient.storage.MeNetwork.flushAll();
         });
         bus.addListener(GameShuttingDownEvent.class, event -> {
             com.testrts.rtsclient.task.QueueStore.autosave();
             StorageManager.get().flush();
-            com.testrts.rtsclient.storage.MeNetwork.get().flush();
+            com.testrts.rtsclient.storage.MeNetwork.flushAll();
         });
 
         // Live tests (src/devtest, dev runs only; not part of the release jar).
@@ -111,7 +111,8 @@ public final class RtsClientMod {
         com.testrts.rtsclient.exec.AutoPlace.tick(client, autoPlaceKey.isDown(), aimPlaceKey.isDown());
         com.testrts.rtsclient.task.QueueStore.tick(client);
         StorageManager.get().tick(client);
-        com.testrts.rtsclient.storage.MeNetwork.get().tick(client);
+        com.testrts.rtsclient.build.Protection.get().tick(client);
+        com.testrts.rtsclient.storage.MeNetwork.tickAll(client);
         ContainerTracker.get().tick(client);
         RtsController.get().tick(client);
         TaskQueue.get().tick(client);

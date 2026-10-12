@@ -327,6 +327,7 @@ public final class NativeBuilder {
         if (player == null || world == null || client.interactionManager == null) {
             return false;
         }
+        checkPutBack(world);
         if (this.paused) {
             MovementInput.acquire(player).release();
             return true;
@@ -486,7 +487,16 @@ public final class NativeBuilder {
      * What the follower may mine to get unstuck: anything soft (it checks that) that isn't part of
      * the build, or that the order wants gone anyway. Never our own scaffolding.
      */
+    /** A block the order would break lies in a protected area: leave it, say so once in a while. */
+    private void protectedSkip(BlockPos p) {
+        impossible(p);
+        warn("Not breaking " + p.toShortString() + ": it's in a protected area");
+    }
+
     private boolean mayBreakInWay(BlockPos pos) {
+        if (com.testrts.rtsclient.build.Protection.get().isProtected(pos)) {
+            return false;
+        }
         BlockState wanted = this.originalOrder.get(pos);
         if (wanted != null) {
             return wanted.isAir();
@@ -709,7 +719,7 @@ public final class NativeBuilder {
             net.minecraft.util.Identifier ident = net.minecraft.util.Identifier.tryParse(id);
             if (ident != null && net.minecraft.registry.Registries.ITEM.containsId(ident)
                     && (com.testrts.rtsclient.storage.StorageManager.get().total(net.minecraft.registry.Registries.ITEM.get(ident)) > 0
-                    || com.testrts.rtsclient.storage.MeNetwork.get().mightHave(MinecraftClient.getInstance(), net.minecraft.registry.Registries.ITEM.get(ident)))) {
+                    || com.testrts.rtsclient.storage.MeNetwork.anyMightHave(MinecraftClient.getInstance(), net.minecraft.registry.Registries.ITEM.get(ident)))) {
                 return true;
             }
         }
@@ -787,7 +797,9 @@ public final class NativeBuilder {
 
     /** Fly to blocks instead of walking: the setting is on and the player may fly (creative...). */
     private static boolean canFly(ClientPlayerEntity player) {
-        return com.testrts.rtsclient.config.RtsConfig.get().creativeFlight && player.getAbilities().allowFlying;
+        var cfg = com.testrts.rtsclient.config.RtsConfig.get();
+        // In survival, flight comes from items (Angel Ring...): only with its own setting.
+        return cfg.creativeFlight && player.getAbilities().allowFlying && (player.getAbilities().creativeMode || cfg.flySurvival);
     }
 
     private static final int FLY_SEARCH_NODES = 6000;
@@ -1390,7 +1402,10 @@ public final class NativeBuilder {
         if (feet.equals(target) || feet.up().equals(target)) {
             return false;
         }
-        double reach = Reach.reach(client) - 0.4;
+        // A solid target gets mined: stand within mining reach of it. Otherwise (placing) the usual reach.
+        BlockState there = client.world.getBlockState(target);
+        boolean mining = !there.isAir() && !there.isReplaceable() && !(there.getBlock() instanceof FluidBlock);
+        double reach = mining ? mineReach(client, target) - 0.2 : Reach.reach(client) - 0.4;
         // Eye height over the real floor (lower on slabs and carpets).
         Vec3d eye = new Vec3d(feet.getX() + 0.5, Walkability.standY(client.world, feet) + 1.62, feet.getZ() + 0.5);
         return eye.squaredDistanceTo(Vec3d.ofCenter(target)) <= reach * reach;
@@ -1459,6 +1474,13 @@ public final class NativeBuilder {
                 if (tooManyBreaks(p)) {
                     continue;
                 }
+                if (com.testrts.rtsclient.build.Protection.get().isProtected(p)) {
+                    protectedSkip(p);
+                    continue;
+                }
+                if (!withinMineReach(client, p)) {
+                    continue; // in reach, but not comfortably: the walk brings us closer
+                }
                 startBreaking(client, p);
                 return true;
             }
@@ -1494,6 +1516,13 @@ public final class NativeBuilder {
                 }
                 if (tooManyBreaks(p)) {
                     continue;
+                }
+                if (com.testrts.rtsclient.build.Protection.get().isProtected(p)) {
+                    protectedSkip(p);
+                    continue;
+                }
+                if (!withinMineReach(client, p)) {
+                    continue; // in reach, but not comfortably: the walk brings us closer
                 }
                 startBreaking(client, p);
                 return true;
@@ -1731,6 +1760,55 @@ public final class NativeBuilder {
         return null;
     }
 
+    // ------------------------------------------------------------------ mining range
+
+    /**
+     * Blocks the server put back after we mined them (it thought we were too far: on a server our position
+     * lags a little). Mined only from close up from then on, for the rest of the session.
+     */
+    private static final java.util.Set<BlockPos> CLOSE_ONLY = new java.util.HashSet<>();
+    /** When we saw blocks we mined turn to air, to notice the server putting them back. */
+    private static final Map<BlockPos, Long> MINED_AT = new java.util.HashMap<>();
+    private static final double CLOSE_MINE_REACH = 2.5;
+    private static final long PUT_BACK_MS = 3000;
+
+    /** How close we must be to start mining {@code p}: well inside reach, much closer if the server objected. */
+    static double mineReach(MinecraftClient client, BlockPos p) {
+        return CLOSE_ONLY.contains(p) ? CLOSE_MINE_REACH : Reach.reach(client) - 0.8;
+    }
+
+    private static boolean withinMineReach(MinecraftClient client, BlockPos p) {
+        double r = mineReach(client, p);
+        return client.player.getEyePos().squaredDistanceTo(Vec3d.ofCenter(p)) <= r * r;
+    }
+
+    /** Blocks we mined that came back within a few seconds: the server refused. Mine them again, closer. */
+    private void checkPutBack(ClientWorld world) {
+        if (MINED_AT.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        var it = MINED_AT.entrySet().iterator();
+        while (it.hasNext()) {
+            var e = it.next();
+            BlockPos p = e.getKey();
+            if (now - e.getValue() > PUT_BACK_MS) {
+                it.remove();
+                continue;
+            }
+            BlockState s = world.getBlockState(p);
+            if (!s.isAir() && !(s.getBlock() instanceof FluidBlock)) {
+                it.remove();
+                CLOSE_ONLY.add(p);
+                BlockState wanted = this.order.get(p);
+                if (wanted != null && !done(world, p, wanted)) {
+                    this.todo.add(p);
+                }
+                warn("The server put " + p.toShortString() + " back (too far for it) - mining it from closer");
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ mining
 
     /** Count a mining attempt; a block that keeps coming back is set aside for later. */
@@ -1764,6 +1842,7 @@ public final class NativeBuilder {
         if (state.isAir() || state.getBlock() instanceof FluidBlock) {
             this.breaking = null;
             this.todo.remove(pos);
+            MINED_AT.put(pos.toImmutable(), System.currentTimeMillis());
             return;
         }
         if (++this.breakTicks > BREAK_TIMEOUT_TICKS || !Reach.inReach(client, pos)) {
@@ -1776,9 +1855,11 @@ public final class NativeBuilder {
         }
         Vec3d face = Vec3d.ofCenter(pos).add(this.breakingSide.getOffsetX() * 0.5, this.breakingSide.getOffsetY() * 0.5,
                 this.breakingSide.getOffsetZ() * 0.5);
-        if (!Look.at(client.player, face) && !this.breakStarted) {
+        boolean aimed = Look.at(client.player, face);
+        if (!this.breakStarted && !Mining.aimed(client, face, aimed)) {
             return; // still turning toward it
         }
+        Mining.skipPause(client);
         if (!this.breakStarted) {
             this.breakStarted = true;
             client.interactionManager.attackBlock(pos, this.breakingSide);

@@ -118,6 +118,47 @@ public final class StorageManager {
         if (this.dirty && --this.saveCooldown <= 0) {
             flush();
         }
+        if (client.world != null && ++this.pruneTicks >= 20) {
+            this.pruneTicks = 0;
+            int gone = pruneGone(client.world);
+            if (gone > 0) {
+                com.testrts.rtsclient.util.Messages.info(gone + " linked storage block(s) are gone - unlinked");
+            }
+        }
+    }
+
+    /** How long a linked block must be missing before it's unlinked (chunk data can arrive late). */
+    private static final long GONE_MS = 3000;
+    private final Map<BlockPos, Long> missingSince = new HashMap<>();
+    private int pruneTicks;
+
+    /**
+     * Unlink containers that were removed: their chunk is loaded and there's no container there any more,
+     * for a few seconds in a row.
+     */
+    private int pruneGone(ClientWorld world) {
+        long now = System.currentTimeMillis();
+        int before = this.containers.size();
+        this.containers.values().removeIf(c -> {
+            if (!world.isChunkLoaded(c.pos) || isContainer(world, c.pos)) {
+                this.missingSince.remove(c.pos);
+                return false;
+            }
+            return now - this.missingSince.computeIfAbsent(c.pos, p -> now) >= GONE_MS;
+        });
+        int removed = before - this.containers.size();
+        if (removed > 0) {
+            this.missingSince.keySet().retainAll(this.containers.keySet());
+            markDirty();
+        }
+        return removed;
+    }
+
+    /** Forget one link (the block isn't a container any more). */
+    public void unlink(ClientWorld world, BlockPos pos) {
+        if (this.containers.remove(canonical(world, pos)) != null) {
+            markDirty();
+        }
     }
 
     public void flush() {
@@ -371,19 +412,21 @@ public final class StorageManager {
         return added;
     }
 
-    /** Sum of everything we know is stored, across indexed containers and the AE2 network. */
+    /** Sum of everything we know is stored, across indexed containers and the storage networks (AE2, RS). */
     public Map<Item, Integer> totals() {
         Map<Item, Integer> totals = new HashMap<>();
         for (LinkedContainer c : this.containers.values()) {
             c.items.forEach((item, count) -> totals.merge(item, count, Integer::sum));
         }
-        MeNetwork.get().items().forEach((item, count) ->
-                totals.merge(item, (int) Math.min(Integer.MAX_VALUE, count), (a, b) -> (int) Math.min(Integer.MAX_VALUE, (long) a + b)));
+        for (MeNetwork network : MeNetwork.all()) {
+            network.items().forEach((item, count) ->
+                    totals.merge(item, (int) Math.min(Integer.MAX_VALUE, count), (a, b) -> (int) Math.min(Integer.MAX_VALUE, (long) a + b)));
+        }
         return totals;
     }
 
     public int total(Item item) {
-        int sum = MeNetwork.get().count(item);
+        int sum = MeNetwork.countAll(item);
         for (LinkedContainer c : this.containers.values()) {
             sum += c.count(item);
         }

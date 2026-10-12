@@ -10,6 +10,8 @@
     "ClientPlayerEntityMixin",
     "GameOptionsMixin",
     "GameRendererMixin",
+    "ClientPlayerInteractionManagerAccessor",
+    "ClientPlayerInteractionManagerMixin",
     "InGameHudMixin",
     "MinecraftClientMixin",
     "RenderedChunkMixin",

@@ -1,9 +1,9 @@
 package com.testrts.rtsclient.task;
 
-import com.testrts.rtsclient.storage.Ae2;
 import com.testrts.rtsclient.storage.MeNetwork;
 import com.testrts.rtsclient.util.Messages;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.Item;
@@ -17,8 +17,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Takes items out of the Applied Energistics 2 network: opens the wireless terminal from wherever
- * the player is, or walks to a linked ME terminal and opens that, then shift-clicks stacks of what's
+ * Takes items out of a storage network (AE2, Refined Storage): opens the wireless terminal from wherever
+ * the player is, or walks to a linked terminal / grid and opens that, then asks for stacks of what's
  * needed straight into the inventory and closes the terminal again.
  */
 public final class MeFetchTask implements RtsTask {
@@ -28,9 +28,8 @@ public final class MeFetchTask implements RtsTask {
     private static final int OPEN_TIMEOUT_TICKS = 30;
     /** Ticks to wait per wireless hotkey (each kind of wireless terminal has its own). */
     private static final int HOTKEY_TIMEOUT_TICKS = 15;
-    /** The hotkey that opened the wireless terminal last time; tried first. */
-    @Nullable
-    private static String workingHotkey;
+    /** Per storage mod, the way of opening its wireless terminal that worked last time; tried first. */
+    private static final Map<String, String> workingHotkey = new java.util.HashMap<>();
     private static final int CLOSE_OTHER_TIMEOUT_TICKS = 40;
     /** The network's contents arrive in a few packets after the screen opens. */
     private static final int SETTLE_MIN_TICKS = 4;
@@ -43,6 +42,8 @@ public final class MeFetchTask implements RtsTask {
     private final Map<Item, Integer> wanted;
     @Nullable
     private final MeNetwork.Terminal terminal;
+    private final MeNetwork network;
+    private final com.testrts.rtsclient.storage.GridMod mod;
     @Nullable
     private final WalkPhase walk;
     private List<String> hotkeys;
@@ -53,20 +54,21 @@ public final class MeFetchTask implements RtsTask {
     private int lastEntryCount = -1;
     private ScreenHandler handler;
     /** Stacks still to ask for, per entry serial. */
-    private final Map<Long, Integer> requests = new LinkedHashMap<>();
+    private final Map<Object, Integer> requests = new LinkedHashMap<>();
     private Map<Item, Integer> lastCounts;
 
-    /** Through the wireless terminal. */
-    public MeFetchTask(Map<Item, Integer> wanted) {
-        this(wanted, null);
-    }
-
-    /** At a linked ME terminal, or wireless when {@code terminal} is null. */
-    public MeFetchTask(Map<Item, Integer> wanted, @Nullable MeNetwork.Terminal terminal) {
+    /** At a linked terminal of {@code network}, or through its wireless terminal when {@code terminal} is null. */
+    public MeFetchTask(MeNetwork network, Map<Item, Integer> wanted, @Nullable MeNetwork.Terminal terminal) {
+        this.network = network;
+        this.mod = network.mod();
         this.wanted = new LinkedHashMap<>(wanted);
         this.terminal = terminal;
         this.walk = terminal == null ? null : new WalkPhase(terminal.pos());
         this.phase = terminal == null ? Phase.OPEN : Phase.WALK;
+    }
+
+    public MeNetwork network() {
+        return this.network;
     }
 
     public boolean wireless() {
@@ -75,12 +77,13 @@ public final class MeFetchTask implements RtsTask {
 
     @Override
     public String label() {
-        return "ME fetch " + MaterialPlanner.describe(this.wanted, 2);
+        return this.wanted.isEmpty() ? "Read " + this.mod.name() + " network"
+                : this.mod.name() + " fetch " + MaterialPlanner.describe(this.wanted, 2);
     }
 
     @Override
     public String detail() {
-        String where = this.terminal == null ? "wireless terminal" : "ME terminal " + this.terminal.pos().toShortString();
+        String where = this.terminal == null ? "wireless " + this.mod.terminalName() : this.mod.terminalName() + " " + this.terminal.pos().toShortString();
         return switch (this.phase) {
             case WALK -> "walking to " + where;
             case OPEN, WAIT_OPEN, SETTLE -> "opening " + where;
@@ -97,9 +100,15 @@ public final class MeFetchTask implements RtsTask {
         }
         switch (this.phase) {
             case WALK -> {
+                BlockPos at = this.terminal.pos();
+                if (client.world.isChunkLoaded(at) && !this.mod.isTerminalAt(client.world.getBlockEntity(at), this.terminal.side())) {
+                    Messages.warn("No " + this.mod.terminalName() + " at " + at.toShortString() + " any more - unlinked");
+                    this.network.unlink(at);
+                    return Status.FAILED;
+                }
                 WalkPhase.Result r = this.walk.tick(client);
                 if (r == WalkPhase.Result.UNREACHABLE) {
-                    Messages.warn("Can't reach the ME terminal at " + this.terminal.pos().toShortString());
+                    Messages.warn("Can't reach the " + this.mod.terminalName() + " at " + this.terminal.pos().toShortString());
                     return Status.FAILED;
                 }
                 if (r == WalkPhase.Result.IN_REACH) {
@@ -110,7 +119,7 @@ public final class MeFetchTask implements RtsTask {
             }
             case OPEN -> {
                 if (player.currentScreenHandler != player.playerScreenHandler) {
-                    if (Ae2.isTerminal(player.currentScreenHandler) && this.terminal == null) {
+                    if (this.mod.isTerminal(player.currentScreenHandler) && this.terminal == null) {
                         // A terminal is already open (the player's own): use it.
                         this.handler = player.currentScreenHandler;
                         this.phase = Phase.SETTLE;
@@ -118,7 +127,7 @@ public final class MeFetchTask implements RtsTask {
                         return Status.RUNNING;
                     }
                     if (++this.timer > CLOSE_OTHER_TIMEOUT_TICKS) {
-                        Messages.warn("Couldn't close the open screen to use the ME terminal");
+                        Messages.warn("Couldn't close the open screen to use the " + this.mod.terminalName());
                         return Status.FAILED;
                     }
                     player.closeHandledScreen();
@@ -126,14 +135,15 @@ public final class MeFetchTask implements RtsTask {
                 }
                 if (this.terminal == null) {
                     if (this.hotkeys == null) {
-                        this.hotkeys = new java.util.ArrayList<>(Ae2.wirelessHotkeys());
-                        if (workingHotkey != null && this.hotkeys.remove(workingHotkey)) {
-                            this.hotkeys.add(0, workingHotkey);
+                        this.hotkeys = new java.util.ArrayList<>(this.mod.wirelessOpeners());
+                        String worked = workingHotkey.get(this.mod.name());
+                        if (worked != null && this.hotkeys.remove(worked)) {
+                            this.hotkeys.add(0, worked);
                         }
                     }
-                    if (this.hotkeyIndex >= this.hotkeys.size() || !Ae2.pressHotkey(this.hotkeys.get(this.hotkeyIndex))) {
-                        MeNetwork.get().wirelessFailed();
-                        Messages.warn("The wireless terminal didn't open (carry a linked one, in range of its network)");
+                    if (this.hotkeyIndex >= this.hotkeys.size() || !this.mod.openWireless(this.hotkeys.get(this.hotkeyIndex))) {
+                        this.network.wirelessFailed();
+                        Messages.warn("The wireless " + this.mod.terminalName() + " didn't open (carry a linked one, in range of its network)");
                         return Status.FAILED;
                     }
                 } else {
@@ -149,12 +159,12 @@ public final class MeFetchTask implements RtsTask {
             }
             case WAIT_OPEN -> {
                 ScreenHandler open = player.currentScreenHandler;
-                if (open != player.playerScreenHandler && Ae2.isTerminal(open)) {
+                if (open != player.playerScreenHandler && this.mod.isTerminal(open)) {
                     this.handler = open;
                     if (this.terminal == null) {
-                        MeNetwork.get().wirelessOpened();
+                        this.network.wirelessOpened();
                         if (this.hotkeys != null && this.hotkeyIndex < this.hotkeys.size()) {
-                            workingHotkey = this.hotkeys.get(this.hotkeyIndex);
+                            workingHotkey.put(this.mod.name(), this.hotkeys.get(this.hotkeyIndex));
                         }
                     }
                     this.phase = Phase.SETTLE;
@@ -167,7 +177,7 @@ public final class MeFetchTask implements RtsTask {
                         this.timer = 0;
                         return Status.RUNNING;
                     }
-                    Messages.warn("The ME terminal at " + this.terminal.pos().toShortString() + " didn't open");
+                    Messages.warn("The " + this.mod.terminalName() + " at " + this.terminal.pos().toShortString() + " didn't open");
                     return Status.FAILED;
                 }
                 return Status.RUNNING;
@@ -177,7 +187,7 @@ public final class MeFetchTask implements RtsTask {
                     return Status.FAILED;
                 }
                 this.timer++;
-                int n = Ae2.hasContents(this.handler) ? Ae2.entries(this.handler).size() : -1;
+                int n = this.mod.hasContents(this.handler) ? this.mod.entries(this.handler).size() : -1;
                 if (n >= 0 && n == this.lastEntryCount) {
                     this.quiet++;
                 } else {
@@ -185,6 +195,13 @@ public final class MeFetchTask implements RtsTask {
                 }
                 this.lastEntryCount = n;
                 boolean settled = this.timer >= SETTLE_MIN_TICKS && n > 0 && this.quiet >= 3;
+                if (!settled && this.timer >= SETTLE_MAX_TICKS && n <= 0) {
+                    // Nothing showed up: out of range, not linked, or the list never came. Not the same
+                    // as an empty network, so this counts as a failed try (another way gets tried next).
+                    Messages.warn("The " + (this.terminal == null ? "wireless " : "") + this.mod.terminalName() + " showed no items");
+                    close(player);
+                    return Status.FAILED;
+                }
                 if (settled || this.timer >= SETTLE_MAX_TICKS) {
                     planRequests(player.getInventory());
                     if (this.requests.isEmpty()) {
@@ -204,8 +221,8 @@ public final class MeFetchTask implements RtsTask {
                 int clicks = 0;
                 var it = this.requests.entrySet().iterator();
                 while (it.hasNext() && clicks < CLICKS_PER_TICK) {
-                    Map.Entry<Long, Integer> e = it.next();
-                    if (!Ae2.takeStack(this.handler, e.getKey())) {
+                    Map.Entry<Object, Integer> e = it.next();
+                    if (!this.mod.takeStack(this.handler, e.getKey())) {
                         close(player);
                         return Status.FAILED;
                     }
@@ -252,22 +269,22 @@ public final class MeFetchTask implements RtsTask {
                 freeSlots++;
             }
         }
-        List<Ae2.Entry> entries = Ae2.entries(this.handler);
+        List<com.testrts.rtsclient.storage.GridMod.Entry> entries = this.mod.entries(this.handler);
         for (Map.Entry<Item, Integer> w : this.wanted.entrySet()) {
             Item item = w.getKey();
             int need = w.getValue();
             int perStack = Math.max(1, item.getMaxCount());
             // Biggest entry first (an item can be split by NBT, e.g. damaged or named copies).
-            List<Ae2.Entry> holders = entries.stream().filter(e -> e.item() == item)
+            List<com.testrts.rtsclient.storage.GridMod.Entry> holders = entries.stream().filter(e -> e.item() == item)
                     .sorted((a, b) -> Long.compare(b.amount(), a.amount())).toList();
-            for (Ae2.Entry e : holders) {
+            for (com.testrts.rtsclient.storage.GridMod.Entry e : holders) {
                 if (need <= 0 || freeSlots <= 0) {
                     break;
                 }
                 int stacks = (int) Math.min((need + perStack - 1) / perStack, (e.amount() + perStack - 1) / perStack);
                 stacks = Math.min(stacks, freeSlots);
                 if (stacks > 0) {
-                    this.requests.merge(e.serial(), stacks, Integer::sum);
+                    this.requests.merge(e.handle(), stacks, Integer::sum);
                     freeSlots -= stacks;
                     need -= (int) Math.min((long) stacks * perStack, e.amount());
                 }
@@ -292,8 +309,9 @@ public final class MeFetchTask implements RtsTask {
 
     private boolean stillOpen(ClientPlayerEntity player) {
         if (player.currentScreenHandler != this.handler) {
-            // AE2 closes a wireless terminal by itself once the player is out of the access point's range.
-            Messages.warn(this.terminal == null ? "The wireless terminal closed (out of range of the network?)" : "The ME terminal was closed early");
+            // A wireless terminal closes by itself once the player is out of range of the network.
+            Messages.warn(this.terminal == null ? "The wireless " + this.mod.terminalName() + " closed (out of range of the network?)"
+                    : "The " + this.mod.terminalName() + " was closed early");
             return false;
         }
         return true;

@@ -212,7 +212,7 @@ public final class BuildTask implements RtsTask {
             int stored = StorageManager.get().total(item);
             if (stored > 0) {
                 available.put(item, Math.min(n, stored));
-            } else if (com.testrts.rtsclient.storage.MeNetwork.get().mightHave(Minecraft.getInstance(), item)) {
+            } else if (com.testrts.rtsclient.storage.MeNetwork.anyMightHave(Minecraft.getInstance(), item)) {
                 // An AE2 network we haven't looked into yet: opening a terminal is how to find out.
                 available.put(item, n);
             }

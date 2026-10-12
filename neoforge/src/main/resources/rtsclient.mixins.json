@@ -10,6 +10,8 @@
     "GuiMixin",
     "LevelRendererMixin",
     "GameRendererMixin",
+    "MultiPlayerGameModeAccessor",
+    "MultiPlayerGameModeMixin",
     "LocalPlayerMixin",
     "MinecraftMixin",
     "OptionsMixin",

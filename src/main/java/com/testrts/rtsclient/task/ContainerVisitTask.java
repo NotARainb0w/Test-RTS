@@ -74,7 +74,8 @@ public class ContainerVisitTask implements RtsTask {
         switch (this.phase) {
             case WALK -> {
                 if (!StorageManager.isContainer(client.world, this.pos) && client.world.isChunkLoaded(this.pos)) {
-                    Messages.warn("No container at " + this.pos.toShortString() + " any more");
+                    Messages.warn("No container at " + this.pos.toShortString() + " any more - unlinked");
+                    StorageManager.get().unlink(client.world, this.pos);
                     return Status.FAILED;
                 }
                 WalkPhase.Result r = this.walk.tick(client);

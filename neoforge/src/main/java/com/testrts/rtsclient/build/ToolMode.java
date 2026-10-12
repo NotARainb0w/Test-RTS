@@ -8,7 +8,8 @@ public enum ToolMode {
     LINK("Link storage", "Click containers to add or remove them from your storage network"),
     BLUEPRINT("Blueprint", "Copy a region (two clicks), then paste it anywhere, rotated with R"),
     TERRAIN("Terrain", "Flatten ground or light up an area (two clicks)"),
-    MEASURE("Measure", "Click two points to see the distance and size between them");
+    MEASURE("Measure", "Click two points to see the distance and size between them"),
+    PROTECT("Protect", "Mark areas the builder never breaks blocks in, like your base (two corners, all heights); click inside one to remove it");
 
     private final String label;
     private final String description;
@@ -32,6 +33,6 @@ public enum ToolMode {
 
     /** Tools whose two clicks select a box (shapes do their own thing). */
     public boolean selectsRegion() {
-        return this == TERRAIN || this == MEASURE || this == BLUEPRINT;
+        return this == TERRAIN || this == MEASURE || this == BLUEPRINT || this == PROTECT;
     }
 }

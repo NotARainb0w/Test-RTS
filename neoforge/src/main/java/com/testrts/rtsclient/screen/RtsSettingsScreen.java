@@ -96,6 +96,19 @@ public final class RtsSettingsScreen extends Screen {
                         "When you can fly (creative mode), your character flies straight to the blocks it builds "
                                 + "or mines instead of walking and climbing. Does nothing when you can't fly.",
                         () -> c.creativeFlight = !c.creativeFlight),
+                new Setting("Mining speed", () -> switch (c.miningSpeed) {
+                            case 0 -> "Normal";
+                            case 2 -> "Fastest";
+                            default -> "Fast";
+                        },
+                        "Built-in engine. Normal: aims exactly and waits the game's short pause between blocks. Fast: starts once the "
+                                + "block is roughly in view and skips the pause. Fastest: starts right away while still turning (like "
+                                + "Baritone). Strict anti-cheat plugins may notice the missing pause.",
+                        () -> c.miningSpeed = (c.miningSpeed + 1) % 3),
+                new Setting("Fly with flight items", () -> onOff(c.flySurvival),
+                        "In survival, also fly to blocks when an item lets you fly (Angel Ring, flight charms...). Off: the "
+                                + "builder walks, landing first if you're flying. Mining in the air is 5x slower in survival.",
+                        () -> c.flySurvival = !c.flySurvival),
                 new Setting("Creative supply", () -> onOff(c.creativeSupply),
                         "In creative mode, the builder spawns the blocks (and scaffolding) it needs into your hotbar "
                                 + "instead of fetching them from storage. Does nothing in survival.",
@@ -124,6 +137,10 @@ public final class RtsSettingsScreen extends Screen {
                         "With Applied Energistics 2: fetch building materials through a wireless terminal you carry "
                                 + "(works from anywhere in range), or from ME terminals you linked with the Link tool, before chests.",
                         () -> c.useAe2 = !c.useAe2),
+                new Setting("Use Refined Storage", () -> onOff(c.useRefinedStorage),
+                        "With Refined Storage: fetch building materials through a wireless grid or wireless crafting grid you carry, "
+                                + "or from grids you linked with the Link tool, before chests.",
+                        () -> c.useRefinedStorage = !c.useRefinedStorage),
                 new Setting("Clear blocks in the way", () -> onOff(c.clearInTheWay),
                         "Shapes mine whatever is in their cells (terrain, trees) and put the brush block there instead of skipping them.",
                         () -> c.clearInTheWay = !c.clearInTheWay),
