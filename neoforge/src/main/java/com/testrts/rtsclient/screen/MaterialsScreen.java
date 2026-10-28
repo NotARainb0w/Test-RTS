@@ -123,10 +123,9 @@ public final class MaterialsScreen extends Screen {
         Messages.info("Removed " + removed + "x " + item.getDescription().getString() + " from the queued orders");
     }
 
-    /** x of the remove button column, and whether {@code (mx, my)} is on a row's button (that row's index, else -1). */
-    private int removeRowAt(double mx, double my) {
-        int x1 = this.panelX1 - PAD;
-        if (mx < x1 - 12 || mx > x1 || my < this.listY0) {
+    /** The index of the row under {@code (mx, my)} when the mouse is within columns {@code left..right}, else -1. */
+    private int rowAt(double mx, double my, int left, int right) {
+        if (mx < left || mx > right || my < this.listY0) {
             return -1;
         }
         int r = (int) ((my - this.listY0) / ROW_H);
@@ -136,7 +135,13 @@ public final class MaterialsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
-        int i = button == 0 ? removeRowAt(mx, my) : -1;
+        int x1 = this.panelX1 - PAD;
+        int swap = button == 0 ? rowAt(mx, my, x1 - 24, x1 - 13) : -1;
+        if (swap >= 0) {
+            this.minecraft.setScreen(new ReplaceBlockScreen(this, this.lines.get(swap).item()));
+            return true;
+        }
+        int i = button == 0 ? rowAt(mx, my, x1 - 12, x1) : -1;
         if (i >= 0) {
             Item item = this.lines.get(i).item();
             long now = System.currentTimeMillis();
@@ -171,9 +176,9 @@ public final class MaterialsScreen extends Screen {
         int x0 = this.panelX0 + PAD;
         int x1 = this.panelX1 - PAD;
         int hy = this.panelY0 + Theme.HEADER_H + 5;
-        int cNeed = x1 - 124;
-        int cHave = x1 - 86;
-        int cStore = x1 - 48;
+        int cNeed = x1 - 134;
+        int cHave = x1 - 96;
+        int cStore = x1 - 58;
         ctx.drawString(this.font, "ITEM", x0 + 20, hy, Theme.TEXT_FAINT, false);
         ctx.drawString(this.font, "NEED", cNeed, hy, Theme.TEXT_FAINT, false);
         ctx.drawString(this.font, "HAVE", cHave, hy, Theme.TEXT_FAINT, false);
@@ -204,6 +209,10 @@ public final class MaterialsScreen extends Screen {
                 ctx.drawString(this.font, "Remove?", x1 - 54, y + 5, Theme.BAD, false);
             }
             ctx.drawString(this.font, "\u2715", x1 - 9, y + 5, armedRow ? Theme.BAD : Theme.TEXT_FAINT, false);
+            if (!armedRow) {
+                boolean swapHover = mouseX >= x1 - 24 && mouseX <= x1 - 13 && mouseY >= y && mouseY < y + ROW_H;
+                ctx.drawString(this.font, "⇄", x1 - 22, y + 5, swapHover ? Theme.ACCENT : Theme.TEXT_FAINT, false);
+            }
             ctx.drawString(this.font, Integer.toString(l.stored()), cStore, y + 5,
                     !shortItem ? Theme.TEXT_DIM : coverable ? Theme.GOOD : Theme.BAD, false);
         }
@@ -211,6 +220,16 @@ public final class MaterialsScreen extends Screen {
                 ? "Inventory + storage cover everything"
                 : missingTotal + " block(s) not available anywhere";
         ctx.drawString(this.font, summary, x0 + 116, this.panelY1 - PAD - 12, missingTotal == 0 ? Theme.GOOD : Theme.BAD, false);
+    }
+
+    @Override
+    public void render(GuiGraphics ctx, int mouseX, int mouseY, float delta) {
+        super.render(ctx, mouseX, mouseY, delta);
+        int x1 = this.panelX1 - PAD;
+        int r = rowAt(mouseX, mouseY, x1 - 24, x1 - 13);
+        if (r >= 0 && !(this.lines.get(r).item() == this.armed && System.currentTimeMillis() - this.armedAt <= 3000)) {
+            ctx.renderTooltip(this.font, Component.literal("Replace with another block in every queued order"), mouseX, mouseY);
+        }
     }
 
     @Override

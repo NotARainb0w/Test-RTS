@@ -36,7 +36,8 @@ import java.util.Set;
 /**
  * Placing the hologram's blocks by hand, outside RTS mode, without turning the view:
  * <ul>
- *   <li>auto-place key held: every block of queued builds within range, lowest first;</li>
+ *   <li>auto-place key held: every block of queued builds within range, lowest first (with "Hold-Z in
+ *   layers" on, only blocks of each build's lowest unfinished layer, going up once it's finished);</li>
  *   <li>aimed-place key held: the hologram block the crosshair is on.</li>
  * </ul>
  * The hand switches to the block needed and back to the old slot when the key is let go. Only while
@@ -60,7 +61,14 @@ public final class AutoPlace {
     private static long lastWarn;
     /** Spots that didn't take a block (protected, entity in the way...), skipped while the key stays down. */
     private static final Set<BlockPos> refused = new HashSet<>();
+    /** Spots of layers passed over with the Skip layer key: hold-Z in layers (and the hologram) moves past them. */
+    private static final Set<BlockPos> skippedLayers = new HashSet<>();
     private static final Map<BlockPos, Integer> attempts = new HashMap<>();
+    /** Hold-Z in layers: per queued build, the lowest Y with a spot still to fill (MAX_VALUE: none). */
+    private static final Map<BuildTask, Integer> lowestLayer = new HashMap<>();
+    private static int layersIn;
+    /** The layer that held placing back on the last look around (Integer.MIN_VALUE: none), for the hint. */
+    private static int heldAtLayer = Integer.MIN_VALUE;
     /** Ticks since our last click, and where it was. */
     private static int sinceClick = 100;
     private static BlockPos lastClicked;
@@ -120,6 +128,8 @@ public final class AutoPlace {
         }
         Set<Item> missing = new HashSet<>();
         int wrongWay = 0;
+        int budget = perTick(safe);
+        int done = 0;
         for (Candidate c : inRange(client, builds, safe)) {
             Item item = c.wanted.getBlock().asItem();
             if (item == Items.AIR || missing.contains(item)) {
@@ -131,17 +141,27 @@ public final class AutoPlace {
             }
             Placed placed = place(client, c.pos, c.wanted, safe);
             if (placed == Placed.DONE) {
-                cooldown = delayTicks(safe);
-                return;
+                // Above 20 a second, several blocks go down in the same tick.
+                if (++done >= budget || client.screen != null) {
+                    cooldown = delayTicks(safe);
+                    return;
+                }
+                continue;
             }
             if (placed == Placed.WRONG_WAY) {
                 wrongWay++;
             }
         }
+        if (done > 0) {
+            cooldown = delayTicks(safe);
+            return;
+        }
         if (!missing.isEmpty()) {
             warn("Nothing to place: no " + missing.iterator().next().getDescription().getString() + " in your inventory");
         } else if (wrongWay > 0) {
             warn(wrongWay + " block(s) would face the wrong way from here - place them with the aimed key (look the right way) or the builder");
+        } else if (heldAtLayer != Integer.MIN_VALUE) {
+            warn("Building in layers: the layer at y=" + heldAtLayer + " comes first - get where you can place it");
         }
     }
 
@@ -152,6 +172,11 @@ public final class AutoPlace {
         return safe ? Math.max(VANILLA_DELAY_TICKS, ticks) : ticks;
     }
 
+    /** Blocks placed per tick: more than one only above 20 a second, and never when server-safe. */
+    private static int perTick(boolean safe) {
+        return safe ? 1 : Math.max(1, (int) Math.round(RtsConfig.get().autoPlaceSpeed / 20.0));
+    }
+
     /** Key let go: back to the slot that was selected before. */
     private static void release(LocalPlayer player) {
         if (restoreSlot >= 0) {
@@ -160,6 +185,8 @@ public final class AutoPlace {
         }
         refused.clear();
         attempts.clear();
+        lowestLayer.clear();
+        layersIn = 0;
         cooldown = 0;
     }
 
@@ -180,13 +207,20 @@ public final class AutoPlace {
 
     /** What a queued build wants at {@code p}, if that spot is empty and still needs it. */
     private static BlockState pending(Minecraft client, List<BuildTask> builds, BlockPos p) {
+        return pending(client, builds, p, Map.of());
+    }
+
+    /** Same, but only in the build's lowest unfinished layer when {@code layers} has it (see {@link #layers}). */
+    private static BlockState pending(Minecraft client, List<BuildTask> builds, BlockPos p, Map<BuildTask, Integer> layers) {
         if (refused.contains(p)) {
             return null;
         }
         BlockState wanted = null;
+        BuildTask owner = null;
         for (BuildTask b : builds) {
             wanted = b.blocks().get(p);
             if (wanted != null) {
+                owner = b;
                 break;
             }
         }
@@ -203,12 +237,92 @@ public final class AutoPlace {
                 e -> e.isAlive() && e.canBeCollidedWith()).isEmpty()) {
             return null;
         }
+        Integer layer = layers.get(owner);
+        if (layer != null && p.getY() > layer) {
+            heldAtLayer = layer;
+            return null;
+        }
         return wanted;
+    }
+
+    /**
+     * Hold-Z in layers on: per build, the lowest Y that still has an empty spot to fill, so the key works
+     * bottom-up like the builder. Empty when the setting is off. Looked up again every few ticks.
+     */
+    private static Map<BuildTask, Integer> layers(Minecraft client, List<BuildTask> builds) {
+        if (!RtsConfig.get().autoPlaceLayers) {
+            lowestLayer.clear();
+            return lowestLayer;
+        }
+        if (--layersIn > 0 && lowestLayer.keySet().containsAll(builds)) {
+            return lowestLayer;
+        }
+        layersIn = 5;
+        lowestLayer.clear();
+        ClientLevel world = client.level;
+        for (BuildTask b : builds) {
+            lowestLayer.put(b, lowestUnfinished(world, b));
+        }
+        return lowestLayer;
+    }
+
+    /**
+     * The lowest Y where {@code build} still has an empty spot to fill: the layer hold-Z works on (and the
+     * hologram shows outside RTS mode). Integer.MAX_VALUE when there's none.
+     */
+    public static int lowestUnfinished(ClientLevel world, BuildTask build) {
+        int lowest = Integer.MAX_VALUE;
+        for (Map.Entry<BlockPos, BlockState> e : build.blocks().entrySet()) {
+            BlockPos p = e.getKey();
+            // Out of view (unloaded) counts as not done: the layer must really be finished. Spots that
+            // refused a block are let go until the key is pressed again, or one bad spot would block for good.
+            if (p.getY() >= lowest || e.getValue().isAir() || refused.contains(p) || skippedLayers.contains(p)) {
+                continue;
+            }
+            BlockState now = world.getBlockState(p);
+            if (!MaterialPlanner.matches(now, e.getValue()) && (now.isAir() || now.canBeReplaced())) {
+                lowest = p.getY();
+            }
+        }
+        return lowest;
+    }
+
+    /**
+     * The Skip layer key with no build running: hold-Z in layers leaves what's left of each queued build's
+     * current layer and goes on with the one above. @return the layers skipped (empty: nothing to skip)
+     */
+    public static java.util.SortedSet<Integer> skipLayer(Minecraft client) {
+        java.util.SortedSet<Integer> ys = new java.util.TreeSet<>();
+        if (client.level == null || !RtsConfig.get().autoPlaceLayers) {
+            return ys;
+        }
+        Set<BlockPos> queued = new HashSet<>();
+        for (RtsTask t : TaskQueue.get().snapshot()) {
+            if (t instanceof BuildTask b && !b.clearing()) {
+                queued.addAll(b.blocks().keySet());
+                int y = lowestUnfinished(client.level, b);
+                if (y == Integer.MAX_VALUE) {
+                    continue;
+                }
+                for (BlockPos p : b.blocks().keySet()) {
+                    if (p.getY() == y) {
+                        skippedLayers.add(p.immutable());
+                    }
+                }
+                ys.add(y);
+            }
+        }
+        // Forget spots of builds that are gone.
+        skippedLayers.retainAll(queued);
+        layersIn = 0;
+        return ys;
     }
 
     /** Blocks of queued builds within range that still need placing: lowest first, then nearest. */
     private static List<Candidate> inRange(Minecraft client, List<BuildTask> builds, boolean safe) {
         List<Candidate> out = new ArrayList<>();
+        Map<BuildTask, Integer> layers = layers(client, builds);
+        heldAtLayer = Integer.MIN_VALUE;
         double reach = Reach.reach(client);
         double range = RtsConfig.get().autoPlaceRange;
         if (range > 0) {
@@ -226,7 +340,7 @@ public final class AutoPlace {
                     if (d > reach * reach) {
                         continue;
                     }
-                    BlockState wanted = pending(client, builds, p);
+                    BlockState wanted = pending(client, builds, p, layers);
                     if (wanted == null) {
                         continue;
                     }
@@ -374,18 +488,26 @@ public final class AutoPlace {
             }
             return faces.isEmpty() ? Placed.NO : Placed.WRONG_WAY;
         }
-        Direction toSupport = NativeBuilder.support(world, pos);
-        BlockHitResult hit;
-        if (toSupport != null) {
-            Vec3 v = Vec3.atCenterOf(pos).add(toSupport.getStepX() * 0.5, toSupport.getStepY() * 0.5, toSupport.getStepZ() * 0.5);
-            hit = new BlockHitResult(v, toSupport.getOpposite(), pos.relative(toSupport), false);
-        } else {
-            // Mid-air: click the empty cell itself, on the face toward us.
-            Vec3 eye = player.getEyePosition();
-            Direction f = Direction.getNearest(eye.x - (pos.getX() + 0.5), eye.y - (pos.getY() + 0.5), eye.z - (pos.getZ() + 0.5));
-            hit = new BlockHitResult(Vec3.atCenterOf(pos).add(f.getStepX() * 0.5, f.getStepY() * 0.5, f.getStepZ() * 0.5), f, pos, false);
+        // Every way of clicking into the spot: against each solid neighbour (low and high on side faces, which
+        // decides a stair's or slab's half), then mid-air. The first that puts the block down pointing the way
+        // the order wants is used; if none does, it's left alone rather than placed the wrong way round.
+        List<BlockHitResult> hits = placementHits(world, pos, RtsConfig.get().airPlace);
+        BlockHitResult hit = null;
+        float[] rotation = null;
+        for (BlockHitResult h : hits) {
+            float[] r = NativeBuilder.rotationFor(player, wanted, h);
+            if (r != null) {
+                hit = h;
+                rotation = r;
+                break;
+            }
         }
-        float[] rotation = NativeBuilder.rotationFor(player, wanted, hit);
+        if (hit == null) {
+            if (hits.isEmpty() || NativeBuilder.oriented(wanted)) {
+                return hits.isEmpty() ? Placed.NO : Placed.WRONG_WAY;
+            }
+            hit = hits.get(0); // no facing to get right (and the block won't say what it would become)
+        }
         float yaw = player.getYRot();
         float pitch = player.getXRot();
         boolean turn = rotation != null && (Math.abs(Mth.wrapDegrees(rotation[0] - yaw)) > 1.0F || Math.abs(rotation[1] - pitch) > 1.0F);
@@ -406,6 +528,32 @@ public final class AutoPlace {
             }
         }
         return Placed.DONE;
+    }
+
+    /** Clicks that would put a block into {@code pos}: on each solid neighbour (side faces also low and high), then mid-air. */
+    private static List<BlockHitResult> placementHits(ClientLevel world, BlockPos pos, boolean airPlace) {
+        List<BlockHitResult> out = new ArrayList<>();
+        Vec3 center = Vec3.atCenterOf(pos);
+        for (Direction d : Direction.values()) {
+            BlockPos n = pos.relative(d);
+            if (!NativeBuilder.clickable(world, n)) {
+                continue;
+            }
+            Vec3 face = center.add(d.getStepX() * 0.5, d.getStepY() * 0.5, d.getStepZ() * 0.5);
+            for (double dy : d.getAxis().isHorizontal() ? new double[]{0, 0.25, -0.25} : new double[]{0}) {
+                out.add(new BlockHitResult(face.add(0, dy, 0), d.getOpposite(), n, false));
+            }
+        }
+        if (airPlace) {
+            // Mid-air: click the empty cell itself.
+            for (Direction f : Direction.values()) {
+                Vec3 face = center.add(f.getStepX() * 0.5, f.getStepY() * 0.5, f.getStepZ() * 0.5);
+                for (double dy : f.getAxis().isHorizontal() ? new double[]{0, 0.25, -0.25} : new double[]{0}) {
+                    out.add(new BlockHitResult(face.add(0, dy, 0), f, pos, false));
+                }
+            }
+        }
+        return out;
     }
 
     private static void click(Minecraft client, BlockPos pos, BlockHitResult hit) {

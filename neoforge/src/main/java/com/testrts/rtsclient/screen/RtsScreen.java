@@ -77,6 +77,15 @@ public final class RtsScreen extends Screen {
     private static final int PAD = 4;
     private static final int ROW = 15;
     private static final int CARD_H = 26;
+    /** One-line order cards, used when fewer than {@link #MIN_FULL_CARDS} full ones fit. */
+    private static final int COMPACT_H = 14;
+    private static final int MIN_FULL_CARDS = 3;
+    /** Command buttons above the order list, with the ORDERS title and activity line (keep in step with initRightPanel). */
+    private static final int RIGHT_BUTTONS_H = 12 + 3 + 4 * 18 + 20 + 22;
+    /** Order cards the right panel makes room for when the screen is tall enough. */
+    private static final int ORDER_CARDS = 6;
+    /** The storage section under the orders: gap, title and AE2 line, three button rows, padding. */
+    private static final int STORAGE_H = 4 + 34 + 3 * 18 + 4;
     private static final int DRAG_THRESHOLD = 3;
     /** Order card being dragged to a new place in the queue. */
     @Nullable
@@ -112,6 +121,10 @@ public final class RtsScreen extends Screen {
     private final List<int[]> leftSections = new ArrayList<>();
     private final List<String> leftSectionNames = new ArrayList<>();
     private int heightRowY = -1;
+    /** Blend strength / Level edge row (its value is drawn between the - and + buttons). */
+    private int strengthRowY = -1;
+    /** Level brush height row. */
+    private int levelRowY = -1;
     private int clipboardInfoY = -1;
     /** Where the chosen shape's name is written under the shape icons. */
     private int shapeNameY = -1;
@@ -128,6 +141,8 @@ public final class RtsScreen extends Screen {
     private double pressX;
     private double pressY;
     private boolean dragging;
+    /** Left button held with the Blend brush: dragging keeps painting. */
+    private boolean blendPainting;
     /** Interact: the mob under the cursor. */
     @Nullable
     private net.minecraft.world.entity.Entity hoverEntity;
@@ -177,7 +192,7 @@ public final class RtsScreen extends Screen {
     }
 
     private int rightBottom() {
-        return Math.min(bottomY() - PAD - 14, TOP_H + PAD + 46 + 5 * (CARD_H + 2) + 70);
+        return Math.min(bottomY() - PAD - 14, TOP_H + PAD + RIGHT_BUTTONS_H + ORDER_CARDS * (CARD_H + 2) + STORAGE_H);
     }
 
     private boolean hasLeftPanel() {
@@ -199,6 +214,11 @@ public final class RtsScreen extends Screen {
 
     private RtsButton add(RtsButton button) {
         return addRenderableWidget(button);
+    }
+
+    /** The Terrain tool's Blend brush is in hand: the left button paints instead of clicking corners. */
+    private boolean blendBrush() {
+        return this.session.tool == ToolMode.TERRAIN && this.session.terrainMode.brush();
     }
 
     private RtsButton button(String label, @Nullable String tip, int x, int y, int w, int h, Runnable action) {
@@ -238,6 +258,12 @@ public final class RtsScreen extends Screen {
             case SPIRAL -> Glyphs.SPIRAL;
             case VEIN -> Glyphs.VEIN;
             case HOLE -> Glyphs.HOLE;
+            case ISLAND -> Glyphs.ISLAND;
+            case MOUNTAIN -> Glyphs.MOUNTAIN;
+            case GIANT_TREE -> Glyphs.GIANT_TREE;
+            case ROCKS -> Glyphs.ROCKS;
+            case MAZE -> Glyphs.MAZE;
+            case BACKROOMS -> Glyphs.BACKROOMS;
         };
     }
 
@@ -400,6 +426,8 @@ public final class RtsScreen extends Screen {
         this.leftSections.clear();
         this.leftSectionNames.clear();
         this.heightRowY = -1;
+        this.strengthRowY = -1;
+        this.levelRowY = -1;
         this.clipboardInfoY = -1;
         this.shapeNameY = -1;
         BuildSession s = this.session;
@@ -432,21 +460,59 @@ public final class RtsScreen extends Screen {
                         s.clearSelection();
                         rebuildWidgets();
                     }).dynamic(() -> "Mode: " + s.mode.label()).left();
-                    button("Bridge", "Bridge look (for the Bridge shape): " + s.bridgeStyle.description(), x + col + 2, y, full - col - 2, ROW - 1,
+                    // Style of the Bridge or Island shape, whichever is picked.
+                    button("Style", "Look of the Bridge or Island shape, each with its own blocks (click to cycle)", x + col + 2, y, full - col - 20, ROW - 1,
                             () -> {
-                                s.bridgeStyle = s.bridgeStyle.next();
-                                Messages.info("Bridge: " + s.bridgeStyle.label() + " - " + s.bridgeStyle.description());
+                                if (s.shape == BuildShape.GIANT_TREE) {
+                                    s.treeKind = s.treeKind.next();
+                                    Messages.info("Giant tree: " + s.treeKind.label() + " - " + s.treeKind.description());
+                                } else if (s.shape == BuildShape.MAZE) {
+                                    s.mazeStyle = s.mazeStyle.next();
+                                    Messages.info("Maze: " + s.mazeStyle.label() + " - " + s.mazeStyle.description());
+                                } else if (s.shape == BuildShape.BACKROOMS) {
+                                    s.backroomsLevel = s.backroomsLevel.next();
+                                    Messages.info("Backrooms: " + s.backroomsLevel.label() + " - " + s.backroomsLevel.description());
+                                } else if (s.shape == BuildShape.ROCKS) {
+                                    s.rockForm = s.rockForm.next();
+                                    Messages.info("Rocks: " + s.rockForm.label() + " - " + s.rockForm.description());
+                                } else if (s.shape == BuildShape.ISLAND || s.shape == BuildShape.MOUNTAIN) {
+                                    s.islandStyle = s.islandStyle.next();
+                                    Messages.info(s.shape.label() + ": " + s.islandStyle.label() + " - " + s.islandStyle.description());
+                                } else {
+                                    s.bridgeStyle = s.bridgeStyle.next();
+                                    Messages.info("Bridge: " + s.bridgeStyle.label() + " - " + s.bridgeStyle.description());
+                                }
                             })
-                            .enabled(() -> s.shape == BuildShape.BRIDGE).dynamic(() -> s.bridgeStyle.label()).left();
+                            .enabled(() -> s.shape == BuildShape.BRIDGE || s.shape == BuildShape.ISLAND || s.shape == BuildShape.MOUNTAIN
+                                    || s.shape == BuildShape.GIANT_TREE || s.shape == BuildShape.ROCKS || s.shape == BuildShape.MAZE
+                                    || s.shape == BuildShape.BACKROOMS)
+                            .dynamic(() -> s.shape == BuildShape.GIANT_TREE ? s.treeKind.label()
+                                    : s.shape == BuildShape.MAZE ? s.mazeStyle.label()
+                                    : s.shape == BuildShape.BACKROOMS ? s.backroomsLevel.label()
+                                    : s.shape == BuildShape.ROCKS ? s.rockForm.label()
+                                    : s.shape == BuildShape.ISLAND || s.shape == BuildShape.MOUNTAIN ? s.islandStyle.label()
+                                    : s.bridgeStyle.label()).left();
+                    button("Randomize", "Island, Mountain, Giant tree, Rocks, Maze or Backrooms: a new random design [N]", x + full - 16, y, 16, ROW - 1,
+                            this::randomizeIsland)
+                            .glyph(Glyphs.DICE, Theme.TEXT).iconOnly().enabled(() -> randomized(s.shape));
                     y += ROW;
                 }
                 button("Hollow", "Only the outside of floors, boxes, circles and spheres [H]", x, y, col, ROW - 1,
                         () -> s.hollow = !s.hollow).selected(() -> s.hollow).dynamic(() -> s.hollow ? "Hollow: on" : "Hollow: off").left();
+                // Islands don't turn over, so the same button picks their underside.
                 button("Inverted", "Dome, pyramid and cone upside down: where you click is the bottom (the tip) and it widens upward - a funnel "
-                                + "or bowl to build, or a pit to dig (click its deepest point; cut view [V] helps) [I]",
-                        x + col + 2, y, full - col - 2, ROW - 1, () -> s.inverted = !s.inverted)
-                        .selected(() -> s.inverted && s.shape.invertible()).enabled(() -> s.shape.invertible())
-                        .dynamic(() -> s.inverted ? "Inverted" : "Upright").left();
+                                + "or bowl to build, or a pit to dig (click its deepest point; cut view [V] helps). "
+                                + "Bridge: hump up or sag down in the middle. Island: the shape of its underside (Pointed, Rounded, Stepped, Torn out). Mountain: its form (Peaked, Rounded, Mesa, Volcano, Jagged, Ridge) [I]; a new design [N]",
+                        x + col + 2, y, full - col - 2, ROW - 1, this::toggleInverted)
+                        .selected(() -> s.inverted && (s.shape.invertible() || s.shape == BuildShape.BRIDGE))
+                        .enabled(() -> s.shape.invertible() || s.shape == BuildShape.ISLAND || s.shape == BuildShape.BRIDGE
+                                || s.shape == BuildShape.MOUNTAIN || s.shape == BuildShape.ROCKS || s.shape == BuildShape.MAZE)
+                        .dynamic(() -> s.shape == BuildShape.ISLAND ? "Bottom: " + s.islandBottom.label()
+                                : s.shape == BuildShape.MAZE ? "Layout: " + s.mazeLayout.label()
+                                : s.shape == BuildShape.ROCKS ? "Look: " + s.rockLook.label()
+                                : s.shape == BuildShape.MOUNTAIN ? "Form: " + s.mountainForm.label()
+                                : s.shape == BuildShape.BRIDGE ? (s.inverted ? "Sag" : "Hump")
+                                : s.inverted ? "Inverted" : "Upright").left();
                 y += ROW;
                 button("-", "Move the air layer down [Alt+scroll]", x, y, 16, ROW - 1, () -> s.airY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly()
                         .enabled(() -> s.airPlace);
@@ -457,10 +523,10 @@ public final class RtsScreen extends Screen {
                         .enabled(() -> s.airPlace);
                 y += ROW;
                 button("-", "Lower", x, y, 16, ROW - 1, () -> s.adjustHeight(-1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly()
-                        .enabled(() -> s.shape.usesHeight());
-                button("+", "Height for walls, boxes and cylinders. Negative digs down. [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
+                        .enabled(() -> s.shape.usesHeight() || s.circleHoleMode());
+                button("+", "Height for walls, boxes and cylinders. Negative digs down. Circle (hollow off): a hole from the centre. [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
                         () -> s.adjustHeight(1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly()
-                        .enabled(() -> s.shape.usesHeight());
+                        .enabled(() -> s.shape.usesHeight() || s.circleHoleMode());
                 this.heightRowY = y;
                 y += ROW;
                 if (s.tool == ToolMode.BUILD) {
@@ -530,7 +596,8 @@ public final class RtsScreen extends Screen {
                 button("Mirror", "Flip the blueprint left-right [N]", x + col + 2, y, col, ROW - 1, () -> s.pasteMirror = !s.pasteMirror)
                         .glyph(Glyphs.MIRROR, Theme.TEXT).selected(() -> s.pasteMirror);
                 y += ROW;
-                button("Air", "clear: also mine whatever is in the blueprint's empty spaces, for an exact copy. keep: only add blocks.",
+                button("Air", "clear: also dig out the blueprint's empty spaces (rooms, doorways) - for pasting into a hillside or a wall."
+                                + " keep: leave them. Solid blocks where the blueprint has a block are always cleared first.",
                         x, y, full, ROW - 1, () -> s.pasteClearsAir = !s.pasteClearsAir)
                         .dynamic(() -> s.pasteClearsAir ? "Air: clear" : "Air: keep").left();
                 y += ROW;
@@ -641,11 +708,25 @@ public final class RtsScreen extends Screen {
                     }).selected(() -> s.terrainMode == mode)
                             .icon(new ItemStack(switch (mode) {
                                 case FLATTEN -> Items.IRON_SHOVEL;
+                                case BLEND -> Items.BRUSH;
+                                case LEVEL -> Items.STONE_SHOVEL;
                                 case LIGHT_UP -> Items.TORCH;
                                 case QUARRY -> Items.IRON_PICKAXE;
                                 case FELL_TREES -> Items.IRON_AXE;
                                 case HARVEST -> Items.WHEAT;
                                 case PLANT_TREES -> Items.OAK_SAPLING;
+                                case ROAD -> Items.DIRT_PATH;
+                                case ROOM -> Items.CHEST;
+                                case FARM -> Items.IRON_HOE;
+                                case MOB_PROOF -> Items.SMOOTH_STONE_SLAB;
+                                case RESTYLE -> Items.CYAN_DYE;
+                                case HILL -> Items.GRASS_BLOCK;
+                                case LAKE -> Items.WATER_BUCKET;
+                                case RIVER -> Items.SAND;
+                                case TERRACE -> Items.STONE_STAIRS;
+                                case CAVE -> Items.STONE_PICKAXE;
+                                case ISLAND_BRIDGE -> Items.OAK_FENCE;
+                                case DECORATE -> Items.POPPY;
                             }));
                 }
                 y += ((TerrainMode.values().length + 1) / 2) * (ROW + 5) + 2;
@@ -656,6 +737,58 @@ public final class RtsScreen extends Screen {
                             () -> s.terrainClearHeight = Math.max(1, s.terrainClearHeight - 4)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
                     button("+", "How far above the level to mine [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
                             () -> s.terrainClearHeight = Math.min(64, s.terrainClearHeight + 4)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    this.heightRowY = y;
+                    y += ROW + 2;
+                }
+                if (s.terrainMode.brush()) {
+                    section(y, "BRUSH SIZE");
+                    y += 11;
+                    button("-", "Smaller brush [Ctrl+scroll]", x, y, 16, ROW - 1,
+                            () -> s.blendRadius = Math.max(0, s.blendRadius - 1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                    button("+", "Bigger brush [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
+                            () -> s.blendRadius = Math.min(12, s.blendRadius + 1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    this.heightRowY = y;
+                    y += ROW + 2;
+                    if (s.terrainMode == TerrainMode.LEVEL) {
+                        section(y, "LEVEL Y");
+                        y += 11;
+                        button("-", "Level lower (set to where you start painting)", x, y, 16, ROW - 1,
+                                () -> s.levelY--).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                        button("+", "Level higher (set to where you start painting)", x + full - 16, y, 16, ROW - 1,
+                                () -> s.levelY++).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                        this.levelRowY = y;
+                        y += ROW + 2;
+                        section(y, "EDGE");
+                        y += 11;
+                        button("-", "Steeper edge (0: a sharp step)", x, y, 16, ROW - 1,
+                                () -> s.levelRamp = Math.max(0, s.levelRamp - 1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                        button("+", "Wider slope from the level into the land around it", x + full - 16, y, 16, ROW - 1,
+                                () -> s.levelRamp = Math.min(10, s.levelRamp + 1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    } else {
+                        section(y, "STRENGTH");
+                        y += 11;
+                        button("-", "Gentler: only the sharpest bumps and dips change", x, y, 16, ROW - 1,
+                                () -> s.blendStrength = Math.max(1, s.blendStrength - 1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                        button("+", "Stronger: smooths further and spreads slopes wider", x + full - 16, y, 16, ROW - 1,
+                                () -> s.blendStrength = Math.min(10, s.blendStrength + 1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
+                    }
+                    this.strengthRowY = y;
+                    y += ROW + 2;
+                    button("Top", "keep: top raised ground with the surface block (grass, podzol...) - "
+                                    + "in survival that needs those blocks (Silk Touch). dirt: leave plain dirt, grass grows back by itself.",
+                            x, y, full, ROW - 1, () -> s.blendKeepTop = !s.blendKeepTop)
+                            .dynamic(() -> s.blendKeepTop ? "Top: keep surface" : "Top: dirt").left();
+                    y += ROW;
+                    button("Clear", "Forget the painted area [X]", x, y, full, ROW - 1, s::clearSelection).left();
+                    y += ROW + 2;
+                }
+                if (s.terrainMode.sizeLabel() != null) {
+                    section(y, s.terrainMode.sizeLabel());
+                    y += 11;
+                    button("-", "Smaller [Ctrl+scroll]", x, y, 16, ROW - 1,
+                            () -> s.terrainSize = Math.max(1, s.terrainSize - 1)).glyph(Glyphs.MINUS, Theme.TEXT).iconOnly();
+                    button("+", "Bigger [Ctrl+scroll]", x + full - 16, y, 16, ROW - 1,
+                            () -> s.terrainSize = Math.min(32, s.terrainSize + 1)).glyph(Glyphs.PLUS, Theme.TEXT).iconOnly();
                     this.heightRowY = y;
                     y += ROW + 2;
                 }
@@ -676,6 +809,22 @@ public final class RtsScreen extends Screen {
             }
         }
         this.leftPanelBottom = y + PAD;
+    }
+
+    private static String sizeText(BuildSession s) {
+        return switch (s.terrainMode) {
+            case ROAD, RIVER, ISLAND_BRIDGE -> s.terrainSize + " wide";
+            case HILL -> s.terrainSize + " high";
+            case LAKE -> s.terrainSize + " deep";
+            case TERRACE -> s.terrainSize + " per step";
+            case CAVE -> s.terrainSize + " across";
+            case DECORATE -> s.terrainSize + " / 10";
+            default -> String.valueOf(s.terrainSize);
+        };
+    }
+
+    private static String brushName(BuildSession s, String fallback) {
+        return s.brush.getItem() instanceof BlockItem ? s.brush.getHoverName().getString() : fallback;
     }
 
     /** One button per block-state property of the brush (slab half, stair shape...), cycling through values. */
@@ -836,6 +985,12 @@ public final class RtsScreen extends Screen {
         if (ghost == null) {
             return null;
         }
+        // The face the ray goes in through, so a build started on the hologram sits on top of it (or against
+        // the side you're pointing at), not on whichever side faces the camera.
+        BlockHitResult in = net.minecraft.world.phys.AABB.clip(java.util.List.of(new net.minecraft.world.phys.AABB(ghost)), start, end, ghost);
+        if (in != null) {
+            return in;
+        }
         net.minecraft.core.Direction face = net.minecraft.core.Direction.getNearest(-dir.x, -dir.y, -dir.z);
         net.minecraft.world.phys.Vec3 at = net.minecraft.world.phys.Vec3.atCenterOf(ghost).add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
         return new net.minecraft.world.phys.BlockHitResult(at, face, ghost, false);
@@ -845,9 +1000,9 @@ public final class RtsScreen extends Screen {
         var cam = this.controller.camera();
         BlockHitResult hit = MouseRay.pick(cam, mx, my, this.width, this.height, false);
         BuildSession s = this.session;
-        if (s.tool == ToolMode.DESTROY) {
-            // Destroy can point at the hologram of queued builds (to cut blocks out of them) in front of
-            // real blocks.
+        if (s.tool == ToolMode.DESTROY || s.tool == ToolMode.BUILD || s.tool == ToolMode.BLUEPRINT) {
+            // The hologram of queued builds is pointed at like real blocks in front of it: Destroy cuts blocks
+            // out of it, Build and Blueprint (and roofs) go on top of it or against it.
             BlockHitResult ghost = pickGhost(mx, my, hit);
             if (ghost != null) {
                 return ghost;
@@ -887,6 +1042,42 @@ public final class RtsScreen extends Screen {
         BlockHitResult block = pick(mx, my);
         double max = block != null ? block.getLocation().distanceTo(this.controller.camera().position()) + 0.5 : 128.0;
         return com.testrts.rtsclient.util.MouseRay.pickEntity(this.controller.camera(), mx, my, this.width, this.height, max);
+    }
+
+    /** Randomize button / [N]: the island being placed gets a new design (the preview updates). */
+    private void randomizeIsland() {
+        this.session.islandSeed = new java.util.Random().nextLong();
+        Messages.info("New " + this.session.shape.label().toLowerCase(java.util.Locale.ROOT) + " design");
+    }
+
+    /** Shapes with a random design per placement (the dice button, [N]). */
+    private static boolean randomized(BuildShape shape) {
+        return shape == BuildShape.ISLAND || shape == BuildShape.MOUNTAIN || shape == BuildShape.GIANT_TREE || shape == BuildShape.ROCKS
+                || shape == BuildShape.MAZE || shape == BuildShape.BACKROOMS;
+    }
+
+    /** [I]: dome, pyramid and cone upside down; bridges hump or sag; for the Island shape, the next underside. */
+    private void toggleInverted() {
+        BuildSession s = this.session;
+        if (s.shape == BuildShape.MAZE) {
+            s.mazeLayout = s.mazeLayout.next();
+            Messages.info("Maze layout: " + s.mazeLayout.label() + " - " + s.mazeLayout.description());
+        } else if (s.shape == BuildShape.ROCKS) {
+            s.rockLook = s.rockLook.next();
+            Messages.info("Rocks look: " + s.rockLook.label());
+        } else if (s.shape == BuildShape.MOUNTAIN) {
+            s.mountainForm = s.mountainForm.next();
+            Messages.info("Mountain form: " + s.mountainForm.label() + " - " + s.mountainForm.description());
+        } else if (s.shape == BuildShape.ISLAND) {
+            s.islandBottom = s.islandBottom.next();
+            Messages.info("Island bottom: " + s.islandBottom.label() + " - " + s.islandBottom.description());
+        } else if (s.shape == BuildShape.BRIDGE) {
+            s.inverted = !s.inverted;
+            Messages.info(s.inverted ? "Bridge sags down in the middle" : "Bridge humps up in the middle");
+        } else if (s.shape.invertible()) {
+            s.inverted = !s.inverted;
+            Messages.info(s.shape.label() + (s.inverted ? " upside down" : " upright"));
+        }
     }
 
     private void toggleAir() {
@@ -1056,7 +1247,12 @@ public final class RtsScreen extends Screen {
                 }
             }
             BlockHitResult hit = pick(mx, my);
-            if (hit != null && hasShiftDown() && this.session.tool == ToolMode.BUILD && this.session.anchorA == null) {
+            if (blendBrush()) {
+                this.blendPainting = true;
+                if (hit != null) {
+                    this.session.paintBlend(hit.getBlockPos(), hasShiftDown());
+                }
+            } else if (hit != null && hasShiftDown() && this.session.tool == ToolMode.BUILD && this.session.anchorA == null) {
                 // Shift+click while building: mine that block without switching tools.
                 this.actions.destroyAt(hit.getBlockPos());
             } else if (hit != null) {
@@ -1075,6 +1271,13 @@ public final class RtsScreen extends Screen {
         if (this.dragTask != null && button == 0) {
             if (Math.abs(my - this.dragFromY) > DRAG_THRESHOLD) {
                 this.dragMoved = true;
+            }
+            return true;
+        }
+        if (button == 0 && this.blendPainting) {
+            BlockHitResult hit = pick(mx, my);
+            if (hit != null) {
+                this.session.paintBlend(hit.getBlockPos(), hasShiftDown());
             }
             return true;
         }
@@ -1100,7 +1303,7 @@ public final class RtsScreen extends Screen {
         my /= this.uiScale;
         if (this.dragTask != null && button == 0) {
             if (this.dragMoved) {
-                int row = Math.max(0, (int) ((my - this.ordersTop + (CARD_H + 2) / 2.0) / (CARD_H + 2)));
+                int row = Math.max(0, (int) ((my - this.ordersTop + (cardH() + 2) / 2.0) / (cardH() + 2)));
                 List<RtsTask> tasks = TaskQueue.get().snapshot();
                 int from = tasks.indexOf(this.dragTask);
                 int to = this.taskScroll + row;
@@ -1112,6 +1315,9 @@ public final class RtsScreen extends Screen {
             this.dragTask = null;
             this.dragMoved = false;
             return true;
+        }
+        if (button == 0) {
+            this.blendPainting = false;
         }
         if (button == this.pressedButton) {
             this.pressedButton = -1;
@@ -1152,8 +1358,15 @@ public final class RtsScreen extends Screen {
             return true;
         }
         if (hasControlDown()) {
-            if (this.session.tool == ToolMode.TERRAIN) {
+            if (blendBrush()) {
+                this.session.blendRadius = Mth.clamp(this.session.blendRadius + (scrollY > 0 ? 1 : -1), 0, 12);
+            } else if (this.session.tool == ToolMode.TERRAIN && this.session.terrainMode.sizeLabel() != null) {
+                this.session.terrainSize = Mth.clamp(this.session.terrainSize + (scrollY > 0 ? 1 : -1), 1, 32);
+            } else if (this.session.tool == ToolMode.TERRAIN) {
                 this.session.terrainClearHeight = Mth.clamp(this.session.terrainClearHeight + (scrollY > 0 ? 1 : -1), 1, 64);
+            } else if (this.session.circleHoleMode()) {
+                this.session.adjustHeight(scrollY > 0 ? 1 : -1);
+                Messages.info("Circle hole " + (this.session.circleHole == 0 ? "off" : this.session.circleHole + " wide from the centre"));
             } else if (this.session.shape.usesHeight()) {
                 this.session.adjustHeight(scrollY > 0 ? 1 : -1);
                 Messages.info(this.session.shape.label() + " height " + this.session.height);
@@ -1177,7 +1390,7 @@ public final class RtsScreen extends Screen {
             if (this.search.isFocused()) {
                 this.search.setFocused(false);
                 setFocused(null);
-            } else if (s.anchorA != null || s.pasteAnchor != null) {
+            } else if (s.anchorA != null || s.pasteAnchor != null || !s.blendPaint.isEmpty()) {
                 s.clearSelection();
                 s.pasteAnchor = null;
             } else {
@@ -1195,6 +1408,10 @@ public final class RtsScreen extends Screen {
         }
         if (RtsClientMod.stopKey.matches(keyCode, scanCode)) {
             TaskQueue.get().clear(this.minecraft);
+            return true;
+        }
+        if (RtsClientMod.skipLayerKey.matches(keyCode, scanCode)) {
+            RtsClientMod.skipLayer(this.minecraft);
             return true;
         }
         if (this.minecraft.options.keyChat.matches(keyCode, scanCode)) {
@@ -1231,6 +1448,8 @@ public final class RtsScreen extends Screen {
             case GLFW.GLFW_KEY_N -> {
                 if (s.tool == ToolMode.BLUEPRINT) {
                     s.pasteMirror = !s.pasteMirror;
+                } else if (s.tool.usesShapes() && randomized(s.shape)) {
+                    randomizeIsland();
                 }
             }
             case GLFW.GLFW_KEY_M -> {
@@ -1246,12 +1465,7 @@ public final class RtsScreen extends Screen {
                 }
             }
             case GLFW.GLFW_KEY_H -> s.hollow = !s.hollow;
-            case GLFW.GLFW_KEY_I -> {
-                if (s.shape.invertible()) {
-                    s.inverted = !s.inverted;
-                    Messages.info(s.shape.label() + (s.inverted ? " upside down" : " upright"));
-                }
-            }
+            case GLFW.GLFW_KEY_I -> toggleInverted();
             case GLFW.GLFW_KEY_B -> toggleAir();
             case GLFW.GLFW_KEY_P -> this.minecraft.setScreen(new PresetScreen(this));
             case GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> this.actions.confirm();
@@ -1424,7 +1638,7 @@ public final class RtsScreen extends Screen {
             {"I", "Dome, pyramid, cone upside down"},
             {"N", "Mirror the blueprint being pasted"},
             {"B, Alt+scroll", "Mid-air placing, move its layer"},
-            {"Ctrl+scroll", "Shape height"},
+            {"Ctrl+scroll", "Shape height (Blend / Level: brush size)"},
             {"Arrows, Shift+Up/Down", "Nudge the shape"},
             {"Enter / X", "Confirm / cancel a shape"},
             {"V, PgUp / PgDn", "Cut view, move the cut"},
@@ -1596,10 +1810,19 @@ public final class RtsScreen extends Screen {
         }
         if (this.heightRowY >= 0) {
             boolean terrain = s.tool == ToolMode.TERRAIN;
-            String h = terrain ? s.terrainMode == TerrainMode.PLANT_TREES ? s.treeSpacing + " apart" : s.terrainClearHeight + " blocks"
-                    : s.shape.heightLabel() + " " + s.height;
-            boolean active = terrain || s.shape.usesHeight();
+            String h = terrain ? s.terrainMode.sizeLabel() != null ? sizeText(s)
+                    : s.terrainMode == TerrainMode.PLANT_TREES ? s.treeSpacing + " apart"
+                    : s.terrainMode.brush() ? (s.blendRadius * 2 + 1) + " wide" : s.terrainClearHeight + " blocks"
+                    : s.circleHoleMode() ? "Hole " + s.circleHole : s.shape.heightLabel() + " " + s.height;
+            boolean active = terrain || s.shape.usesHeight() || s.circleHoleMode();
             ctx.drawCenteredString(this.font, h, (x0 + x1) / 2, this.heightRowY + 3, active ? Theme.TEXT : Theme.TEXT_FAINT);
+        }
+        if (this.strengthRowY >= 0) {
+            String v = s.terrainMode == TerrainMode.LEVEL ? s.levelRamp == 0 ? "sharp" : s.levelRamp + " wide" : s.blendStrength + " / 10";
+            ctx.drawCenteredString(this.font, v, (x0 + x1) / 2, this.strengthRowY + 3, Theme.TEXT);
+        }
+        if (this.levelRowY >= 0) {
+            ctx.drawCenteredString(this.font, "Y " + s.levelY, (x0 + x1) / 2, this.levelRowY + 3, Theme.TEXT);
         }
         if (this.clipboardInfoY >= 0) {
             if (s.tool == ToolMode.BLUEPRINT) {
@@ -1611,20 +1834,42 @@ public final class RtsScreen extends Screen {
             } else if (s.tool == ToolMode.TERRAIN) {
                 String fill = switch (s.terrainMode) {
                     case FLATTEN -> "Fill: " + WorldActions.flattenFill(s).getBlock().getName().getString();
+                    case BLEND, LEVEL -> "Fill: matching ground";
                     case LIGHT_UP -> "Uses torches";
                     case QUARRY -> "Dig " + s.terrainClearHeight + " deep from the top";
                     case FELL_TREES -> "Replants saplings";
                     case HARVEST -> "Replants, stores produce";
                     case PLANT_TREES -> "Plants " + WorldActions.treeSapling(s).getName().getString();
+                    case ROAD -> "Road: " + brushName(s, "Cobblestone");
+                    case ROOM -> "Floor: " + brushName(s, "Spruce Planks");
+                    case FARM -> "Sows " + (s.brush.isEmpty() ? "wheat" : s.brush.getHoverName().getString());
+                    case MOB_PROOF -> "Covers with " + brushName(s, "Smooth Stone Slab");
+                    case RESTYLE -> "Into " + brushName(s, "(pick a block)");
+                    case HILL -> "Grass, dirt, stone";
+                    case LAKE, RIVER -> "Water from buckets";
+                    case TERRACE -> "Grass steps";
+                    case CAVE -> "Lit every 8 blocks";
+                    case ISLAND_BRIDGE -> "Look: " + s.bridgeStyle.label();
+                    case DECORATE -> "Plants and rocks";
                 };
                 ctx.drawString(this.font, trim(fill, x1 - x0), x0, this.clipboardInfoY, Theme.TEXT_DIM, false);
-                ctx.drawString(this.font, "Click two corners", x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
+                ctx.drawString(this.font, s.terrainMode.brush() ? "Drag to paint, Enter" : s.terrainMode.line() ? "Click two points" : "Click two corners",
+                        x0, this.clipboardInfoY + 10, Theme.TEXT_FAINT, false);
             }
         }
     }
 
     private int visibleCards() {
-        return Math.max(1, (this.ordersBottom - this.ordersTop) / (CARD_H + 2));
+        return Math.max(1, (this.ordersBottom - this.ordersTop) / (cardH() + 2));
+    }
+
+    /** Cards are slimmed to one line when the screen is too short for a few full ones. */
+    private boolean compactCards() {
+        return (this.ordersBottom - this.ordersTop) / (CARD_H + 2) < MIN_FULL_CARDS;
+    }
+
+    private int cardH() {
+        return compactCards() ? COMPACT_H : CARD_H;
     }
 
     private void drawOrders(GuiGraphics ctx, int mx, int my) {
@@ -1659,25 +1904,27 @@ public final class RtsScreen extends Screen {
             boolean paused = queue.isPaused(task);
             if (task == this.dragTask && this.dragMoved) {
                 // Leave a slot where the card was; the card itself follows the mouse.
-                Theme.outline(ctx, x0, y, x1 - x0, CARD_H, Theme.withAlpha(Theme.ACCENT, 0.4F));
-                y += CARD_H + 2;
+                Theme.outline(ctx, x0, y, x1 - x0, cardH(), Theme.withAlpha(Theme.ACCENT, 0.4F));
+                y += cardH() + 2;
                 continue;
             }
-            boolean cardHover = mx >= x0 && mx < x1 && my >= y && my < y + CARD_H;
+            boolean cardHover = mx >= x0 && mx < x1 && my >= y && my < y + cardH();
             int cardBg = running ? 0xFF16283A : cardHover ? 0xFF1F2834 : 0xFF19212B;
-            Theme.round(ctx, x0, y, x1 - x0, CARD_H, cardBg);
-            ctx.fillGradient(x0 + 1, y + 1, x1 - 1, y + CARD_H / 2, Theme.mix(cardBg, 0xFFFFFFFF, 0.05F), cardBg);
-            Theme.outline(ctx, x0, y, x1 - x0, CARD_H, running
+            Theme.round(ctx, x0, y, x1 - x0, cardH(), cardBg);
+            ctx.fillGradient(x0 + 1, y + 1, x1 - 1, y + cardH() / 2, Theme.mix(cardBg, 0xFFFFFFFF, 0.05F), cardBg);
+            Theme.outline(ctx, x0, y, x1 - x0, cardH(), running
                     ? Theme.withAlpha(Theme.ACCENT, 0.35F + 0.4F * Theme.pulse(1600)) : Theme.BORDER);
             if (running) {
-                ctx.fill(x0, y + 2, x0 + 2, y + CARD_H - 2, Theme.ACCENT);
+                ctx.fill(x0, y + 2, x0 + 2, y + cardH() - 2, Theme.ACCENT);
             }
             ctx.drawString(this.font, trim(task.label(), x1 - x0 - 40), x0 + 5, y + 3,
                     paused ? Theme.TEXT_FAINT : running ? Theme.TEXT : 0xFFC9D3DD, false);
-            ctx.drawString(this.font, trim(paused ? "paused" : task.detail(), x1 - x0 - 10), x0 + 5, y + 13,
-                    paused ? Theme.GOLD : Theme.TEXT_DIM, false);
+            if (!compactCards()) {
+                ctx.drawString(this.font, trim(paused ? "paused" : task.detail(), x1 - x0 - 10), x0 + 5, y + 13,
+                        paused ? Theme.GOLD : Theme.TEXT_DIM, false);
+            }
             if (task instanceof BuildTask build && build.progress() >= 0) {
-                Theme.bar(ctx, x0 + 4, y + CARD_H - 4, x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD, running);
+                Theme.bar(ctx, x0 + 4, y + cardH() - (compactCards() ? 3 : 4), x1 - x0 - 8, 2, build.progress(), build.clearing() ? Theme.BAD : Theme.GOOD, running);
             }
             int bx = x1 - 11;
             boolean hot = mx >= bx && mx < bx + 9 && my >= y + 2 && my < y + 11;
@@ -1690,18 +1937,25 @@ public final class RtsScreen extends Screen {
                 boolean hotTop = mx >= tx && mx < tx + 9 && my >= y + 2 && my < y + 11;
                 Glyphs.TOP.draw(ctx, tx + 1, y + 3, hotTop ? Theme.ACCENT : Theme.TEXT_FAINT);
             }
-            y += CARD_H + 2;
+            y += cardH() + 2;
         }
         if (this.dragTask != null && this.dragMoved && tasks.contains(this.dragTask)) {
-            int row = Mth.clamp((int) ((my - this.ordersTop + (CARD_H + 2) / 2) / (CARD_H + 2)), 0, visible);
-            int ly = this.ordersTop + row * (CARD_H + 2) - 2;
+            int row = Mth.clamp((int) ((my - this.ordersTop + (cardH() + 2) / 2) / (cardH() + 2)), 0, visible);
+            int ly = this.ordersTop + row * (cardH() + 2) - 2;
             ctx.fill(x0, ly, x1, ly + 1, Theme.ACCENT);
-            int gy = my - CARD_H / 2;
-            Theme.round(ctx, x0 + 3, gy, x1 - x0, CARD_H, 0xE0243246);
-            Theme.outline(ctx, x0 + 3, gy, x1 - x0, CARD_H, Theme.ACCENT);
-            ctx.drawString(this.font, trim(this.dragTask.label(), x1 - x0 - 10), x0 + 8, gy + 8, Theme.TEXT, false);
+            int gy = my - cardH() / 2;
+            Theme.round(ctx, x0 + 3, gy, x1 - x0, cardH(), 0xE0243246);
+            Theme.outline(ctx, x0 + 3, gy, x1 - x0, cardH(), Theme.ACCENT);
+            ctx.drawString(this.font, trim(this.dragTask.label(), x1 - x0 - 10), x0 + 8, gy + (cardH() - 8) / 2, Theme.TEXT, false);
         }
         if (tasks.size() > visible) {
+            // Scrollbar along the right edge of the list: where we are in the queue (scroll over the panel to move).
+            int top = this.ordersTop;
+            int track = visible * (cardH() + 2) - 2;
+            int thumb = Math.max(8, track * visible / tasks.size());
+            int thumbY = top + (track - thumb) * this.taskScroll / Math.max(1, tasks.size() - visible);
+            ctx.fill(x1 + 1, top, x1 + 3, top + track, Theme.withAlpha(Theme.BORDER, 0.6F));
+            ctx.fill(x1 + 1, thumbY, x1 + 3, thumbY + thumb, Theme.ACCENT);
             String more = (this.taskScroll + 1) + "-" + Math.min(tasks.size(), this.taskScroll + visible) + " of " + tasks.size();
             ctx.drawString(this.font, more, x1 - this.font.width(more), this.ordersTop - 22, Theme.TEXT_FAINT, false);
         }
@@ -1712,14 +1966,14 @@ public final class RtsScreen extends Screen {
             return false;
         }
         List<RtsTask> tasks = TaskQueue.get().snapshot();
-        int row = (int) ((my - this.ordersTop) / (CARD_H + 2));
+        int row = (int) ((my - this.ordersTop) / (cardH() + 2));
         int idx = this.taskScroll + row;
         if (row >= visibleCards() || idx < 0 || idx >= tasks.size()) {
             return false;
         }
         int x1 = this.width - 2 * PAD;
-        double cardY = this.ordersTop + row * (CARD_H + 2);
-        if (my >= cardY + CARD_H) {
+        double cardY = this.ordersTop + row * (cardH() + 2);
+        if (my >= cardY + cardH()) {
             return false;
         }
         RtsTask task = tasks.get(idx);
@@ -1881,12 +2135,16 @@ public final class RtsScreen extends Screen {
                 chips.add(s.shape.label() + (s.hollow && s.shape.supportsHollow() ? " hollow" : ""));
                 if (s.shape.usesHeight()) {
                     chips.add("h" + s.height);
+                } else if (s.circleHoleMode() && s.circleHole > 0) {
+                    chips.add("hole " + s.circleHole);
                 }
             }
             case DESTROY -> {
                 chips.add(s.shape.label() + (s.hollow && s.shape.supportsHollow() ? " hollow" : ""));
                 if (s.shape.usesHeight()) {
                     chips.add("h" + s.height);
+                } else if (s.circleHoleMode() && s.circleHole > 0) {
+                    chips.add("hole " + s.circleHole);
                 }
             }
             case INTERACT -> {
@@ -1915,7 +2173,11 @@ public final class RtsScreen extends Screen {
                     }
                 }
             }
-            case TERRAIN -> chips.add(s.terrainMode.label() + ": click two corners");
+            case TERRAIN -> chips.add(s.terrainMode.brush()
+                    ? s.blendPaint.isEmpty() ? s.terrainMode.label() + ": drag over the ground to paint, Shift+drag erases"
+                    : s.terrainMode.label() + ": " + s.blendPaint.size() + " columns painted - Enter to "
+                            + s.terrainMode.label().toLowerCase(Locale.ROOT) + ", X to clear"
+                    : s.terrainMode.label() + (s.terrainMode.line() ? ": click two points" : ": click two corners"));
             case MEASURE -> chips.add("Click two points");
             case PROTECT -> chips.add(com.testrts.rtsclient.build.Protection.get().areas().isEmpty() ? "Click two corners of your base"
                     : com.testrts.rtsclient.build.Protection.get().areas().size() + " protected - click inside one to remove it");
@@ -2014,6 +2276,19 @@ public final class RtsScreen extends Screen {
             materials = new java.util.LinkedHashMap<>();
             for (var e : s.clipboard.materials().entrySet()) {
                 materials.put(e.getKey(), e.getValue() * copies);
+            }
+        } else if (s.tool == ToolMode.TERRAIN && s.terrainMode.brush()) {
+            if (!s.blendPaint.isEmpty()) {
+                int[] counts = WorldOverlay.terrainCounts();
+                String what = counts[0] < 0 || counts[1] < 0 ? "planning..." : "mine " + counts[0] + ", fill " + counts[1];
+                String how = s.terrainMode == TerrainMode.LEVEL ? "to Y " + s.levelY + ", edge " + s.levelRamp
+                        : "strength " + s.blendStrength;
+                lines.add(Component.literal(s.terrainMode.label() + " " + s.blendPaint.size() + " columns, " + how + "  |  " + what)
+                        .withStyle(ChatFormatting.GREEN));
+                Map<Item, Integer> need = WorldOverlay.blendMaterials();
+                if (!need.isEmpty()) {
+                    materials = need;
+                }
             }
         } else if (s.tool == ToolMode.TERRAIN && s.anchorA != null && (s.anchorB != null || hover != null)) {
             BlockPos b = s.anchorB != null ? s.anchorB : hover.getBlockPos();

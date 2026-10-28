@@ -6,6 +6,8 @@ import com.testrts.rtsclient.build.BuildMode;
 import com.testrts.rtsclient.build.BuildSession;
 import com.testrts.rtsclient.build.BuildShape;
 import com.testrts.rtsclient.build.OrderPlanner;
+import com.testrts.rtsclient.build.TerrainBlend;
+import com.testrts.rtsclient.build.TerrainMode;
 import com.testrts.rtsclient.build.TerrainPlanner;
 import com.testrts.rtsclient.build.ToolMode;
 import com.testrts.rtsclient.build.UndoHistory;
@@ -95,7 +97,11 @@ public final class WorldActions {
         }
         switch (s.tool) {
             case BUILD -> {
-                boolean styledBridge = s.shape == com.testrts.rtsclient.build.BuildShape.BRIDGE && s.bridgeStyle != com.testrts.rtsclient.build.BridgeStyle.CLASSIC;
+                // Styled bridges and islands bring their own blocks.
+                boolean styledBridge = s.shape == com.testrts.rtsclient.build.BuildShape.BRIDGE && s.bridgeStyle != com.testrts.rtsclient.build.BridgeStyle.CLASSIC
+                        || s.shape == com.testrts.rtsclient.build.BuildShape.ISLAND || s.shape == com.testrts.rtsclient.build.BuildShape.MOUNTAIN
+                        || s.shape == com.testrts.rtsclient.build.BuildShape.GIANT_TREE || s.shape == com.testrts.rtsclient.build.BuildShape.ROCKS
+                        || s.shape == com.testrts.rtsclient.build.BuildShape.MAZE || s.shape == com.testrts.rtsclient.build.BuildShape.BACKROOMS;
                 if (!(s.brush.getItem() instanceof BlockItem) && s.mix.isEmpty() && !styledBridge) {
                     Messages.warn("Pick a block from the bar below first (or middle-click a block in the world)");
                     return;
@@ -174,6 +180,10 @@ public final class WorldActions {
         }
         if (s.anchorA == null) {
             s.anchorA = target;
+            if ((s.shape == BuildShape.ISLAND || s.shape == BuildShape.MOUNTAIN || s.shape == BuildShape.GIANT_TREE
+                || s.shape == BuildShape.ROCKS || s.shape == BuildShape.MAZE || s.shape == BuildShape.BACKROOMS) && s.tool == ToolMode.BUILD) {
+                s.islandSeed = new java.util.Random().nextLong(); // every new island starts with its own design
+            }
             Messages.info("First point set - click the second point");
         } else if (s.anchorB == null) {
             s.anchorB = target;
@@ -188,7 +198,9 @@ public final class WorldActions {
         switch (this.session.tool) {
             case BLUEPRINT -> confirmPaste();
             case TERRAIN -> {
-                if (this.session.anchorA != null && this.session.anchorB != null) {
+                if (this.session.terrainMode.brush()) {
+                    confirmBlend();
+                } else if (this.session.anchorA != null && this.session.anchorB != null) {
                     confirmTerrain();
                 }
             }
@@ -222,7 +234,10 @@ public final class WorldActions {
             // Destroy over the hologram of queued builds: those blocks come out of the orders (a doorway in
             // a queued box). Real blocks in the shape are still cleared below.
             var shape = com.testrts.rtsclient.build.ShapeGenerator.generate(request.shape(), request.a(), request.b(), request.height(),
-                    request.hollow(), request.limit() + 1, request.inverted(), request.bridgeStyle());
+                    request.hollow(), request.limit() + 1, request.inverted(), request.bridgeStyle(), request.islandStyle(), request.islandBottom(),
+                    request.islandSeed(), request.mountainForm(),
+                        request.treeKind(), request.rockForm(), request.rockLook(), request.mazeStyle(), request.mazeLayout(),
+                        request.backroomsLevel());
             unqueued = removeFromQueuedBuilds(shape.positions());
             if (unqueued > 0) {
                 Messages.info("Removed " + unqueued + " block(s) from the queued orders");
@@ -236,6 +251,10 @@ public final class WorldActions {
         }
         pushUndo(label, plan.changes());
         queue(new BuildTask(label, plan.changes(), clearing));
+        if ((s.shape == BuildShape.ISLAND || s.shape == BuildShape.MOUNTAIN || s.shape == BuildShape.GIANT_TREE
+                || s.shape == BuildShape.ROCKS || s.shape == BuildShape.MAZE || s.shape == BuildShape.BACKROOMS) && !clearing) {
+            s.islandSeed = new java.util.Random().nextLong(); // the next island looks different
+        }
     }
 
     /** Take {@code positions} out of every queued build order; orders left empty come off the queue. */
@@ -337,6 +356,7 @@ public final class WorldActions {
         }
         Blueprint bp = s.clipboard;
         Map<BlockPos, BlockState> placed = pasteBlocks(s, bp, s.pasteAnchor);
+        Map<BlockPos, BlockState> camo = pasteCamo(s, bp, s.pasteAnchor);
         Map<BlockPos, BlockState> build = new LinkedHashMap<>();
         for (Map.Entry<BlockPos, BlockState> e : placed.entrySet()) {
             if (!MaterialPlanner.matches(world.getBlockState(e.getKey()), e.getValue())) {
@@ -344,6 +364,14 @@ public final class WorldActions {
             }
         }
         Map<BlockPos, BlockState> clear = new LinkedHashMap<>();
+        // Pasting into a hillside or a wall: whatever solid is where the blueprint wants a different block is
+        // dug out by a clear order that runs (top-down) before the build, instead of mid-build one at a time.
+        for (BlockPos p : build.keySet()) {
+            BlockState now = world.getBlockState(p);
+            if (!now.isAir() && !now.canBeReplaced() && !(now.getBlock() instanceof LiquidBlock) && now.getDestroySpeed(world, p) >= 0) {
+                clear.put(p, Blocks.AIR.defaultBlockState());
+            }
+        }
         if (s.pasteClearsAir) {
             if (bp.volume() > RtsConfig.get().maxShapeBlocks) {
                 Messages.warn("Too big to clear the air inside; pasting blocks only");
@@ -376,7 +404,7 @@ public final class WorldActions {
             s.clipboard = null;
             Messages.info("Moving " + bp.name() + ": clearing the old spot, then building the new one");
         }
-        if (build.isEmpty() && clear.isEmpty()) {
+        if (build.isEmpty() && clear.isEmpty() && camo.isEmpty()) {
             Messages.info("Already built there");
             return;
         }
@@ -386,8 +414,24 @@ public final class WorldActions {
         if (!clear.isEmpty()) {
             queue(new BuildTask("Clear for " + bp.name() + " (" + clear.size() + ")", clear, true));
         }
+        if (!camo.isEmpty()) {
+            // FramedBlocks: carry the camo blocks while building, so each frame gets its camo as it goes in.
+            Map<net.minecraft.world.item.Item, Integer> need = new LinkedHashMap<>();
+            camo.values().forEach(st -> need.merge(st.getBlock().asItem(), 1, Integer::sum));
+            need.replaceAll((item, n) -> Math.max(0, n - com.testrts.rtsclient.exec.Inventories.count(this.client, item)));
+            need.entrySet().removeIf(e -> e.getValue() <= 0
+                    || com.testrts.rtsclient.storage.StorageManager.get().total(e.getKey()) <= 0
+                    && !com.testrts.rtsclient.storage.MeNetwork.anyMightHave(this.client, e.getKey()));
+            if (!need.isEmpty() && !com.testrts.rtsclient.exec.Creative.supplies(this.client)) {
+                queue(new com.testrts.rtsclient.task.FetchTask(need));
+            }
+        }
         if (!build.isEmpty()) {
             queue(new BuildTask("Build " + bp.name() + " (" + build.size() + ")", build, false));
+        }
+        if (!camo.isEmpty()) {
+            // FramedBlocks: once the frames are up, right-click each with its camo block.
+            queue(new com.testrts.rtsclient.task.CamoTask("Camo " + bp.name(), camo));
         }
     }
 
@@ -415,6 +459,9 @@ public final class WorldActions {
         s.clearSelection();
         switch (s.terrainMode) {
             case FLATTEN -> flatten(a, b);
+            case BLEND, LEVEL -> {
+                // Painted with the brush instead of two corners; Enter confirms it.
+            }
             case LIGHT_UP -> lightUp(a, b);
             case QUARRY -> {
                 int top = Math.max(a.getY(), b.getY());
@@ -427,6 +474,9 @@ public final class WorldActions {
                         new BlockPos(b.getX(), Math.max(a.getY(), b.getY()) + 32, b.getZ()), true));
             }
             case PLANT_TREES -> plantTrees(a, b);
+            case ROAD, ROOM, FARM, MOB_PROOF, HILL, LAKE, RIVER, TERRACE, CAVE, DECORATE -> terrainShape(s.terrainMode, a, b);
+            case RESTYLE -> restyle(a, b);
+            case ISLAND_BRIDGE -> islandBridge(a, b);
             case HARVEST -> {
                 int y0 = Math.min(a.getY(), b.getY()) - 2;
                 int y1 = Math.max(a.getY(), b.getY()) + 3;
@@ -437,6 +487,22 @@ public final class WorldActions {
 
     /** Flatten fills with the brush block, or dirt if the brush isn't a block. */
     /** The blueprint placed at {@code origin}, repeated as the session's grid of copies. */
+    /** Where the blueprint's FramedBlocks camo goes, for every copy in the array (see {@link #pasteBlocks}). */
+    public static Map<BlockPos, BlockState> pasteCamo(BuildSession s, Blueprint bp, BlockPos origin) {
+        if (bp.camo().isEmpty()) {
+            return Map.of();
+        }
+        int[] f = bp.footprint(s.pasteTurns);
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        for (int i = 0; i < Math.max(1, s.arrayX); i++) {
+            for (int j = 0; j < Math.max(1, s.arrayZ); j++) {
+                BlockPos o = origin.offset(i * (f[0] + s.arrayGap), 0, j * (f[1] + s.arrayGap));
+                out.putAll(bp.placedCamo(o, s.pasteTurns, s.pasteMirror));
+            }
+        }
+        return out;
+    }
+
     public static Map<BlockPos, BlockState> pasteBlocks(BuildSession s, Blueprint bp, BlockPos origin) {
         int[] f = bp.footprint(s.pasteTurns);
         Map<BlockPos, BlockState> out = new LinkedHashMap<>();
@@ -516,6 +582,84 @@ public final class WorldActions {
         }
     }
 
+    /** The Blend or Level brush's plan for the painted ground. */
+    public static TerrainBlend.Plan brushPlan(net.minecraft.client.multiplayer.ClientLevel world, Map<Long, Integer> paint,
+                                              TerrainMode mode, int strength, int levelY, int ramp, boolean keepTop, int limit) {
+        return mode == TerrainMode.LEVEL ? TerrainBlend.level(world, paint, levelY, ramp, keepTop, limit)
+                : TerrainBlend.plan(world, paint, strength, keepTop, limit);
+    }
+
+    /** Blend / Level brush: smooth or level the painted ground. */
+    private void confirmBlend() {
+        BuildSession s = this.session;
+        if (s.blendPaint.isEmpty()) {
+            Messages.warn("Paint over the ground first: hold the left button and drag");
+            return;
+        }
+        TerrainBlend.Plan plan = WorldOverlay.cachedBrushPlan(WorldOverlay.brushKey(s));
+        if (plan == null) {
+            plan = brushPlan(world(), s.blendPaint, s.terrainMode, s.blendStrength, s.levelY, s.levelRamp,
+                    s.blendKeepTop, RtsConfig.get().maxShapeBlocks);
+        }
+        String what = s.terrainMode.label();
+        if (plan.truncated()) {
+            Messages.error("Too much to " + what.toLowerCase(java.util.Locale.ROOT) + " at once (over "
+                    + RtsConfig.get().maxShapeBlocks + " blocks) - paint less, or raise the limit in Settings");
+            return;
+        }
+        s.clearSelection();
+        if (plan.clear().isEmpty() && plan.fill().isEmpty()) {
+            Messages.info(s.terrainMode == TerrainMode.LEVEL ? "Already level there (or nothing natural to level)"
+                    : "Already smooth there (or nothing natural to blend)");
+            return;
+        }
+        Map<BlockPos, BlockState> fill = affordableTop(plan.fill());
+        Map<BlockPos, BlockState> all = new LinkedHashMap<>(plan.clear());
+        all.putAll(fill);
+        pushUndo(what, all);
+        if (!plan.clear().isEmpty()) {
+            queue(new BuildTask(what + ": mine " + plan.clear().size(), plan.clear(), true));
+        }
+        if (!fill.isEmpty()) {
+            queue(new BuildTask(what + ": fill " + fill.size(), fill, false));
+        }
+    }
+
+    /**
+     * Grass, podzol and mycelium on top of raised ground, only if there are enough of them (you can't
+     * craft them; without Silk Touch you rarely have many): otherwise dirt, which grows grass back by itself.
+     * Waiting on blocks that never come would leave the whole order stuck.
+     */
+    private static Map<BlockPos, BlockState> affordableTop(Map<BlockPos, BlockState> fill) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (com.testrts.rtsclient.exec.Creative.supplies(mc)) {
+            return fill;
+        }
+        Map<net.minecraft.world.item.Item, Integer> need = new LinkedHashMap<>();
+        for (BlockState st : fill.values()) {
+            Block b = st.getBlock();
+            if (b == Blocks.GRASS_BLOCK || b == Blocks.PODZOL || b == Blocks.MYCELIUM) {
+                need.merge(b.asItem(), 1, Integer::sum);
+            }
+        }
+        java.util.Set<net.minecraft.world.item.Item> swap = new java.util.HashSet<>();
+        for (Map.Entry<net.minecraft.world.item.Item, Integer> e : need.entrySet()) {
+            net.minecraft.world.item.Item item = e.getKey();
+            int have = (mc.player == null ? 0 : mc.player.getInventory().countItem(item)) + StorageManager.get().total(item);
+            if (have < e.getValue()) {
+                swap.add(item);
+                Messages.info("Not enough " + item.getDescription().getString() + " (" + have + " of " + e.getValue()
+                        + "): topping with dirt instead - grass grows back over it");
+            }
+        }
+        if (swap.isEmpty()) {
+            return fill;
+        }
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        fill.forEach((p, st) -> out.put(p, swap.contains(st.getBlock().asItem()) ? Blocks.DIRT.defaultBlockState() : st));
+        return out;
+    }
+
     private static final Block[] SAPLINGS = {Blocks.OAK_SAPLING, Blocks.BIRCH_SAPLING, Blocks.SPRUCE_SAPLING,
             Blocks.JUNGLE_SAPLING, Blocks.ACACIA_SAPLING, Blocks.DARK_OAK_SAPLING, Blocks.CHERRY_SAPLING, Blocks.MANGROVE_PROPAGULE};
 
@@ -547,6 +691,91 @@ public final class WorldActions {
         }
         pushUndo("Plant trees", order);
         queue(new BuildTask("Plant " + order.size() + " " + sapling.getName().getString(), order, false));
+    }
+
+    /** The block the newer Terrain modes build with: the brush, or nothing (each mode has its own default). */
+    public static BlockState terrainBrush(BuildSession s) {
+        return s.brush.getItem() instanceof BlockItem bi ? bi.getBlock().defaultBlockState() : Blocks.AIR.defaultBlockState();
+    }
+
+    /** Road, room, farm, mob-proofing, hill, lake, river, terrace, cave, decorate: mine, build, then hoe / water / sow. */
+    private void terrainShape(com.testrts.rtsclient.build.TerrainMode mode, BlockPos a, BlockPos b) {
+        BuildSession s = this.session;
+        ClientLevel world = world();
+        var plan = com.testrts.rtsclient.build.TerrainShapes.plan(mode, world, a, b, s.terrainSize, terrainBrush(s));
+        if (plan.isEmpty()) {
+            Messages.info(mode.label() + ": nothing to do there");
+            return;
+        }
+        String what = mode.label();
+        Map<BlockPos, BlockState> all = new LinkedHashMap<>(plan.clear());
+        all.putAll(plan.fill());
+        if (!all.isEmpty()) {
+            pushUndo(what, all);
+        }
+        if (!plan.clear().isEmpty()) {
+            queue(new BuildTask(what + ": dig " + plan.clear().size(), plan.clear(), true));
+        }
+        if (!plan.fill().isEmpty()) {
+            queue(new BuildTask(what + ": build " + plan.fill().size(), plan.fill(), false));
+        }
+        if (!plan.till().isEmpty()) {
+            queue(new com.testrts.rtsclient.task.UseItemTask(what + ": hoe " + plan.till().size(), plan.till(),
+                    item -> item instanceof net.minecraft.world.item.HoeItem, net.minecraft.world.item.Items.IRON_HOE,
+                    (w, p) -> w.getBlockState(p).is(Blocks.FARMLAND)));
+        }
+        if (!plan.water().isEmpty()) {
+            queue(new com.testrts.rtsclient.task.WaterFillTask(what + ": water " + plan.water().size(), plan.water()));
+        }
+        if (!plan.seeds().isEmpty()) {
+            net.minecraft.world.item.Item seed = s.brush.getItem() instanceof BlockItem bi
+                    && bi.getBlock() instanceof net.minecraft.world.level.block.CropBlock ? s.brush.getItem()
+                    : net.minecraft.world.item.Items.WHEAT_SEEDS;
+            queue(new com.testrts.rtsclient.task.UseItemTask(what + ": sow " + plan.seeds().size(), plan.seeds(),
+                    item -> item == seed, seed, (w, p) -> !w.getBlockState(p.above()).isAir() || !w.getBlockState(p).is(Blocks.FARMLAND)));
+        }
+        Messages.info(what + " queued");
+    }
+
+    /** Restyle: queued builds inside the box take the brush's material. */
+    private void restyle(BlockPos a, BlockPos b) {
+        BlockState brush = terrainBrush(this.session);
+        if (brush.isAir()) {
+            Messages.warn("Restyle: pick the block to restyle with first");
+            return;
+        }
+        int changed = 0;
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                changed += build.restyle(com.testrts.rtsclient.build.TerrainShapes.restyle(build.blocks(), a, b, brush));
+            }
+        }
+        if (changed == 0) {
+            Messages.info("Restyle: no queued blocks there to change");
+        } else {
+            Messages.success("Restyled " + changed + " queued block(s) in " + brush.getBlock().getName().getString());
+        }
+    }
+
+    /** A bridge between the nearest edges of the islands under the two clicks. */
+    private void islandBridge(BlockPos a, BlockPos b) {
+        BuildSession s = this.session;
+        ClientLevel world = world();
+        BlockPos[] ends = com.testrts.rtsclient.build.TerrainShapes.islandEdges(world, a, b);
+        OrderPlanner.Plan plan = OrderPlanner.plan(world, islandBridgeRequest(s, ends[0], ends[1]));
+        if (plan.changes().isEmpty()) {
+            Messages.info("Island bridge: nothing to build there");
+            return;
+        }
+        pushUndo("Island bridge", plan.changes());
+        queue(new BuildTask("Island bridge (" + plan.changes().size() + ")", plan.changes(), false));
+    }
+
+    public static OrderPlanner.Request islandBridgeRequest(BuildSession s, BlockPos from, BlockPos to) {
+        BlockState brush = terrainBrush(s);
+        return new OrderPlanner.Request(ToolMode.BUILD, BuildShape.BRIDGE, com.testrts.rtsclient.build.BuildMode.FILL, from, to,
+                Math.max(1, s.terrainSize), false, brush.isAir() ? Blocks.SPRUCE_PLANKS.defaultBlockState() : brush, null,
+                RtsConfig.get().maxShapeBlocks, java.util.List.of(), true, s.pattern, s.inverted, s.bridgeStyle);
     }
 
     private void lightUp(BlockPos a, BlockPos b) {
@@ -583,7 +812,14 @@ public final class WorldActions {
         int dz = Math.abs(a.getZ() - b.getZ()) + 1;
         double dist = Math.sqrt(a.distSqr(b));
         return dx + " x " + dz + " x " + dy + " (W x L x H), distance " + String.format(Locale.ROOT, "%.1f", dist)
-                + ", " + String.format(Locale.ROOT, "%,d", (long) dx * dy * dz) + " blocks";
+                + ", " + String.format(Locale.ROOT, "%,d", (long) dx * dy * dz) + " blocks, centre "
+                + centre(a.getX() + b.getX()) + " " + centre(a.getY() + b.getY()) + " " + centre(a.getZ() + b.getZ());
+    }
+
+    /** The middle block along one axis from the sum of both ends: "12", or "4/5" for the middle two of an even side. */
+    private static String centre(int sum) {
+        int lo = Math.floorDiv(sum, 2);
+        return sum % 2 == 0 ? Integer.toString(lo) : lo + "/" + (lo + 1);
     }
 
     // ------------------------------------------------------------------ other actions

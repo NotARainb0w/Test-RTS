@@ -32,6 +32,7 @@ public final class RtsClientMod implements ClientModInitializer {
     public static KeyBinding hologramKey;
     public static KeyBinding autoPlaceKey;
     public static KeyBinding aimPlaceKey;
+    public static KeyBinding skipLayerKey;
 
     @Override
     public void onInitializeClient() {
@@ -47,6 +48,8 @@ public final class RtsClientMod implements ClientModInitializer {
                 "key.rtsclient.autoplace", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_Z, CATEGORY));
         aimPlaceKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                 "key.rtsclient.aimplace", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_X, CATEGORY));
+        skipLayerKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.rtsclient.skiplayer", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K, CATEGORY));
 
         ClientTickEvents.END_CLIENT_TICK.register(RtsClientMod::onTick);
         WorldRenderEvents.LAST.register(WorldOverlay::render);
@@ -84,12 +87,42 @@ public final class RtsClientMod implements ClientModInitializer {
         }
     }
 
+    /**
+     * The Skip layer key: the built-in builder leaves the rest of the layer it's on and goes on with the next;
+     * with no build running, hold-Z in layers (and the hologram) moves past its current layer.
+     */
+    public static void skipLayer(MinecraftClient client) {
+        if (com.testrts.rtsclient.exec.NativeEngine.get().isBuilding()) {
+            Integer y = com.testrts.rtsclient.exec.NativeEngine.get().skipLayer(client);
+            if (y == null) {
+                com.testrts.rtsclient.util.Messages.warn("No layer to skip (is Build in layers off?)");
+            } else {
+                com.testrts.rtsclient.util.Messages.info("Skipped the rest of layer Y=" + y);
+            }
+            return;
+        }
+        if (com.testrts.rtsclient.exec.Engine.isBuilding()) {
+            com.testrts.rtsclient.util.Messages.warn("Skipping a layer works with the built-in engine, not Baritone");
+            return;
+        }
+        java.util.SortedSet<Integer> ys = com.testrts.rtsclient.exec.AutoPlace.skipLayer(client);
+        if (ys.isEmpty()) {
+            com.testrts.rtsclient.util.Messages.warn("No layer to skip");
+        } else {
+            com.testrts.rtsclient.util.Messages.info("Hold-Z: skipped layer Y=" + ys.stream().map(String::valueOf)
+                    .collect(java.util.stream.Collectors.joining(", ")));
+        }
+    }
+
     private static void onTick(MinecraftClient client) {
         while (toggleKey.wasPressed()) {
             RtsController.get().toggle(client);
         }
         while (stopKey.wasPressed()) {
             TaskQueue.get().clear(client);
+        }
+        while (skipLayerKey.wasPressed()) {
+            skipLayer(client);
         }
         while (hologramKey.wasPressed()) {
             toggleHologram();

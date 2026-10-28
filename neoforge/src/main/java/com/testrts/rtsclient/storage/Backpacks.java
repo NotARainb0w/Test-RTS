@@ -30,6 +30,8 @@ public final class Backpacks {
     private static boolean tried;
     private static Class<?> menuClass;
     private static Class<?> itemClass;
+    /** Sophisticated Core's slot for stored items; null falls back to guessing from slot class names. */
+    private static @Nullable Class<?> storageSlotClass;
 
     public static boolean loaded() {
         if (!Platform.isModLoaded("sophisticatedbackpacks")) {
@@ -43,6 +45,11 @@ public final class Backpacks {
             } catch (ReflectiveOperationException | LinkageError e) {
                 RtsClientMod.LOGGER.warn("Sophisticated Backpacks is installed but works differently than expected; backpacks won't be used", e);
             }
+            try {
+                storageSlotClass = Class.forName("net.p3pp3rf1y.sophisticatedcore.common.gui.StorageInventorySlot");
+            } catch (ReflectiveOperationException | LinkageError e) {
+                storageSlotClass = null;
+            }
         }
         return menuClass != null && itemClass != null;
     }
@@ -52,9 +59,12 @@ public final class Backpacks {
         if (slot.container instanceof Inventory) {
             return false;
         }
+        if (storageSlotClass != null) {
+            return storageSlotClass.isInstance(slot);
+        }
         String name = slot.getClass().getSimpleName();
         return !(name.contains("Upgrade") || name.contains("Filter") || name.contains("Tool") || name.contains("Fluid")
-                || name.contains("Crafting") || name.contains("Result") || name.contains("Disabled"));
+                || name.contains("Crafting") || name.contains("Result") || name.contains("Disabled") || name.contains("Supplied"));
     }
 
     public static final GridMod GRID = new GridMod() {
@@ -127,7 +137,13 @@ public final class Backpacks {
 
         @Override
         public boolean isWireless(AbstractContainerMenu menu) {
-            return true; // opened from the item, wherever it is
+            // Worn or carried; a backpack placed as a block isn't "on us".
+            try {
+                Object context = menu.getClass().getMethod("getBackpackContext").invoke(menu);
+                return !context.getClass().getSimpleName().startsWith("Block");
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+                return true;
+            }
         }
 
         @Override

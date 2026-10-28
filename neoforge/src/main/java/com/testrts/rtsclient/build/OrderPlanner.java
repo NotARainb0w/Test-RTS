@@ -70,7 +70,52 @@ public final class OrderPlanner {
     public record Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                           boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
                           java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
-                          BridgeStyle bridgeStyle) {
+                          BridgeStyle bridgeStyle, IslandStyle islandStyle, IslandBottom islandBottom, long islandSeed,
+                          MountainForm mountainForm, TreeKind treeKind, RockForm rockForm, RockLook rockLook,
+                          MazeStyle mazeStyle, MazeLayout mazeLayout, BackroomsLevel backroomsLevel) {
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                       BridgeStyle bridgeStyle, IslandStyle islandStyle, IslandBottom islandBottom, long islandSeed,
+                       MountainForm mountainForm, TreeKind treeKind, RockForm rockForm, RockLook rockLook) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, bridgeStyle,
+                    islandStyle, islandBottom, islandSeed, mountainForm, treeKind, rockForm, rockLook, MazeStyle.HEDGE, MazeLayout.CLASSIC,
+                    BackroomsLevel.LEVEL_0);
+        }
+
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                       BridgeStyle bridgeStyle, IslandStyle islandStyle, IslandBottom islandBottom, long islandSeed,
+                       MountainForm mountainForm) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, bridgeStyle,
+                    islandStyle, islandBottom, islandSeed, mountainForm, TreeKind.OAK, RockForm.BOULDERS, RockLook.STONE);
+        }
+
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                       BridgeStyle bridgeStyle, IslandStyle islandStyle, IslandBottom islandBottom, long islandSeed) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, bridgeStyle,
+                    islandStyle, islandBottom, islandSeed, MountainForm.PEAKED);
+        }
+
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                       BridgeStyle bridgeStyle, IslandStyle islandStyle, IslandBottom islandBottom) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, bridgeStyle,
+                    islandStyle, islandBottom, 0L);
+        }
+
+        public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
+                       boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
+                       java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted,
+                       BridgeStyle bridgeStyle) {
+            this(tool, shape, mode, a, b, height, hollow, brush, replaceTarget, limit, mix, clearInTheWay, pattern, inverted, bridgeStyle,
+                    IslandStyle.GRASSY, IslandBottom.POINTED);
+        }
+
         public Request(ToolMode tool, BuildShape shape, BuildMode mode, BlockPos a, BlockPos b, int height,
                        boolean hollow, @Nullable BlockState brush, @Nullable Block replaceTarget, int limit,
                        java.util.List<BlockState> mix, boolean clearInTheWay, MixPattern pattern, boolean inverted) {
@@ -90,12 +135,14 @@ public final class OrderPlanner {
         if (brush == null && !mix.isEmpty()) {
             brush = mix.get(0);
         }
-        return new Request(s.tool, s.shape, s.mode, a, b, s.height, s.hollow, brush, s.replaceTarget, limit, mix,
-                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern, s.inverted, s.bridgeStyle);
+        return new Request(s.tool, s.shape, s.mode, a, b, s.shape == BuildShape.CIRCLE ? s.circleHole : s.height, s.hollow, brush, s.replaceTarget, limit, mix,
+                com.testrts.rtsclient.config.RtsConfig.get().clearInTheWay, s.pattern, s.inverted, s.bridgeStyle, s.islandStyle, s.islandBottom, s.islandSeed,
+                s.mountainForm, s.treeKind, s.rockForm, s.rockLook, s.mazeStyle, s.mazeLayout, s.backroomsLevel);
     }
 
     public static Plan plan(ClientLevel world, Request r) {
-        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1, r.inverted(), r.bridgeStyle());
+        ShapeGenerator.Result shape = ShapeGenerator.generate(r.shape(), r.a(), r.b(), r.height(), r.hollow(), r.limit() + 1, r.inverted(), r.bridgeStyle(), r.islandStyle(), r.islandBottom(), r.islandSeed(),
+                r.mountainForm(), r.treeKind(), r.rockForm(), r.rockLook(), r.mazeStyle(), r.mazeLayout(), r.backroomsLevel());
         boolean truncated = shape.truncated() || shape.positions().size() > r.limit();
         Map<BlockPos, BlockState> changes = new LinkedHashMap<>();
         if (truncated) {

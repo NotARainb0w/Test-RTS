@@ -7,7 +7,7 @@ public enum BuildShape {
     FLOOR("Floor", "Flat rectangle at the first point's height", true, false),
     WALL("Wall", "Vertical wall from A to B, Height tall", true, true),
     BOX("Box", "Cuboid between A and B (at least Height tall)", true, true),
-    CIRCLE("Circle", "Disc centred on A through B", true, false),
+    CIRCLE("Circle", "Disc centred on A through B. Solid: Ctrl+scroll cuts a hole from the centre", true, false),
     CYLINDER("Cylinder", "Disc centred on A, Height tall", true, true),
     SPHERE("Sphere", "Ball centred on A through B", true, false),
     DOME("Dome", "Half sphere standing on A's level, radius to B", true, false),
@@ -22,7 +22,25 @@ public enum BuildShape {
             + "Stair blocks face up the stairs. Solid: filled underneath", true, true),
     SPIRAL("Spiral", "Spiral staircase around A, radius to B, Height tall. Solid: with a centre pole", true, true),
     VEIN("Vein", "Every touching block of the clicked type (mine a vein, or replace it with the brush)", false, false),
-    HOLE("Hole", "Every empty or water block in the enclosed hole you click, up to that level (fills pits, ponds)", false, false);
+    HOLE("Hole", "Every empty or water block in the enclosed hole you click, up to that level (fills pits, ponds)", false, false),
+    ISLAND("Island", "Floating island: A is the middle of its top, B how far it reaches (drag further to scale it up). "
+            + "Depth sets how far the underside hangs (1-3: about the radius). Own blocks per Island style. Hollow: only a shell", true, true),
+    MOUNTAIN("Mountain", "Mountain on the ground: A is the middle of its foot, B how far it spreads (drag further to scale it up). "
+            + "Height is how high the main peak rises (1-3: about the radius). Every one is different (dice or N: a new "
+            + "design); Form (Inverted button / [I]): Peaked, Rounded, Mesa, Volcano, Jagged, Ridge; own blocks per Style. "
+            + "Hollow: only a shell", true, true),
+    GIANT_TREE("Giant tree", "A big tree: A is the ground at the foot of the trunk, B how far the crown spreads; Height is "
+            + "the trunk (1-3: from the crown). Kind with the Style button (oak, birch, spruce, dark oak, cherry, jungle, acacia, "
+            + "willow, dead, random); every one different (dice or N: a new design)", false, true),
+    ROCKS("Rocks", "Rocks: A is the middle, B how far they spread; Height how tall the tallest gets (1-3: from the spread). "
+            + "Form with the Style button (boulders, arch, sea stacks, outcrop), look with Inverted / [I] (stone, mossy, sandy, "
+            + "dark); every one different (dice or N)", false, true),
+    MAZE("Maze", "A maze between corners A and B, its walls Height tall (1: 3). Walls with the Style button (hedge, stone, sandstone, "
+            + "quartz, deepslate, nether, prismarine, random), layout with Inverted / [I] (classic, loops, chambers, round, random); "
+            + "a new maze every time (dice or N)", false, true),
+    BACKROOMS("Backrooms", "The Backrooms between corners A and B: floor, ceiling lights and walls round it, split into random rooms "
+            + "(pillars, bits of wall, low ceilings, dark ones...); Height is the room height (1-2: 4). Level with the Style button "
+            + "(Level 0, Poolrooms, Level 1, Office, Red rooms, random); different every time (dice or N)", false, true);
 
     private final String label;
     private final String description;
@@ -63,6 +81,7 @@ public enum BuildShape {
             case TORUS -> "Tube";
             case BRIDGE, STAIRS -> "Width";
             case ARCH -> "Rise";
+            case ISLAND -> "Depth";
             default -> "Height";
         };
     }

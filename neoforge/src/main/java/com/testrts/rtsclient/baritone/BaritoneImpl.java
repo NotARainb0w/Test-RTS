@@ -86,7 +86,8 @@ final class BaritoneImpl {
         s.buildInLayers.value = layered;
         s.layerOrder.value = topDown;
         s.layerHeight.value = 1;
-        s.allowPlace.value = true;
+        // Throwaway blocks for bridging and pillaring on the way (the builder places the schematic regardless).
+        s.allowPlace.value = com.testrts.rtsclient.config.RtsConfig.get().useScaffolding;
         s.allowBreak.value = true;
         // Lets the builder pull blocks out of the main inventory instead of only the hotbar.
         s.allowInventory.value = true;

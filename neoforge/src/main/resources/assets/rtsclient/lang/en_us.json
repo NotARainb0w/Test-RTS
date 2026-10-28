@@ -4,5 +4,6 @@
   "key.rtsclient.stop": "Stop all RTS orders",
   "key.rtsclient.hologram": "Show/hide the build hologram",
   "key.rtsclient.autoplace": "Place hologram blocks in reach (hold)",
-  "key.rtsclient.aimplace": "Place the hologram block you look at (hold)"
+  "key.rtsclient.aimplace": "Place the hologram block you look at (hold)",
+  "key.rtsclient.skiplayer": "Skip the rest of the current build layer"
 }

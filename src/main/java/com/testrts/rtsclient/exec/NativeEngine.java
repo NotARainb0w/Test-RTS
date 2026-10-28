@@ -21,6 +21,8 @@ public final class NativeEngine {
     private static final int MAX_STUCK_REPATHS = 3;
     /** Times a walk re-plans after being knocked or falling off the route. */
     private static final int MAX_OFF_PATH_REPATHS = 5;
+    /** Partial routes (see {@link PathFinder.Search#partial()}) one walk may chain toward a far target. */
+    private static final int MAX_PARTIAL_LEGS = 12;
 
     @Nullable
     private PathFinder.Search search;
@@ -40,6 +42,9 @@ public final class NativeEngine {
     private BlockPos destination;
     private int stuckRepaths;
     private int offPathRepaths;
+    private int partialLegs;
+    /** The walk being followed only goes part of the way; plan again from its end. */
+    private boolean partialWalk;
 
     public static NativeEngine get() {
         return INSTANCE;
@@ -55,10 +60,20 @@ public final class NativeEngine {
         if (this.search != null) {
             PathFinder.Search.State s = this.search.step(PathFinder.NODES_PER_TICK);
             if (s == PathFinder.Search.State.FOUND) {
-                this.walk = new PathFollower(this.search.result());
+                this.walk = new PathFollower(this.search.result()).steps(this.search.actions());
+                this.partialWalk = false;
                 this.search = null;
             } else if (s == PathFinder.Search.State.FAILED) {
+                List<BlockPos> partial = this.search.partial();
+                List<PathFinder.Action> partialActions = this.search.partialActions();
                 this.search = null;
+                if (partial != null && ++this.partialLegs <= MAX_PARTIAL_LEGS) {
+                    // Too far or too twisty to plan in one go: walk to the closest spot found, then plan on from there.
+                    this.walk = new PathFollower(partial).steps(partialActions);
+                    this.partialWalk = true;
+                    this.status = "Walking (part way)";
+                    return;
+                }
                 this.status = "No path";
                 MovementInput.restore(client);
                 if (this.stuckRepaths + this.offPathRepaths > 0) {
@@ -89,6 +104,12 @@ public final class NativeEngine {
             }
             PathFollower failed = this.walk;
             this.walk = null;
+            if (s == PathFollower.State.ARRIVED && this.partialWalk && this.goal != null) {
+                this.partialWalk = false;
+                this.search = PathFinder.start(client.world, Walkability.feetNode(client.world, client.player), this.goal, this.toward);
+                this.status = "Planning";
+                return;
+            }
             if (s == PathFollower.State.STUCK && replan(client, failed)) {
                 return;
             }
@@ -160,6 +181,8 @@ public final class NativeEngine {
         this.destination = destination.toImmutable();
         this.stuckRepaths = 0;
         this.offPathRepaths = 0;
+        this.partialLegs = 0;
+        this.partialWalk = false;
         this.search = PathFinder.start(client.world, Walkability.feetNode(client.world, player), goal, toward);
         this.status = "Planning";
         return true;
@@ -192,6 +215,12 @@ public final class NativeEngine {
         return this.builder != null && this.builder.isPaused() ? this.builder.missingItem() : null;
     }
 
+    /** See {@link NativeBuilder#skipLayer}; null when nothing is being built. */
+    @org.jetbrains.annotations.Nullable
+    public Integer skipLayer(MinecraftClient client) {
+        return this.builder == null ? null : this.builder.skipLayer(client);
+    }
+
     public void resumeBuilder() {
         if (this.builder != null) {
             this.builder.resume();
@@ -212,6 +241,11 @@ public final class NativeEngine {
         this.search = null;
         this.goal = null;
         MovementInput.restore(client);
+    }
+
+    /** See {@link NativeBuilder#debugState}. */
+    public String debugState(MinecraftClient client) {
+        return this.builder == null ? "no builder" : this.builder.debugState(client);
     }
 
     public String status() {

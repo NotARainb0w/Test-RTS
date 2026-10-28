@@ -1,8 +1,15 @@
 package com.testrts.rtsclient.exec;
 
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.mob.Monster;
+import net.minecraft.block.FallingBlock;
+import net.minecraft.block.BlockState;
+import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import org.jetbrains.annotations.Nullable;
 
@@ -21,6 +28,11 @@ import java.util.function.Predicate;
  * and dig back down through its own scaffolding, so blocks high up or over a drop are reachable.
  * Steps are checked against the real floor heights (slabs, carpets, soul sand...), so a path
  * never asks for a jump higher than the player can make.
+ * <p>
+ * Several ideas come from mineflayer-pathfinder (MIT): partial routes to the closest spot found when
+ * a search runs out ({@link Search#partial()}), long drops into water, diagonal step-downs, extra
+ * cost for swimming and for cells mobs stand in, and tunnelling that won't let water or lava in and
+ * prefers soft blocks.
  */
 public final class PathFinder {
     private static final int MAX_NODES = 40_000;
@@ -40,6 +52,37 @@ public final class PathFinder {
     private static final double PILLAR_COST = 5.0;
     private static final double BRIDGE_COST = 4.0;
     private static final double DIG_COST = 3.0;
+    /** A block up or down a ladder, vine or scaffolding column. */
+    private static final double CLIMB_COST = 1.2;
+    /**
+     * Per block mined to tunnel through: high, so a route only digs when walking (or a long way round)
+     * can't get there. The builder puts the blocks back afterwards.
+     */
+    private static final double TUNNEL_COST = 8.0;
+    /** Added per point of hardness (capped at 10) of a block tunnelled through: dirt over stone over obsidian. */
+    private static final double HARDNESS_COST = 2.0;
+    /** Added for tunnelling under sand or gravel, which falls in and has to be mined again. */
+    private static final double FALLING_COST = 12.0;
+    /** Longest drop into water: landing in water breaks any fall. */
+    private static final int MAX_WATER_DROP = 24;
+    /** Added to every step taken from water (swimming is slow). */
+    private static final double SWIM_COST = 1.0;
+    /** Added for stepping into a cell a mob, player or vehicle is in; far more when it's hostile. */
+    private static final double ENTITY_COST = 3.0;
+    private static final double HOSTILE_COST = 20.0;
+    /** Entities further than this from the start are left out (they'll have moved by the time we get there). */
+    private static final double ENTITY_RANGE = 48.0;
+    /** A partial route must end at least this much closer to the target than where it starts. */
+    private static final double MIN_PARTIAL_GAIN = 4.0;
+    /** Longest parkour jump, in blocks from take-off to landing: a three-block gap, sprinting. */
+    private static final int MAX_PARKOUR = 4;
+    /** Added to a parkour jump on top of the blocks it covers: a jump can be missed. */
+    private static final double PARKOUR_COST = 1.5;
+    /** Added for a jump over a gap deeper than a safe fall (and not into water). */
+    private static final double DEEP_GAP_COST = 10.0;
+    /** Longest jump at an angle (centre to centre), sprinting; and without sprinting (too hungry). */
+    private static final double MAX_ANGLED_JUMP = 4.0;
+    private static final double MAX_WALK_JUMP = 2.3;
 
     /** How a step of the path is taken. */
     public enum Action {
@@ -49,7 +92,13 @@ public final class PathFinder {
         /** Place the block under the next step first, then walk onto it. */
         BRIDGE,
         /** Mine the block we stand on (our own scaffolding) and drop onto the one below. */
-        DIG
+        DIG,
+        /** Up or down a ladder, vine or scaffolding column, like a player climbs one (the step is straight up or down). */
+        CLIMB,
+        /** Mine what's in the way of the next step (see {@link #tunnelCells}), then take it. */
+        TUNNEL,
+        /** Jump across a gap to the next step (straight along one axis; level, one up or one down). */
+        PARKOUR
     }
 
     /** What the search may build or take down to get somewhere. */
@@ -57,11 +106,38 @@ public final class PathFinder {
         /** A temporary block may be put in this (empty) cell. */
         boolean canPlace(BlockPos pos);
 
+        /** May route steps pillar up (jump and place a block under us)? Not with scaffolding alone. */
+        default boolean canPillar() {
+            return true;
+        }
+
         /** This block is ours to mine on the way down. */
         boolean canDig(BlockPos pos);
 
         /** How many blocks one route may place. */
         int budget();
+
+        /** This block may be mined to get through (it is put back once the work is done). */
+        default boolean canTunnel(BlockPos pos) {
+            return false;
+        }
+    }
+
+    /**
+     * The cells a step from {@code from} to {@code to} (one block across, level or one up or down) passes
+     * through: feet and head at the target, plus the head room for the jump up or the step down.
+     * Mined top first, so nothing is left hanging over the player.
+     */
+    public static List<BlockPos> tunnelCells(BlockPos from, BlockPos to) {
+        List<BlockPos> out = new ArrayList<>(3);
+        if (to.getY() > from.getY()) {
+            out.add(from.up(2));
+        } else if (to.getY() < from.getY()) {
+            out.add(to.up(2));
+        }
+        out.add(to.up());
+        out.add(to);
+        return out;
     }
 
     /** A step from one node to another; {@code from == Long.MIN_VALUE} stands for "any step into {@code to}". */
@@ -146,6 +222,16 @@ public final class PathFinder {
 
     /** Nodes expanded per {@link Search#step} call; keeps each tick's cost to a few milliseconds. */
     public static final int NODES_PER_TICK = 2500;
+    /** Longest one {@link Search#step} call may take (6 ms of a 50 ms tick). */
+    private static final long MAX_STEP_NANOS = 6_000_000L;
+    /** Nodes a search may expand: a base, and more the further away the target is (at most {@link #MAX_NODES}). */
+    private static final int BASE_NODES = 3000;
+    private static final int NODES_PER_BLOCK = 400;
+    /**
+     * How much further from the target than the start a route may wander. A hopeless search (the target
+     * can't be walked to) then fails in a fraction of a second instead of exploring the whole area.
+     */
+    private static final double WANDER = 24.0;
 
     /**
      * An A* search that can be advanced a little each tick, so a long or hopeless search never
@@ -164,22 +250,40 @@ public final class PathFinder {
         @Nullable
         private final Building building;
         private int expanded;
+        /** This search's node limit and how far from the target it may go (see {@link #WANDER}). */
+        private final int maxNodes;
+        private final double maxH;
         private State state = State.RUNNING;
         private List<BlockPos> result;
         private List<Action> actions;
+        /** Extra cost of cells entities are in (see {@link #ENTITY_COST}). */
+        private final Map<Long, Double> entityCells;
+        /** The node closest to the target so far, for {@link #partial()}. */
+        private Node closest;
+        private final double startH;
+        private List<Action> partialActions;
+        /** Longest parkour jump this search may use (see {@link #parkourReach()}). */
+        private final int parkour;
 
         Search(ClientWorld world, BlockPos start, Predicate<BlockPos> goal, Vec3d toward, @Nullable Building building) {
             this.world = world;
             this.building = building;
             this.goal = goal;
             this.toward = toward;
+            double startH = h(start, toward);
+            this.startH = startH;
+            this.maxNodes = (int) Math.min(MAX_NODES, BASE_NODES + NODES_PER_BLOCK * startH);
+            this.maxH = startH + WANDER;
+            this.entityCells = entityCells(world, start);
+            this.parkour = parkourReach();
             if (goal.test(start)) {
                 this.state = State.FOUND;
                 this.result = new ArrayList<>();
                 this.actions = new ArrayList<>();
                 return;
             }
-            this.open.add(new Node(start, 0.0, h(start, toward), null));
+            this.closest = new Node(start, 0.0, startH, null);
+            this.open.add(this.closest);
             this.best.put(start.asLong(), 0.0);
         }
 
@@ -197,10 +301,42 @@ public final class PathFinder {
             return this.actions;
         }
 
+        /**
+         * Once {@link State#FAILED}: a route to the spot closest to the target the search reached, if that is
+         * worth walking to (at least {@link #MIN_PARTIAL_GAIN} closer than the start), else null. Walking it and
+         * planning again from there gets to targets too far or too twisty for one search.
+         */
+        @Nullable
+        public List<BlockPos> partial() {
+            if (this.state != State.FAILED || this.closest == null || this.closest.parent == null
+                    || this.startH - (this.closest.f - this.closest.g) < MIN_PARTIAL_GAIN) {
+                return null;
+            }
+            List<BlockPos> path = new ArrayList<>();
+            List<Action> acts = new ArrayList<>();
+            for (Node n = this.closest; n.parent != null; n = n.parent) {
+                path.add(n.pos);
+                acts.add(n.action);
+            }
+            Collections.reverse(path);
+            Collections.reverse(acts);
+            this.partialActions = acts;
+            return path;
+        }
+
+        /** How each step of the last {@link #partial()} route is taken. */
+        public List<Action> partialActions() {
+            return this.partialActions;
+        }
+
         public State step(int budget) {
             int done = 0;
-            while (this.state == State.RUNNING && done < budget) {
-                if (this.open.isEmpty() || this.expanded >= MAX_NODES) {
+            // Also capped by time: tunnelling makes searches that fail explore a lot more, and a node
+            // count alone let those cost whole frames.
+            long deadline = System.nanoTime() + MAX_STEP_NANOS;
+            while (this.state == State.RUNNING && done < budget
+                    && ((done & 63) != 0 || System.nanoTime() < deadline)) {
+                if (this.open.isEmpty() || this.expanded >= this.maxNodes) {
                     this.state = State.FAILED;
                     break;
                 }
@@ -215,21 +351,35 @@ public final class PathFinder {
                     this.state = State.FOUND;
                     break;
                 }
-                List<Move> moves = moves(this.world, cur.pos);
+                List<Move> moves = moves(this.world, cur.pos, this.parkour);
                 if (this.building != null) {
                     buildingMoves(this.world, this.building, cur, moves);
                 }
+                double swim = this.world.getBlockState(cur.pos).getFluidState().isEmpty() ? 0.0 : SWIM_COST;
                 for (Move m : moves) {
                     double extra = this.strikes ? strikeCost(cur.pos, m.to, this.now) : 0.0;
                     if (extra == Double.POSITIVE_INFINITY) {
                         continue;
+                    }
+                    extra += swim;
+                    if (!this.entityCells.isEmpty()) {
+                        extra += Math.max(this.entityCells.getOrDefault(m.to.asLong(), 0.0),
+                                this.entityCells.getOrDefault(m.to.up().asLong(), 0.0));
+                    }
+                    double mh = h(m.to, this.toward);
+                    if (mh > this.maxH) {
+                        continue; // wandered too far from the target
                     }
                     double g = cur.g + m.cost + extra;
                     long key = m.to.asLong();
                     if (g < this.best.getOrDefault(key, Double.MAX_VALUE)) {
                         this.best.put(key, g);
                         int placed = cur.placed + (m.action == Action.PILLAR || m.action == Action.BRIDGE ? 1 : 0);
-                        this.open.add(new Node(m.to, g, h(m.to, this.toward), cur, m.action, placed));
+                        Node next = new Node(m.to, g, mh, cur, m.action, placed);
+                        this.open.add(next);
+                        if (mh < this.closest.f - this.closest.g) {
+                            this.closest = next;
+                        }
                     }
                 }
             }
@@ -248,6 +398,41 @@ public final class PathFinder {
             this.result = path;
             this.actions = acts;
         }
+    }
+
+    /**
+     * The cells mobs, other players and vehicles near {@code start} are in, with the extra cost of stepping
+     * into them. A snapshot: they move, but a route through a crowd or past a creeper is still worse.
+     */
+    private static Map<Long, Double> entityCells(ClientWorld world, BlockPos start) {
+        Map<Long, Double> out = new HashMap<>();
+        Vec3d centre = Vec3d.ofCenter(start);
+        for (Entity e : world.getEntities()) {
+            if (e instanceof ClientPlayerEntity || !(e instanceof LivingEntity || e.isCollidable())
+                    || e.getPassengerList().stream().anyMatch(p -> p instanceof ClientPlayerEntity)
+                    || e.getPos().squaredDistanceTo(centre) > ENTITY_RANGE * ENTITY_RANGE) {
+                continue;
+            }
+            double cost = e instanceof Monster ? HOSTILE_COST : ENTITY_COST;
+            Box box = e.getBoundingBox();
+            for (int x = (int) Math.floor(box.minX); x <= (int) Math.floor(box.maxX - 1.0E-4); x++) {
+                for (int y = (int) Math.floor(box.minY); y <= (int) Math.floor(box.maxY - 1.0E-4); y++) {
+                    for (int z = (int) Math.floor(box.minZ); z <= (int) Math.floor(box.maxZ - 1.0E-4); z++) {
+                        out.merge(BlockPos.asLong(x, y, z), cost, Math::max);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** How far a parkour jump may go: 0 when turned off, 2 (one-block gaps, no sprint) when too hungry to sprint. */
+    private static int parkourReach() {
+        if (!com.testrts.rtsclient.config.RtsConfig.get().parkour) {
+            return 0;
+        }
+        ClientPlayerEntity p = net.minecraft.client.MinecraftClient.getInstance().player;
+        return p == null || p.getHungerManager().getFoodLevel() > 6 || p.getAbilities().allowFlying ? MAX_PARKOUR : 2;
     }
 
     public static Search start(ClientWorld world, BlockPos start, Predicate<BlockPos> goal, Vec3d toward) {
@@ -276,7 +461,7 @@ public final class PathFinder {
         boolean canPlace = cur.placed < b.budget();
         boolean inFluid = !world.getBlockState(from).getFluidState().isEmpty();
         // Pillar: our feet cell becomes a block and we stand on it.
-        if (canPlace && !inFluid && Walkability.passable(world, from.up(2)) && b.canPlace(from)) {
+        if (canPlace && b.canPillar() && !inFluid && Walkability.passable(world, from.up(2)) && b.canPlace(from)) {
             out.add(new Move(from.up(), PILLAR_COST, Action.PILLAR));
         }
         // Bridge: put a block under the next cell and walk onto it.
@@ -291,11 +476,60 @@ public final class PathFinder {
         // Dig down through our own scaffolding onto the block below it.
         BlockPos floor = from.down();
         if (b.canDig(floor) && (Walkability.floor(world, floor.down()) || b.canDig(floor.down()))) {
+            // Our own scaffolding: break down through it (instant) rather than try to climb down it.
+            out.removeIf(m -> m.to.equals(floor) && m.action == Action.CLIMB);
             out.add(new Move(floor, DIG_COST, Action.DIG));
+        }
+        // Tunnel: mine through to the next cell (level, one up or one down) when there's ground to stand on.
+        if (!inFluid) {
+            for (Direction d : HORIZONTAL) {
+                BlockPos n = from.offset(d);
+                tunnelMove(world, b, from, n, out);
+                tunnelMove(world, b, from, n.up(), out);
+                tunnelMove(world, b, from, n.down(), out);
+            }
         }
     }
 
-    private static List<Move> moves(ClientWorld world, BlockPos from) {
+    private static void tunnelMove(ClientWorld world, Building b, BlockPos from, BlockPos to, List<Move> out) {
+        if (!Walkability.floor(world, to.down())) {
+            return;
+        }
+        int dig = 0;
+        double cost = 1.5;
+        for (BlockPos c : tunnelCells(from, to)) {
+            if (!Walkability.passable(world, c)) {
+                if (!b.canTunnel(c) || nextToFluid(world, c)) {
+                    return; // mining next to water or lava lets it flow into the tunnel
+                }
+                dig++;
+                BlockState s = world.getBlockState(c);
+                cost += TUNNEL_COST + HARDNESS_COST * Math.min(10.0, Math.max(0.0, s.getHardness(world, c)));
+                if (world.getBlockState(c.up()).getBlock() instanceof FallingBlock) {
+                    cost += FALLING_COST;
+                }
+            }
+        }
+        if (dig > 0) {
+            // Nothing to mine is a plain walk, which the walking moves already cover.
+            out.add(new Move(to, cost, Action.TUNNEL));
+        }
+    }
+
+    /** Water or lava above or beside {@code pos}, which would flow in once it's mined. */
+    private static boolean nextToFluid(ClientWorld world, BlockPos pos) {
+        if (!world.getBlockState(pos.up()).getFluidState().isEmpty()) {
+            return true;
+        }
+        for (Direction d : HORIZONTAL) {
+            if (!world.getBlockState(pos.offset(d)).getFluidState().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static List<Move> moves(ClientWorld world, BlockPos from, int parkour) {
         List<Move> out = new ArrayList<>(12);
         boolean headroom = Walkability.passable(world, from.up(2));
         double fromY = Walkability.standY(world, from);
@@ -319,13 +553,15 @@ public final class PathFinder {
                 out.add(new Move(up, 2.0));
                 continue;
             }
-            // Walk off an edge and fall a few blocks.
+            // Walk off an edge and fall a few blocks, or any height into water.
             if (Walkability.passable(world, n) && Walkability.passable(world, n.up())) {
                 BlockPos down = n;
-                for (int k = 1; k <= MAX_DROP; k++) {
+                for (int k = 1; k <= MAX_WATER_DROP; k++) {
                     down = down.down();
                     if (Walkability.standable(world, down)) {
-                        out.add(new Move(down, 1.0 + k * 0.6));
+                        if (k <= MAX_DROP || isWater(world, down.down())) {
+                            out.add(new Move(down, 1.0 + k * 0.6));
+                        }
                         break;
                     }
                     if (!Walkability.passable(world, down)) {
@@ -333,6 +569,21 @@ public final class PathFinder {
                     }
                 }
             }
+            if (parkour >= 2) {
+                parkourMoves(world, from, d, fromY, headroom, parkour, out);
+            }
+        }
+        if (parkour >= 2) {
+            angledParkour(world, from, fromY, headroom, parkour, out);
+        }
+        // Up and down a ladder, vine or scaffolding column.
+        BlockPos above = from.up();
+        if (Walkability.climbable(world, from) && Walkability.standable(world, above)) {
+            out.add(new Move(above, CLIMB_COST, Action.CLIMB));
+        }
+        BlockPos under = from.down();
+        if (Walkability.climbable(world, under) && Walkability.standable(world, under)) {
+            out.add(new Move(under, CLIMB_COST, Action.CLIMB));
         }
         // Diagonals only when both side cells are clear, so we never clip a corner.
         for (int i = 0; i < 2; i++) {
@@ -341,14 +592,192 @@ public final class PathFinder {
                 Direction b = HORIZONTAL[j];
                 BlockPos diag = from.offset(a).offset(b);
                 // No jumping on diagonals: the corner would catch the player.
-                if (Walkability.standable(world, diag)
-                        && clear(world, from.offset(a)) && clear(world, from.offset(b))
-                        && Walkability.standY(world, diag) - fromY <= STEP_HEIGHT) {
-                    out.add(new Move(diag, 1.414));
+                BlockPos sideA = from.offset(a);
+                BlockPos sideB = from.offset(b);
+                if (!clear(world, sideA) || !clear(world, sideB)) {
+                    continue;
+                }
+                if (Walkability.standable(world, diag)) {
+                    if (Walkability.standY(world, diag) - fromY <= STEP_HEIGHT) {
+                        out.add(new Move(diag, 1.414));
+                    }
+                } else if (clear(world, diag) && Walkability.standable(world, diag.down())
+                        && droppable(world, sideA) && droppable(world, sideB)) {
+                    // Diagonal step down one block. The sides may be level or one lower, but not a deeper
+                    // drop the player could slip into on the way across.
+                    out.add(new Move(diag.down(), 2.0));
                 }
             }
         }
         return out;
+    }
+
+    /**
+     * Jumps across a gap that starts right in front of {@code from} (direction {@code d}), up to {@code reach} blocks:
+     * landing level, one block down, or up on the block that ends the gap. As in mineflayer-pathfinder, every column
+     * passed over needs room for the arc.
+     */
+    private static void parkourMoves(ClientWorld world, BlockPos from, Direction d, double fromY, boolean headroom,
+                                     int reach, List<Move> out) {
+        BlockPos gap = from.offset(d);
+        if (!headroom || !clear(world, gap) || !Walkability.passable(world, gap.up(2))
+                || !Walkability.passable(world, gap.down()) || Walkability.climbable(world, from)
+                || !world.getBlockState(from).getFluidState().isEmpty()) {
+            return;
+        }
+        double risk = gapRisk(world, gap.down());
+        if (risk == Double.POSITIVE_INFINITY) {
+            return;
+        }
+        for (int k = 2; k <= reach; k++) {
+            BlockPos c = from.offset(d, k);
+            if (!Walkability.passable(world, c.up(2))) {
+                return; // no room for the arc
+            }
+            double cost = k + PARKOUR_COST + risk;
+            if (clear(world, c)) {
+                if (Walkability.standable(world, c)) {
+                    double rise = Walkability.standY(world, c) - fromY;
+                    if (rise <= STEP_HEIGHT && rise >= -0.6) {
+                        out.add(new Move(c, cost, Action.PARKOUR));
+                    }
+                    return;
+                }
+                BlockPos low = c.down();
+                if (!Walkability.passable(world, low)) {
+                    return; // too tall to land on (a fence or wall)
+                }
+                if (Walkability.standable(world, low) && fromY - Walkability.standY(world, low) <= 1.6) {
+                    out.add(new Move(low, cost, Action.PARKOUR));
+                }
+                // Still a gap at our level: a longer jump may clear it too.
+            } else {
+                // The gap ends at a block: jump up onto it (not from four away, which mostly falls short).
+                BlockPos up = c.up();
+                if (k < MAX_PARKOUR && Walkability.standable(world, up) && Walkability.standY(world, up) - fromY <= MAX_RISE) {
+                    out.add(new Move(up, cost + 0.5, Action.PARKOUR));
+                }
+                return;
+            }
+        }
+    }
+
+    /**
+     * Parkour jumps at an angle (not straight along x or z), level or one block down, to landings up to
+     * {@link #MAX_ANGLED_JUMP} away ({@link #MAX_WALK_JUMP} when too hungry to sprint). Only tried next to a gap and
+     * toward it, so open ground doesn't pay for the checks.
+     */
+    private static void angledParkour(ClientWorld world, BlockPos from, double fromY, boolean headroom, int reach,
+                                      List<Move> out) {
+        if (!headroom || Walkability.climbable(world, from) || !world.getBlockState(from).getFluidState().isEmpty()) {
+            return;
+        }
+        // Gaps next to us, in HORIZONTAL order: north (-z), south (+z), east (+x), west (-x).
+        boolean[] gap = new boolean[4];
+        boolean any = false;
+        for (int i = 0; i < 4; i++) {
+            BlockPos n = from.offset(HORIZONTAL[i]);
+            gap[i] = clear(world, n) && Walkability.passable(world, n.down());
+            any |= gap[i];
+        }
+        if (!any) {
+            return;
+        }
+        double maxDist = reach >= MAX_PARKOUR ? MAX_ANGLED_JUMP : MAX_WALK_JUMP;
+        int r = (int) Math.floor(maxDist);
+        for (int ox = -r; ox <= r; ox++) {
+            for (int oz = -r; oz <= r; oz++) {
+                if (ox == 0 || oz == 0 || Math.abs(ox) == 1 && Math.abs(oz) == 1) {
+                    continue; // straight jumps and diagonal steps are covered elsewhere
+                }
+                double dist = Math.sqrt(ox * ox + oz * oz);
+                if (dist > maxDist
+                        || !(ox > 0 && gap[2] || ox < 0 && gap[3] || oz > 0 && gap[1] || oz < 0 && gap[0])) {
+                    continue;
+                }
+                BlockPos c = from.add(ox, 0, oz);
+                BlockPos landing = null;
+                if (Walkability.standable(world, c)) {
+                    double rise = Walkability.standY(world, c) - fromY;
+                    if (rise <= STEP_HEIGHT && rise >= -0.6) {
+                        landing = c;
+                    }
+                } else if (clear(world, c) && Walkability.standable(world, c.down())
+                        && fromY - Walkability.standY(world, c.down()) <= 1.6) {
+                    landing = c.down();
+                }
+                if (landing == null) {
+                    continue;
+                }
+                double risk = angledRisk(world, from, ox, oz);
+                if (risk != Double.POSITIVE_INFINITY) {
+                    out.add(new Move(landing, dist + PARKOUR_COST + risk, Action.PARKOUR));
+                }
+            }
+        }
+    }
+
+    /**
+     * Checks the player fits along the straight jump from the middle of {@code from} to the cell {@code ox, oz} away:
+     * every cell its body (0.6 wide) sweeps on the way is free at feet, head and jump height. Returns the extra cost of
+     * missing (see {@link #gapRisk}), or infinity when something is in the way or there's lava under it.
+     */
+    private static double angledRisk(ClientWorld world, BlockPos from, int ox, int oz) {
+        double len = Math.sqrt(ox * ox + oz * oz);
+        double ux = ox / len;
+        double uz = oz / len;
+        double risk = 0.0;
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        for (double t = 0.25; t <= len - 0.25; t += 0.25) {
+            for (double side = -0.3; side <= 0.31; side += 0.3) {
+                double x = from.getX() + 0.5 + ux * t - uz * side;
+                double z = from.getZ() + 0.5 + uz * t + ux * side;
+                BlockPos col = BlockPos.ofFloored(x, from.getY(), z);
+                boolean ends = col.getX() == from.getX() && col.getZ() == from.getZ()
+                        || col.getX() == from.getX() + ox && col.getZ() == from.getZ() + oz;
+                if (ends || !seen.add(col.asLong())) {
+                    continue;
+                }
+                for (int dy = 0; dy <= 2; dy++) {
+                    if (!Walkability.passable(world, col.up(dy))) {
+                        return Double.POSITIVE_INFINITY;
+                    }
+                }
+                if (Walkability.passable(world, col.down())) {
+                    risk = Math.max(risk, gapRisk(world, col.down()));
+                    if (risk == Double.POSITIVE_INFINITY) {
+                        return risk;
+                    }
+                }
+            }
+        }
+        return risk;
+    }
+
+    /** Extra cost of missing a jump into the gap whose top cell is {@code below}: a long fall costs more, lava rules it out. */
+    private static double gapRisk(ClientWorld world, BlockPos below) {
+        BlockPos p = below;
+        for (int k = 1; k <= MAX_WATER_DROP; k++, p = p.down()) {
+            if (world.getBlockState(p).getFluidState().isIn(net.minecraft.registry.tag.FluidTags.LAVA)) {
+                return Double.POSITIVE_INFINITY;
+            }
+            if (isWater(world, p)) {
+                return 0.0;
+            }
+            if (!Walkability.passable(world, p)) {
+                return k - 1 <= MAX_DROP ? 0.0 : DEEP_GAP_COST;
+            }
+        }
+        return Double.POSITIVE_INFINITY; // the void, or a drop nobody survives
+    }
+
+    /** Crossing over the cell {@code side} falls at most one block. */
+    private static boolean droppable(ClientWorld world, BlockPos side) {
+        return !Walkability.passable(world, side.down()) || Walkability.standable(world, side.down());
+    }
+
+    private static boolean isWater(ClientWorld world, BlockPos pos) {
+        return world.getBlockState(pos).getFluidState().isIn(net.minecraft.registry.tag.FluidTags.WATER);
     }
 
     private static boolean clear(ClientWorld world, BlockPos feet) {

@@ -31,6 +31,8 @@ public final class Clicks {
         try {
             client.interactionManager.interactBlock(player, Hand.MAIN_HAND, hit);
             player.swingHand(Hand.MAIN_HAND);
+            // The hologram drops the block now instead of at its next refresh.
+            com.testrts.rtsclient.render.WorldOverlay.poke();
         } finally {
             if (!wasSneaking) {
                 if (player.input != null) {

@@ -100,6 +100,74 @@ public final class AutoTest {
                 O.offset(start), 20 * 60 * 5, null));
     }
 
+    /** Scenarios whose blocks come from code (relative to {@code a}) instead of a shape or preset. */
+    private static final Map<String, java.util.function.Function<BlockPos, Map<BlockPos, BlockState>>> CUSTOM = new java.util.HashMap<>();
+
+    private static void custom(String name, java.util.function.Function<BlockPos, Map<BlockPos, BlockState>> blocks) {
+        SCENARIOS.put(name, new Scenario(name, BuildShape.BLOCK, O.offset(-5, 0, -5), O, 1, false, "builtin", true,
+                O.offset(-12, 0, -10), 20 * 60 * 5, null));
+        CUSTOM.put(name, blocks);
+    }
+
+    /**
+     * A building over several floors: 11x11 stone-brick walls with windows, plank floors with one
+     * 1x2 stairwell hole each (no stairs: getting up is the builder's job), a door gap on the ground
+     * floor and a roof overhanging the walls by one block all round.
+     */
+    private static Map<BlockPos, BlockState> storeys(BlockPos o, int floors) {
+        Map<BlockPos, BlockState> m = new java.util.LinkedHashMap<>();
+        BlockState wall = Blocks.STONE_BRICKS.defaultBlockState();
+        BlockState floor = Blocks.OAK_PLANKS.defaultBlockState();
+        BlockState glass = Blocks.GLASS.defaultBlockState();
+        int top = floors * 4;
+        for (int y = 0; y <= top; y++) {
+            for (int x = 0; x <= 10; x++) {
+                for (int z = 0; z <= 10; z++) {
+                    boolean edge = x == 0 || x == 10 || z == 0 || z == 10;
+                    BlockPos p = o.offset(x, y, z);
+                    if (y % 4 == 0) {
+                        if (y == 0 || y == top || edge) {
+                            m.put(p, edge ? wall : floor);
+                        } else if (!(x == 8 && (z == 2 || z == 3))) {
+                            m.put(p, floor); // the stairwell hole stays open
+                        }
+                    } else if (edge) {
+                        boolean door = z == 0 && x == 5 && y <= 2;
+                        boolean window = y % 4 == 2 && (x == 3 || x == 7 || z == 3 || z == 7) && !(x == 5);
+                        if (!door) {
+                            m.put(p, window ? glass : wall);
+                        }
+                    }
+                }
+            }
+        }
+        // Roof overhang: a ring one block out from the walls, level with the roof.
+        for (int x = -1; x <= 11; x++) {
+            for (int z = -1; z <= 11; z++) {
+                if (x == -1 || x == 11 || z == -1 || z == 11) {
+                    m.put(o.offset(x, top, z), wall);
+                }
+            }
+        }
+        return m;
+    }
+
+    /** Scenarios that carry 64 scaffolding as well as the usual dirt. */
+    private static final java.util.Set<String> WITH_SCAFFOLDING = new java.util.HashSet<>();
+    /** Climbing-aid scenarios: the only thing besides the wall's own blocks to climb with (no dirt). */
+    private static final Map<String, String> CLIMB_ITEM = new java.util.HashMap<>();
+
+    /** A stone-brick wall 7 long and 10 high. */
+    private static Map<BlockPos, BlockState> tallWall(BlockPos o) {
+        Map<BlockPos, BlockState> m = new java.util.LinkedHashMap<>();
+        for (int x = 0; x <= 6; x++) {
+            for (int y = 0; y <= 9; y++) {
+                m.put(o.offset(x, y, 0), Blocks.STONE_BRICKS.defaultBlockState());
+            }
+        }
+        return m;
+    }
+
     private static void preset(String name, String preset) {
         SCENARIOS.put(name, new Scenario(name, BuildShape.BLOCK, O.offset(-7, 0, -6), O, 1, false, "builtin", true,
                 O.offset(-12, 0, -10), 20 * 60 * 5, preset));
@@ -162,9 +230,301 @@ public final class AutoTest {
         preset("p-launch-pad", "Launch pad");
         preset("p-rail-station", "Rail station");
         preset("p-bee-yard", "Bee yard");
+        // Builds over several levels: platforms, roofs, walkways, rooms to get in and out of.
+        preset("p-starter-house", "Starter house");
+        preset("p-watchtower", "Watchtower");
+        preset("p-iron-farm", "Iron farm frame");
+        preset("p-castle-wall", "Castle wall");
+        preset("p-trading-hall", "Trading hall");
+        preset("p-mob-grinder", "Mob grinder shell");
+        preset("p-smelter-room", "Smelter room");
+        // FramedBlocks presets (needs FramedBlocks in run/mods): built, then the camo pass right-clicks every frame.
+        preset("pf-cottage", "Cottage");
+        preset("pf-workshop", "Workshop");
+        preset("pf-tower", "Watchtower");
+        custom("storeys2", o -> storeys(o, 2));
+        custom("storeys3", o -> storeys(o, 3));
+        // Climbing aids: a wall too tall to reach from the ground, with only scaffolding / only ladders to climb on.
+        custom("wall-scaffolding", AutoTest::tallWall);
+        custom("wall-ladders", AutoTest::tallWall);
+        CLIMB_ITEM.put("wall-scaffolding", "scaffolding");
+        CLIMB_ITEM.put("wall-ladders", "ladder");
+        // Dirt and scaffolding both carried: scaffolding should be what goes up (supports, climbs).
+        scenario("sphere5-scaffolding", BuildShape.SPHERE, new BlockPos(0, 8, 0), new BlockPos(5, 8, 0), 1, true, "builtin", false);
+        custom("storeys2-scaffolding", o -> storeys(o, 2));
+        WITH_SCAFFOLDING.add("sphere5-scaffolding");
+        WITH_SCAFFOLDING.add("storeys2-scaffolding");
     }
 
-    private enum Phase { TITLE, JOINING, SETUP, START, RUN, SHOT, NEXT, FINISHED }
+    private enum Phase { TITLE, JOINING, SETUP, START, RUN, TRUN, WRUN, SHOT, NEXT, FINISHED }
+
+    // ------------------------------------------------------------------ Terrain modes (the newer ones)
+
+    /** A Terrain mode scenario: the mode, its two clicks and size, commands that shape the ground first, items given. */
+    private record Terra(com.testrts.rtsclient.build.TerrainMode mode, BlockPos a, BlockPos b, int size,
+                         List<String> setup, List<String> give, String brush) {
+    }
+
+    private static final Map<String, Terra> TERRA = new java.util.LinkedHashMap<>();
+    private static com.testrts.rtsclient.build.TerrainShapes.Plan terraPlan;
+    private static Map<BlockPos, BlockState> terraExpect;
+
+    private static void terra(String name, com.testrts.rtsclient.build.TerrainMode mode, BlockPos a, BlockPos b, int size,
+                              List<String> setup, List<String> give, String brush) {
+        TERRA.put(name, new Terra(mode, O.offset(a), O.offset(b), size, setup, give, brush));
+        SCENARIOS.put(name, new Scenario(name, BuildShape.BLOCK, O, O, 1, false, "builtin", true, O.offset(-12, 0, -10), 20 * 60 * 6, null));
+    }
+
+    static {
+        var M = com.testrts.rtsclient.build.TerrainMode.class;
+        int y = O.getY();
+        terra("t-road", com.testrts.rtsclient.build.TerrainMode.ROAD, new BlockPos(-14, -1, 0), new BlockPos(14, -1, 0), 3,
+                List.of(String.format("fill 0 %d -3 4 %d 3 dirt", y, y + 2), String.format("fill 7 %d -4 10 %d 4 water", y - 2, y - 1)),
+                List.of("cobblestone 256", "cobblestone_stairs 32", "polished_andesite 128", "spruce_fence 32", "lantern 16", "stone_bricks 64"), "");
+        terra("t-hill", com.testrts.rtsclient.build.TerrainMode.HILL, new BlockPos(-6, -1, -6), new BlockPos(6, -1, 6), 6,
+                List.of(), List.of("grass_block 128", "dirt 512", "stone 512", "andesite 64"), "");
+        terra("t-lake", com.testrts.rtsclient.build.TerrainMode.LAKE, new BlockPos(-5, -1, -4), new BlockPos(5, -1, 4), 3,
+                List.of(), List.of("water_bucket 2", "sand 64", "clay 128", "gravel 64"), "");
+        terra("t-river", com.testrts.rtsclient.build.TerrainMode.RIVER, new BlockPos(-12, -1, 0), new BlockPos(12, -1, 3), 3,
+                List.of(), List.of("water_bucket 2", "sand 128", "clay 128", "gravel 64"), "");
+        terra("t-farm", com.testrts.rtsclient.build.TerrainMode.FARM, new BlockPos(-5, -1, -4), new BlockPos(5, -1, 4), 0,
+                List.of(), List.of("iron_hoe 1", "wheat_seeds 128", "water_bucket 2", "oak_fence 64", "oak_fence_gate 2", "torch 8"), "");
+        terra("t-mobproof", com.testrts.rtsclient.build.TerrainMode.MOB_PROOF, new BlockPos(-4, -1, -4), new BlockPos(4, -1, 4), 0,
+                List.of(), List.of("smooth_stone_slab 128"), "");
+        terra("t-terrace", com.testrts.rtsclient.build.TerrainMode.TERRACE, new BlockPos(-8, 5, -3), new BlockPos(8, -1, 3), 2,
+                List.of(String.format("fill -8 %d -3 -4 %d 3 dirt", y, y + 5), String.format("fill -3 %d -3 1 %d 3 dirt", y, y + 3),
+                        String.format("fill 2 %d -3 5 %d 3 dirt", y, y + 1)),
+                List.of("grass_block 256", "dirt 256", "stone 256"), "");
+        terra("t-cave", com.testrts.rtsclient.build.TerrainMode.CAVE, new BlockPos(-10, 1, 0), new BlockPos(10, 2, 0), 3,
+                List.of(String.format("fill -10 %d -4 10 %d 4 stone", y, y + 6)), List.of("torch 16", "cobblestone 16"), "");
+        terra("t-room", com.testrts.rtsclient.build.TerrainMode.ROOM, new BlockPos(-3, -1, -3), new BlockPos(3, -1, 3), 0,
+                List.of(String.format("fill -4 %d -4 4 %d 4 stone_bricks hollow", y, y + 3)),
+                List.of("lantern 8", "torch 16", "chest 16", "crafting_table 2", "spruce_planks 64"), "");
+        terra("t-islandbridge", com.testrts.rtsclient.build.TerrainMode.ISLAND_BRIDGE, new BlockPos(-9, 5, 0), new BlockPos(9, 5, 0), 3,
+                List.of(String.format("fill -14 %d -3 -6 %d 3 stone", y + 5, y + 5), String.format("fill 6 %d -3 14 %d 3 stone", y + 5, y + 5)),
+                List.of("spruce_planks 128", "spruce_stairs 64", "spruce_log 64", "stripped_spruce_log 64", "spruce_fence 64", "lantern 16"), "");
+        terra("t-decorate", com.testrts.rtsclient.build.TerrainMode.DECORATE, new BlockPos(-6, -1, -6), new BlockPos(6, -1, 6), 6,
+                List.of(), List.of("short_grass 128", "dandelion 16", "poppy 16", "azure_bluet 16", "oxeye_daisy 16", "cornflower 16",
+                        "allium 16", "red_tulip 16", "white_tulip 16", "lily_of_the_valley 16", "fern 64", "azalea_leaves 32",
+                        "oak_leaves 32", "cobblestone 32", "mossy_cobblestone 32"), "");
+        terra("t-restyle", com.testrts.rtsclient.build.TerrainMode.RESTYLE, new BlockPos(-4, 0, -4), new BlockPos(4, 3, 4), 0,
+                List.of(), List.of("spruce_planks 256"), "spruce_planks");
+    }
+
+    /** Start a Terrain-mode scenario: shape the ground, give the items, then pick the mode and click like the player. */
+    /** Ground shaped and items given for the current Terrain scenario (the blocks reach the client a moment later). */
+    private static boolean terraReady;
+
+    private static void startTerra(Minecraft mc, Terra t) {
+        RtsConfig.get().autoStart = false;
+        var s = RtsController.get().session();
+        s.tool = ToolMode.TERRAIN;
+        s.terrainMode = t.mode();
+        s.terrainSize = t.size();
+        s.brush = t.brush().isEmpty() ? net.minecraft.world.item.ItemStack.EMPTY
+                : new net.minecraft.world.item.ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(
+                        net.minecraft.resources.ResourceLocation.parse("minecraft:" + t.brush())));
+        terraExpect = new java.util.LinkedHashMap<>();
+        if (t.mode() == com.testrts.rtsclient.build.TerrainMode.RESTYLE) {
+            // A queued (not started) box of stone bricks, then restyle it.
+            Map<BlockPos, BlockState> box = new java.util.LinkedHashMap<>();
+            for (int x = -3; x <= 3; x++) {
+                for (int z = -3; z <= 3; z++) {
+                    for (int yy = 0; yy <= 2; yy++) {
+                        if (x == -3 || x == 3 || z == -3 || z == 3) {
+                            box.put(O.offset(x, yy, z), Blocks.STONE_BRICKS.defaultBlockState());
+                        }
+                    }
+                }
+            }
+            task = new BuildTask("autotest restyle box", box, false);
+            TaskQueue.get().add(task);
+            box.keySet().forEach(p -> terraExpect.put(p, Blocks.SPRUCE_PLANKS.defaultBlockState()));
+            terraPlan = null;
+        } else if (t.mode() == com.testrts.rtsclient.build.TerrainMode.ISLAND_BRIDGE) {
+            BlockPos[] ends = com.testrts.rtsclient.build.TerrainShapes.islandEdges(mc.level, t.a(), t.b());
+            terraExpect.putAll(OrderPlanner.plan(mc.level, com.testrts.rtsclient.screen.WorldActions.islandBridgeRequest(s, ends[0], ends[1])).changes());
+            terraPlan = null;
+        } else {
+            terraPlan = com.testrts.rtsclient.build.TerrainShapes.plan(t.mode(), mc.level, t.a(), t.b(), t.size(),
+                    com.testrts.rtsclient.screen.WorldActions.terrainBrush(s));
+            terraExpect.putAll(terraPlan.clear());
+            terraExpect.putAll(terraPlan.fill());
+        }
+        s.anchorA = t.a();
+        s.anchorB = t.b();
+        new com.testrts.rtsclient.screen.WorldActions(mc, RtsController.get()).confirm();
+        TaskQueue.get().start();
+        ticks = 0;
+        log("start %s: %d blocks planned%s", current.name(), terraExpect.size(), terraPlan == null ? ""
+                : String.format(", till %d, seeds %d, water %d", terraPlan.till().size(), terraPlan.seeds().size(), terraPlan.water().size()));
+    }
+
+    private static void verifyTerra(Minecraft mc, boolean timedOut) {
+        var level = mc.level;
+        int missing = 0;
+        List<String> missed = new ArrayList<>();
+        for (Map.Entry<BlockPos, BlockState> e : terraExpect.entrySet()) {
+            if (!MaterialPlanner.matches(level.getBlockState(e.getKey()), e.getValue())) {
+                missing++;
+                if (missed.size() < 10) {
+                    missed.add(e.getKey().subtract(O).toShortString() + " " + level.getBlockState(e.getKey()).getBlock().getName().getString()
+                            + " (want " + e.getValue().getBlock().getName().getString() + ")");
+                }
+            }
+        }
+        int dry = 0;
+        int untilled = 0;
+        int unsown = 0;
+        if (terraPlan != null) {
+            for (BlockPos w : terraPlan.water()) {
+                var f = level.getFluidState(w);
+                if (!(f.is(net.minecraft.tags.FluidTags.WATER) && f.isSource())) {
+                    dry++;
+                }
+            }
+            for (BlockPos p : terraPlan.till()) {
+                if (!level.getBlockState(p).is(Blocks.FARMLAND)) {
+                    untilled++;
+                }
+            }
+            for (BlockPos p : terraPlan.seeds()) {
+                if (level.getBlockState(p.above()).isAir()) {
+                    unsown++;
+                }
+            }
+        }
+        boolean pass = !timedOut && missing == 0 && dry == 0 && untilled == 0 && unsown == 0 && !terraExpect.isEmpty();
+        report(String.format(java.util.Locale.ROOT, "RESULT %-16s %s blocks=%d missing=%d water-missing=%d untilled=%d unsown=%d time=%ds status=%s",
+                current.name(), timedOut ? "TIMEOUT" : pass ? "PASS" : "FAIL", terraExpect.size(), missing, dry, untilled, unsown,
+                ticks / 20, Engine.status()));
+        if (!missed.isEmpty()) {
+            report("    missed: " + missed);
+        }
+    }
+
+    // ------------------------------------------------------------------ Walking (the built-in pathfinder)
+
+    /**
+     * A walk order on shaped ground: setup commands (given the feet level), where it starts and ends (relative to
+     * the arena origin), whether it should get there, a step type the plan must use (or null), whether parkour is
+     * on, cells the plan must not go through, and commands run two seconds into the walk.
+     */
+    private record Walk(java.util.function.IntFunction<List<String>> setup, BlockPos from, BlockPos to, boolean reachable,
+                        com.testrts.rtsclient.exec.PathFinder.Action uses, boolean parkour, List<BlockPos> avoid,
+                        java.util.function.IntFunction<List<String>> after) {
+    }
+
+    private static final Map<String, Walk> WALKS = new java.util.LinkedHashMap<>();
+    private static boolean walkReady;
+    private static float walkHealth;
+
+    private static void walk(String name, java.util.function.IntFunction<List<String>> setup, BlockPos from, BlockPos to,
+                             boolean reachable, com.testrts.rtsclient.exec.PathFinder.Action uses) {
+        walk(name, setup, from, to, reachable, uses, true, List.of(), y -> List.of());
+    }
+
+    private static void walk(String name, java.util.function.IntFunction<List<String>> setup, BlockPos from, BlockPos to,
+                             boolean reachable, com.testrts.rtsclient.exec.PathFinder.Action uses, boolean parkour,
+                             List<BlockPos> avoid, java.util.function.IntFunction<List<String>> after) {
+        WALKS.put(name, new Walk(setup, from, to, reachable, uses, parkour, avoid, after));
+        // Starts out of the way of the ground being shaped; moved to the walk's start once it's done.
+        SCENARIOS.put(name, new Scenario(name, BuildShape.BLOCK, O, O, 1, false, "builtin", true, O.offset(-20, 0, -20), 20 * 90, null));
+    }
+
+    /** A stone platform along x (top at feet level 3, feet at 4) with an air gap {@code width} wide at x = 0. */
+    private static List<String> gap(int y, int width) {
+        return List.of(String.format(Locale.ROOT, "fill -15 %d -2 15 %d 2 stone", y, y + 3),
+                String.format(Locale.ROOT, "fill 0 %d -2 %d %d 2 air", y, width - 1, y + 3));
+    }
+
+    static {
+        var P = com.testrts.rtsclient.exec.PathFinder.Action.PARKOUR;
+        BlockPos ga = new BlockPos(-12, 4, 0);
+        BlockPos gb = new BlockPos(12, 4, 0);
+        walk("w-gap1", y -> gap(y, 1), ga, gb, true, P);
+        walk("w-gap2", y -> gap(y, 2), ga, gb, true, P);
+        walk("w-gap3", y -> gap(y, 3), ga, gb, true, P);
+        // One-block gap, then a platform one higher: jump up onto it.
+        walk("w-gap-up", y -> List.of(String.format(Locale.ROOT, "fill -15 %d -2 -1 %d 2 stone", y, y + 3),
+                String.format(Locale.ROOT, "fill 1 %d -2 15 %d 2 stone", y, y + 4)), ga, new BlockPos(12, 5, 0), true, P);
+        // A 1-wide beam ending in mid-air, and another beam off to the side (2 or 3 along, 2 across): an angled jump.
+        walk("w-angle1", y -> List.of(String.format(Locale.ROOT, "fill -15 %d 0 -1 %d 0 stone", y, y + 3),
+                String.format(Locale.ROOT, "fill 1 %d 2 15 %d 2 stone", y, y + 3)), ga, new BlockPos(12, 4, 2), true, P);
+        walk("w-angle2", y -> List.of(String.format(Locale.ROOT, "fill -15 %d 0 -1 %d 0 stone", y, y + 3),
+                String.format(Locale.ROOT, "fill 2 %d 2 15 %d 2 stone", y, y + 3)), ga, new BlockPos(12, 4, 2), true, P);
+        // Lava at the bottom of the gap (kept in by low walls at its ends): never jumped.
+        walk("w-gap-lava", y -> List.of(gap(y, 1).get(0), gap(y, 1).get(1),
+                String.format(Locale.ROOT, "fill 0 %d -3 0 %d 3 stone", y, y),
+                String.format(Locale.ROOT, "fill 0 %d -2 0 %d 2 lava", y, y)), ga, gb, false, null);
+        walk("w-gap-off", y -> gap(y, 1), ga, gb, false, null, false, List.of(), yy -> List.of());
+        // A 12-high tower with a pool at its foot: jump off into the water; with no pool there's no way down.
+        walk("w-water-drop", y -> List.of(String.format(Locale.ROOT, "fill -15 %d -3 -8 %d 3 stone", y, y + 11),
+                        String.format(Locale.ROOT, "fill -7 %d -2 -3 %d 2 stone", y, y + 1),
+                        String.format(Locale.ROOT, "fill -7 %d -1 -4 %d 1 water", y, y + 1)),
+                new BlockPos(-12, 12, 0), new BlockPos(10, 0, 0), true, null);
+        walk("w-dry-drop", y -> List.of(String.format(Locale.ROOT, "fill -15 %d -3 -8 %d 3 stone", y, y + 11)),
+                new BlockPos(-12, 12, 0), new BlockPos(10, 0, 0), false, null);
+        // Cows standing in the straight line: the plan goes round them.
+        walk("w-mobs", y -> List.of(String.format(Locale.ROOT, "summon cow 0.5 %d -0.5 {NoAI:1b}", y),
+                        String.format(Locale.ROOT, "summon cow 0.5 %d 0.5 {NoAI:1b}", y),
+                        String.format(Locale.ROOT, "summon cow 0.5 %d 1.5 {NoAI:1b}", y)),
+                new BlockPos(-12, 0, 0), new BlockPos(12, 0, 0), true, null, true,
+                List.of(new BlockPos(0, 0, -1), new BlockPos(0, 0, 0), new BlockPos(0, 0, 1)), y -> List.of());
+        // A wall goes up across the route while walking it: plan again and go round.
+        walk("w-reroute", y -> List.of(), new BlockPos(-12, 0, 0), new BlockPos(12, 0, 0), true, null, true, List.of(),
+                y -> List.of(String.format(Locale.ROOT, "fill 4 %d -2 4 %d 2 stone", y, y + 1)));
+    }
+
+    /** Plan the walk right away (to report the route), then hand it to the engine like a walk order. */
+    private static void startWalk(Minecraft mc, Walk w) {
+        var level = mc.level;
+        BlockPos goal = O.offset(w.to());
+        var search = com.testrts.rtsclient.exec.PathFinder.start(level,
+                com.testrts.rtsclient.exec.Walkability.feetNode(level, mc.player), p -> p.distSqr(goal) <= 1.0,
+                net.minecraft.world.phys.Vec3.atBottomCenterOf(goal));
+        for (int i = 0; i < 1000 && search.state() == com.testrts.rtsclient.exec.PathFinder.Search.State.RUNNING; i++) {
+            search.step(100_000);
+        }
+        Map<com.testrts.rtsclient.exec.PathFinder.Action, Integer> kinds = new java.util.EnumMap<>(com.testrts.rtsclient.exec.PathFinder.Action.class);
+        String through = "";
+        boolean usesOk = w.uses() == null;
+        if (search.state() == com.testrts.rtsclient.exec.PathFinder.Search.State.FOUND) {
+            search.actions().forEach(a -> kinds.merge(a, 1, Integer::sum));
+            usesOk = w.uses() == null || kinds.containsKey(w.uses());
+            for (BlockPos p : search.result()) {
+                if (w.avoid().contains(p.subtract(O))) {
+                    through += " " + p.subtract(O).toShortString();
+                }
+            }
+        }
+        planNote = String.format(Locale.ROOT, "plan=%s steps=%d %s%s", search.state(),
+                search.result() == null ? 0 : search.result().size(), kinds, through.isEmpty() ? "" : " THROUGH" + through);
+        planOk = usesOk && through.isEmpty()
+                && (search.state() == com.testrts.rtsclient.exec.PathFinder.Search.State.FOUND) == w.reachable();
+        Engine.goTo(goal);
+        ticks = 0;
+        walkHealth = mc.player.getHealth();
+        minHealth = walkHealth;
+        log("start %s: %s", current.name(), planNote);
+    }
+
+    private static String planNote;
+    private static boolean planOk;
+
+    private static void verifyWalk(Minecraft mc, Walk w, boolean timedOut) {
+        BlockPos feet = mc.player.blockPosition();
+        BlockPos goal = O.offset(w.to());
+        boolean arrived = feet.distSqr(goal) <= 2.0;
+        float lost = walkHealth - minHealth;
+        // Unreachable: it must stay put (on the platform or tower), not fall or wander off.
+        boolean stayed = feet.getY() >= O.getY() + w.from().getY() - 1;
+        boolean pass = !timedOut && planOk && lost <= 0.0F && (w.reachable() ? arrived : !arrived && stayed);
+        report(String.format(Locale.ROOT, "RESULT %-16s %s %s arrived=%s hurt=%.1f time=%ds at=%s status=%s",
+                current.name(), timedOut ? "TIMEOUT" : pass ? "PASS" : "FAIL", planNote, arrived, lost, ticks / 20,
+                feet.subtract(O).toShortString(), Engine.status()));
+        RtsConfig.get().parkour = true;
+    }
 
     private static Phase phase = Phase.TITLE;
     private static final List<Scenario> queue = new ArrayList<>();
@@ -173,9 +533,18 @@ public final class AutoTest {
     private static int ticks;
     private static float minHealth;
     private static Map<BlockPos, BlockState> order;
+    /** FramedBlocks presets: camo per frame, and the camo pass once the build is done. */
+    private static Map<BlockPos, BlockState> camoOrder = Map.of();
+    private static com.testrts.rtsclient.task.CamoTask camoTask;
+    private static int camoStart = -1;
     private static BuildTask task;
     private static Path out;
     private static int clearWaits;
+    /** Blocks still to do at the last check, when that last went down, and the longest wait for it (ticks). */
+    private static int lastLeft;
+    private static int lastProgress;
+    private static int maxStall;
+    private static int stalls;
 
     private AutoTest() {
     }
@@ -238,6 +607,9 @@ public final class AutoTest {
                     return;
                 }
                 current = queue.remove(0);
+                camoOrder = Map.of();
+                camoTask = null;
+                camoStart = -1;
                 setup(mc, current);
                 wait = 60;
                 phase = Phase.START;
@@ -245,7 +617,7 @@ public final class AutoTest {
             case START -> {
                 // The arena clear runs on the server; plan only once it has reached us, or leftovers of the
                 // last scenario count as "already built" (a dome came out with a hole in its top that way).
-                if (!current.name().equals("protect-clear") && !arenaClear(mc) && ++clearWaits < 20) {
+                if (!current.name().equals("protect-clear") && !walkReady && !arenaClear(mc) && ++clearWaits < 20) {
                     wait = 10;
                     return;
                 }
@@ -303,13 +675,56 @@ public final class AutoTest {
                 RtsConfig cfg = RtsConfig.get();
                 cfg.engine = s.engine();
                 cfg.airPlace = s.airPlace();
+                if (WALKS.containsKey(s.name())) {
+                    Walk w = WALKS.get(s.name());
+                    if (!walkReady) {
+                        // Shape the ground, then stand at the start once the blocks have reached us.
+                        cmd(mc, "kill @e[type=cow]");
+                        w.setup().apply(O.getY()).forEach(c -> cmd(mc, c));
+                        BlockPos f = O.offset(w.from());
+                        cmd(mc, String.format(Locale.ROOT, "tp @s %.1f %d %.1f", f.getX() + 0.5, f.getY(), f.getZ() + 0.5));
+                        walkReady = true;
+                        wait = 40;
+                        return;
+                    }
+                    walkReady = false;
+                    cfg.parkour = w.parkour();
+                    startWalk(mc, w);
+                    phase = Phase.WRUN;
+                    return;
+                }
+                if (TERRA.containsKey(s.name())) {
+                    Terra t = TERRA.get(s.name());
+                    if (!terraReady) {
+                        // Shape the ground first; plan only once the server's blocks have reached us.
+                        t.setup().forEach(c -> cmd(mc, c));
+                        cmd(mc, "clear @s minecraft:stone");
+                        t.give().forEach(g -> cmd(mc, "give @s " + g));
+                        terraReady = true;
+                        wait = 40;
+                        return;
+                    }
+                    terraReady = false;
+                    startTerra(mc, t);
+                    phase = Phase.TRUN;
+                    return;
+                }
                 OrderPlanner.Request r = new OrderPlanner.Request(ToolMode.BUILD, s.shape(), BuildMode.FILL, s.a(), s.b(),
                         s.height(), s.hollow(), (FROM_STORAGE.contains(s.name()) || FROM_ME.contains(s.name()) || FROM_RS.contains(s.name()) ? Blocks.STONE_BRICKS : Blocks.STONE).defaultBlockState(),
                         null, 100_000, List.of(), true,
                         com.testrts.rtsclient.build.MixPattern.RANDOM);
-                if (s.preset() != null) {
+                if (CUSTOM.containsKey(s.name())) {
+                    order = new java.util.LinkedHashMap<>();
+                    CUSTOM.get(s.name()).apply(s.a()).forEach((pos, st) -> {
+                        if (!MaterialPlanner.matches(mc.level.getBlockState(pos), st)) {
+                            order.put(pos, st);
+                        }
+                    });
+                    cmd(mc, "clear @s minecraft:stone");
+                    giveMaterials(mc, order);
+                } else if (s.preset() != null) {
                     // A preset building, pasted like the Blueprint tool does (only what isn't there already).
-                    var bp = com.testrts.rtsclient.build.Presets.all().stream().filter(p -> p.name().equals(s.preset()))
+                    var bp = com.testrts.rtsclient.build.Presets.everything().stream().filter(p -> p.name().equals(s.preset()))
                             .findFirst().orElseThrow().build().get();
                     order = new java.util.LinkedHashMap<>();
                     bp.placed(s.a(), 0).forEach((pos, st) -> {
@@ -319,6 +734,12 @@ public final class AutoTest {
                     });
                     cmd(mc, "clear @s minecraft:stone"); // room in the inventory for the preset's blocks
                     giveMaterials(mc, order);
+                    camoOrder = bp.placedCamo(s.a(), 0, false);
+                    giveMaterials(mc, camoOrder);
+                    if (!camoOrder.isEmpty()) {
+                        // Made now, like pasting does: the builder puts camo on each frame as it places it.
+                        camoTask = new com.testrts.rtsclient.task.CamoTask("autotest camo", camoOrder);
+                    }
                 } else {
                     order = OrderPlanner.plan(mc.level, r).changes();
                 }
@@ -334,6 +755,10 @@ public final class AutoTest {
                     TaskQueue.get().add(task);
                     TaskQueue.get().start();
                     ticks = 0;
+                    lastLeft = Integer.MAX_VALUE;
+                    lastProgress = 0;
+                    maxStall = 0;
+                    stalls = 0;
                     minHealth = mc.player.getHealth();
                     log("start %s: %d blocks to clear, x <= 0 protected", s.name(), order.size());
                     phase = Phase.RUN;
@@ -344,7 +769,7 @@ public final class AutoTest {
                     new com.testrts.rtsclient.screen.WorldActions(mc, RtsController.get()).scanNearby();
                 } else if (FROM_ME.contains(s.name()) || FROM_RS.contains(s.name())) {
                     // Nothing to give: the build has to get its bricks from the network.
-                } else if (s.preset() == null) {
+                } else if (s.preset() == null && !CUSTOM.containsKey(s.name())) {
                     // Railings, lanterns...: anything besides the stone every scenario gets.
                     Map<BlockPos, BlockState> extra = new java.util.HashMap<>(order);
                     extra.values().removeIf(st -> st.is(Blocks.STONE));
@@ -354,6 +779,10 @@ public final class AutoTest {
                 TaskQueue.get().add(task);
                 TaskQueue.get().start();
                 ticks = 0;
+                lastLeft = Integer.MAX_VALUE;
+                lastProgress = 0;
+                maxStall = 0;
+                stalls = 0;
                 minHealth = mc.player.getHealth();
                 log("start %s: %d blocks, engine=%s air=%s", s.name(), order.size(), s.engine(), s.airPlace());
                 phase = Phase.RUN;
@@ -361,6 +790,19 @@ public final class AutoTest {
             case RUN -> {
                 ticks++;
                 minHealth = Math.min(minHealth, mc.player.getHealth());
+                if (ticks % 20 == 0) {
+                    // Stalls: stretches without a single block done (stuck getting to one, mostly).
+                    int left = MaterialPlanner.remaining(mc.level, order);
+                    // Once everything is built, the scaffolding comes down: leftovers show as stray, not as a stall.
+                    if (left < lastLeft || left == 0) {
+                        lastLeft = left;
+                        lastProgress = ticks;
+                    } else if (ticks - lastProgress == 20 * 15) {
+                        stalls++;
+                        log("  STALL 15s at left=%d status=%s pos=%s", left, Engine.status(), mc.player.blockPosition().subtract(O).toShortString());
+                    }
+                    maxStall = Math.max(maxStall, ticks - lastProgress);
+                }
                 if (ticks % 100 == 0) {
                     int left = MaterialPlanner.remaining(mc.level, order);
                     var head = TaskQueue.get().snapshot().isEmpty() ? null : TaskQueue.get().snapshot().get(0);
@@ -368,16 +810,73 @@ public final class AutoTest {
                             task.detail(), head == null || head == task ? "-" : head.label() + " (" + head.detail() + ")",
                             mc.player.blockPosition().toShortString());
                 }
+                // FramedBlocks presets: once built, the camo pass (as pasting queues it).
+                if (!TaskQueue.get().snapshot().contains(task) && camoTask != null && camoStart < 0) {
+                    int already = 0;
+                    for (Map.Entry<BlockPos, BlockState> e : camoOrder.entrySet()) {
+                        if (com.testrts.rtsclient.task.CamoTask.hasCamo(mc.level, e.getKey(), e.getValue())) {
+                            already++;
+                        }
+                    }
+                    log("  camo put on while building: %d/%d", already, camoOrder.size());
+                    TaskQueue.get().add(camoTask);
+                    TaskQueue.get().start();
+                    camoStart = ticks;
+                    log("  built in %ds, camo pass for %d frames", ticks / 20, camoOrder.size());
+                }
                 // Only our own order counts: someone may queue things by hand in the same window.
-                boolean running = TaskQueue.get().snapshot().contains(task);
+                boolean running = TaskQueue.get().snapshot().contains(task)
+                        || camoTask != null && TaskQueue.get().snapshot().contains(camoTask);
                 // Bigger orders get longer: roughly a second a block on top of the base limit.
-                int limit = Math.max(current.timeoutTicks(), 20 * (120 + order.size()));
+                int limit = Math.max(current.timeoutTicks(), 20 * (120 + order.size() + camoOrder.size()));
                 if (!running || ticks > limit) {
                     TaskQueue.get().remove(mc, task);
+                    if (camoTask != null) {
+                        TaskQueue.get().remove(mc, camoTask);
+                    }
                     boolean timedOut = running;
                     verify(mc, timedOut);
+                    if (!camoOrder.isEmpty()) {
+                        verifyCamo(mc);
+                    }
                     showStructure(mc);
                     wait = 30;
+                    phase = Phase.SHOT;
+                }
+            }
+            case TRUN -> {
+                ticks++;
+                if (ticks % 100 == 0) {
+                    var head = TaskQueue.get().snapshot().isEmpty() ? null : TaskQueue.get().snapshot().get(0);
+                    log("  t=%ds queue=%d head=%s pos=%s", ticks / 20, TaskQueue.get().snapshot().size(),
+                            head == null ? "-" : head.label() + " (" + head.detail() + ")", mc.player.blockPosition().toShortString());
+                }
+                int limit = 20 * (180 + terraExpect.size() + (terraPlan == null ? 0 : terraPlan.water().size() * 2));
+                if (TaskQueue.get().snapshot().isEmpty() || ticks > limit) {
+                    boolean timedOut = !TaskQueue.get().snapshot().isEmpty();
+                    for (var t2 : TaskQueue.get().snapshot()) {
+                        TaskQueue.get().remove(mc, t2);
+                    }
+                    verifyTerra(mc, timedOut);
+                    wait = 30;
+                    phase = Phase.SHOT;
+                }
+            }
+            case WRUN -> {
+                ticks++;
+                minHealth = Math.min(minHealth, mc.player.getHealth());
+                Walk w = WALKS.get(current.name());
+                if (ticks == 40) {
+                    w.after().apply(O.getY()).forEach(c -> cmd(mc, c));
+                }
+                if (ticks % 40 == 0) {
+                    log("  t=%ds status=%s pos=%s", ticks / 20, Engine.status(), mc.player.blockPosition().subtract(O).toShortString());
+                }
+                boolean moving = Engine.isMoving();
+                if (ticks > 20 && !moving || ticks > current.timeoutTicks()) {
+                    Engine.stop();
+                    verifyWalk(mc, w, moving);
+                    wait = 10;
                     phase = Phase.SHOT;
                 }
             }
@@ -464,6 +963,15 @@ public final class AutoTest {
             cmd(mc, String.format(Locale.ROOT, "setblock -18 %d 11 minecraft:chest{Items:[%s,%s,%s,%s]}", y0,
                     String.format(dirt, 0), String.format(dirt, 1), String.format(bricks, 2), String.format(bricks, 3)));
         }
+        if (WITH_SCAFFOLDING.contains(s.name())) {
+            cmd(mc, "give @s scaffolding 64");
+            RtsConfig.get().climbingAids = true;
+        }
+        if (CLIMB_ITEM.containsKey(s.name())) {
+            cmd(mc, "clear @s minecraft:dirt");
+            cmd(mc, "give @s " + CLIMB_ITEM.get(s.name()) + " 64");
+            RtsConfig.get().climbingAids = true;
+        }
         if (CREATIVE.contains(s.name())) {
             cmd(mc, "gamemode creative");
         }
@@ -519,9 +1027,9 @@ public final class AutoTest {
         boolean trapped = feet.getX() >= minX && feet.getX() <= maxX && feet.getZ() >= minZ && feet.getZ() <= maxZ
                 && feet.getY() >= minY && feet.getY() <= maxY;
         String line = String.format(Locale.ROOT,
-                "RESULT %-16s %s blocks=%d missing=%d stray=%d time=%ds minHealth=%.0f feet=%s inside=%s status=%s",
+                "RESULT %-16s %s blocks=%d missing=%d stray=%d time=%ds maxStall=%ds stalls=%d minHealth=%.0f feet=%s inside=%s status=%s",
                 current.name(), timedOut ? "TIMEOUT" : missing == 0 && stray == 0 ? "PASS" : "FAIL",
-                order.size(), missing, stray, ticks / 20, minHealth, feet.toShortString(), trapped, Engine.status());
+                order.size(), missing, stray, ticks / 20, maxStall / 20, stalls, minHealth, feet.toShortString(), trapped, Engine.status());
         report(line);
         if (FROM_STORAGE.contains(current.name())) {
             int stored = com.testrts.rtsclient.storage.StorageManager.get().total(net.minecraft.world.item.Items.STONE_BRICKS);
@@ -851,6 +1359,25 @@ public final class AutoTest {
     }
 
     /** Survival: give everything the order needs (stone and dirt come with every scenario). */
+    /** FramedBlocks presets: every frame wears the camo it should. */
+    private static void verifyCamo(Minecraft mc) {
+        int ok = 0;
+        List<String> bad = new ArrayList<>();
+        for (Map.Entry<BlockPos, BlockState> e : camoOrder.entrySet()) {
+            if (com.testrts.rtsclient.task.CamoTask.hasCamo(mc.level, e.getKey(), e.getValue())) {
+                ok++;
+            } else if (bad.size() < 10) {
+                bad.add(e.getKey().subtract(O).toShortString() + " " + net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(e.getValue().getBlock())
+                        + " on " + net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(mc.level.getBlockState(e.getKey()).getBlock()));
+            }
+        }
+        report(String.format(Locale.ROOT, "RESULT %-16s %s camo=%d/%d camoTime=%ds", current.name() + "-camo",
+                ok == camoOrder.size() ? "PASS" : "FAIL", ok, camoOrder.size(), camoStart < 0 ? 0 : (ticks - camoStart) / 20));
+        if (!bad.isEmpty()) {
+            report("    no camo: " + bad);
+        }
+    }
+
     private static void giveMaterials(Minecraft mc, Map<BlockPos, BlockState> blocks) {
         Map<net.minecraft.world.item.Item, Integer> need = OrderPlanner.materials(blocks);
         need.forEach((item, n) -> cmd(mc, "give @s " + net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item) + " " + (n + 8)));

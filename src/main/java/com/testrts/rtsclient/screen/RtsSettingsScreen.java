@@ -10,7 +10,6 @@ import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.screen.narration.NarrationMessageBuilder;
-import net.minecraft.client.gui.tooltip.Tooltip;
 import net.minecraft.client.gui.widget.PressableWidget;
 import net.minecraft.text.Text;
 
@@ -26,13 +25,16 @@ public final class RtsSettingsScreen extends Screen {
     private static final double[] SPEEDS = {8, 12, 18, 26, 40};
     private static final double[] TURN_SPEEDS = {15, 30, 45, 90, 0};
     private static final double[] AUTO_PLACE_RANGES = {2, 3, 4, 0};
-    private static final double[] AUTO_PLACE_SPEEDS = {2, 3, 5, 10, 20};
+    private static final double[] AUTO_PLACE_SPEEDS = {2, 3, 5, 10, 20, 40, 60, 100};
 
     private static final int COL_W = 196;
     private static final int ROW_H = 18;
     private static final int ROW_STEP = 20;
     private static final int SECTION_H = 14;
     private static final int PAD = 8;
+    /** Space kept free around the panel. */
+    private static final int MARGIN = 4;
+    private static final int MAX_COLUMNS = 3;
 
     private record Setting(String name, Supplier<String> value, String tip, Runnable action) {
     }
@@ -52,6 +54,8 @@ public final class RtsSettingsScreen extends Screen {
     private int panelY0;
     private int panelX1;
     private int panelY1;
+    /** Below 1 when the page is drawn shrunk to fit the window. */
+    private float uiScale = 1.0F;
 
     public RtsSettingsScreen(Screen parent) {
         super(Text.literal("RTS settings"));
@@ -76,12 +80,30 @@ public final class RtsSettingsScreen extends Screen {
                 new Setting("Build in layers", () -> onOff(c.buildInLayers),
                         "Finish one Y level before the next (bottom-up; clearing goes top-down). Fewer missed blocks.",
                         () -> c.buildInLayers = !c.buildInLayers),
+                new Setting("Build ahead", () -> onOff(c.buildAhead),
+                        "Built-in engine, with Build in layers and Place in mid-air: also places blocks of the next 2 layers "
+                                + "that are already in reach (fewer laps around the build). Off: strictly one layer at a time.",
+                        () -> c.buildAhead = !c.buildAhead),
                 new Setting("Exact rotation", () -> onOff(c.strictOrientation),
                         "On: stairs/logs must face exactly as previewed or they're skipped. Off: placed as close as possible.",
                         () -> c.strictOrientation = !c.strictOrientation),
                 new Setting("Buildable shells", () -> onOff(c.buildableShells),
                         "Hollow spheres and circles get extra blocks on the inside where needed so every block can be placed.",
                         () -> c.buildableShells = !c.buildableShells),
+                new Setting("Climb with scaffolding / ladders", () -> onOff(c.climbingAids),
+                        "Built-in engine: to get up high, put ladders (or vines) up a wall next to the block, or pillar up on "
+                                + "scaffolding blocks, when you carry them - instead of pillaring up on dirt or cobble. Scaffolding comes "
+                                + "down in one go afterwards.",
+                        () -> c.climbingAids = !c.climbingAids),
+                new Setting("Parkour jumps", () -> onOff(c.parkour),
+                        "Built-in engine: jump across gaps of 1-3 blocks (sprinting for the wider ones, when not too hungry) "
+                                + "instead of walking round. A missed jump is avoided next time. Off: never jumps a gap.",
+                        () -> c.parkour = !c.parkour),
+                new Setting("Scaffolding", () -> onOff(c.useScaffolding),
+                        "Let the builder put up temporary blocks (dirt/cobblestone, scaffolding, ladders) to climb, bridge gaps "
+                                + "and hold up floating blocks. Off: it never places anything the build doesn't have; blocks it "
+                                + "can't reach or attach to are skipped (Air place and flying still work). Baritone too.",
+                        () -> c.useScaffolding = !c.useScaffolding),
                 new Setting("Remove scaffolding", () -> onOff(c.removeScaffolding),
                         "The built-in engine adds temporary dirt/cobblestone to reach and support blocks; mine it out afterwards.",
                         () -> c.removeScaffolding = !c.removeScaffolding),
@@ -93,9 +115,19 @@ public final class RtsSettingsScreen extends Screen {
                                 + "Works on vanilla servers; some anti-cheat plugins may not allow it.",
                         () -> c.airPlace = !c.airPlace),
                 new Setting("Creative flight", () -> onOff(c.creativeFlight),
-                        "When you can fly (creative mode), your character flies straight to the blocks it builds "
-                                + "or mines instead of walking and climbing. Does nothing when you can't fly.",
+                        "When you can fly (creative mode, a flight item like an Angel Ring or Mystical Agriculture flight armor, or Apotheosis's Flying potion), your character flies straight "
+                                + "to the blocks it builds or mines instead of walking and climbing. Off: it walks, landing first if "
+                                + "you're flying. In survival, mining in the air is 5x slower.",
                         () -> c.creativeFlight = !c.creativeFlight),
+                new Setting("Fly above the layer", () -> onOff(c.flyAboveLayer),
+                        "Flying while building in layers: hover above the layer being built (nothing is there yet, see "
+                                + "Hover height), so it never catches on its own blocks; with Multi-place it places while flying "
+                                + "over. Off: it stops wherever is closest.",
+                        () -> c.flyAboveLayer = !c.flyAboveLayer),
+                new Setting("Hover height", () -> c.hoverGap + " blocks",
+                        "Fly above the layer: how high the character's feet stay over the layer's blocks. Higher keeps it clear "
+                                + "of the blocks it places (no catching on them); lower reaches further to the sides.",
+                        () -> c.hoverGap = c.hoverGap >= 2.0 ? 0.5 : c.hoverGap + 0.5),
                 new Setting("Mining speed", () -> switch (c.miningSpeed) {
                             case 0 -> "Normal";
                             case 2 -> "Fastest";
@@ -105,10 +137,11 @@ public final class RtsSettingsScreen extends Screen {
                                 + "block is roughly in view and skips the pause. Fastest: starts right away while still turning (like "
                                 + "Baritone). Strict anti-cheat plugins may notice the missing pause.",
                         () -> c.miningSpeed = (c.miningSpeed + 1) % 3),
-                new Setting("Fly with flight items", () -> onOff(c.flySurvival),
-                        "In survival, also fly to blocks when an item lets you fly (Angel Ring, flight charms...). Off: the "
-                                + "builder walks, landing first if you're flying. Mining in the air is 5x slower in survival.",
-                        () -> c.flySurvival = !c.flySurvival),
+                new Setting("Multi-place", () -> c.multiPlace <= 1 ? "Off" : c.multiPlace + " at once",
+                        "Built-in engine: after the block it turns to, also put down other blocks in reach in the same tick, "
+                                + "like hold-Z (each click sends its own look, no turning). Much faster; strict anti-cheat "
+                                + "plugins may notice.",
+                        () -> c.multiPlace = c.multiPlace >= 8 ? 1 : c.multiPlace * 2),
                 new Setting("Creative supply", () -> onOff(c.creativeSupply),
                         "In creative mode, the builder spawns the blocks (and scaffolding) it needs into your hotbar "
                                 + "instead of fetching them from storage. Does nothing in survival.",
@@ -123,9 +156,18 @@ public final class RtsSettingsScreen extends Screen {
                         "How far from you hold-Z places the hologram's blocks (measured from your eyes). Shorter keeps it to the "
                                 + "blocks right around you. Hold-X (the block you look at) always reaches as far as you can.",
                         () -> c.autoPlaceRange = next(AUTO_PLACE_RANGES, c.autoPlaceRange)),
+                new Setting("Hold-Z in layers", () -> onOff(c.autoPlaceLayers),
+                        "Hold-Z fills a build one layer at a time from the bottom: it only goes up a layer once every block of "
+                                + "the one below is in. Off: any block in reach, lowest first.",
+                        () -> c.autoPlaceLayers = !c.autoPlaceLayers),
+                new Setting("Glow layer", () -> onOff(c.glowLayer),
+                        "Outside RTS mode, with Hold-Z in layers: the blocks of the layer to place next glow and show "
+                                + "through walls, so they're easy to find.",
+                        () -> c.glowLayer = !c.glowLayer),
                 new Setting("Hold-Z place speed", () -> (int) c.autoPlaceSpeed + " blocks/s"
                                 + (c.serverSafePlacing && c.autoPlaceSpeed > 5 ? " (5 server-safe)" : ""),
-                        "How many blocks a second hold-Z places. Server-safe placing never goes faster than 5 (holding right-click).",
+                        "How many blocks a second hold-Z places. Above 20 it places several blocks per tick. Server-safe placing "
+                                + "never goes faster than 5 (holding right-click).",
                         () -> c.autoPlaceSpeed = next(AUTO_PLACE_SPEEDS, c.autoPlaceSpeed)),
                 new Setting("Server-safe placing", () -> onOff(c.serverSafePlacing),
                         "Hold-Z and hold-X only do what you could do by hand, so anti-cheat plugins don't object: no faked look "
@@ -134,7 +176,7 @@ public final class RtsSettingsScreen extends Screen {
                                 + "are left for hold-X or the builder. Off: anything in reach, any facing, mid-air allowed (singleplayer).",
                         () -> c.serverSafePlacing = !c.serverSafePlacing),
                 new Setting("Use backpacks", () -> onOff(c.useBackpacks),
-                        "Take building materials out of the backpack you wear or carry (Traveler's Backpack) before anything else - "
+                        "Take building materials out of the backpack you wear or carry (Traveler's Backpack or Sophisticated Backpacks) before anything else - "
                                 + "no walking. It opens for a moment and closes again.",
                         () -> c.useBackpacks = !c.useBackpacks),
                 new Setting("Use AE2 for materials", () -> onOff(c.useAe2),
@@ -174,69 +216,132 @@ public final class RtsSettingsScreen extends Screen {
         return groups;
     }
 
-    @Override
-    protected void init() {
-        this.headers.clear();
-        List<Group> groups = groups();
+    /** One column of the page: section titles (String) and settings, top to bottom. */
+    private record Layout(List<List<Object>> columns, int columnHeight) {
+        int panelW() {
+            return this.columns.size() * COL_W + (this.columns.size() + 1) * PAD;
+        }
+
+        int panelH() {
+            return Theme.HEADER_H + 6 + this.columnHeight + ROW_STEP + PAD;
+        }
+
+        /** How far the page has to shrink to fit a {@code w} x {@code h} screen (1 = not at all). */
+        float scale(int w, int h) {
+            return Math.min(1.0F, Math.min((float) (w - 2 * MARGIN) / panelW(), (float) (h - 2 * MARGIN) / panelH()));
+        }
+    }
+
+    /**
+     * Fill columns of at most {@code maxH} top to bottom; a section that doesn't fit carries on at the top of
+     * the next column under its title again. Null if it takes more than {@code maxColumns} columns.
+     */
+    private static Layout flow(List<Group> groups, int maxColumns, int maxH) {
+        List<List<Object>> columns = new ArrayList<>();
+        List<Object> col = new ArrayList<>();
+        columns.add(col);
+        int h = 0;
+        int tallest = 0;
+        for (Group g : groups) {
+            for (int i = 0; i < g.settings().size(); i++) {
+                boolean title = i == 0 || h == 0;
+                int need = (title ? SECTION_H : 0) + ROW_STEP;
+                if (h > 0 && h + need > maxH) {
+                    col = new ArrayList<>();
+                    columns.add(col);
+                    h = 0;
+                    title = true;
+                    need = SECTION_H + ROW_STEP;
+                }
+                if (title) {
+                    col.add(g.title());
+                }
+                col.add(g.settings().get(i));
+                h += need;
+                tallest = Math.max(tallest, h);
+            }
+        }
+        return columns.size() > maxColumns ? null : new Layout(columns, tallest);
+    }
+
+    /** The most even split over {@code columns} columns: the shortest column height that still fits. */
+    private static Layout balanced(List<Group> groups, int columns) {
         int total = 0;
         for (Group g : groups) {
             total += g.height();
         }
-        int available = this.height - 40 - 30;
-        boolean twoColumns = total > available && this.width >= 2 * COL_W + 3 * PAD + 10;
-
-        List<List<Group>> columns = new ArrayList<>();
-        if (twoColumns) {
-            // Split where the two halves are closest in height.
-            int best = 1;
-            int bestDiff = Integer.MAX_VALUE;
-            for (int split = 1; split < groups.size(); split++) {
-                int left = 0;
-                for (int i = 0; i < split; i++) {
-                    left += groups.get(i).height();
-                }
-                int diff = Math.abs(total - 2 * left);
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    best = split;
-                }
+        for (int h = Math.max(SECTION_H + ROW_STEP, total / columns); ; h += 2) {
+            Layout l = flow(groups, columns, h);
+            if (l != null) {
+                return l;
             }
-            columns.add(groups.subList(0, best));
-            columns.add(groups.subList(best, groups.size()));
-        } else {
-            columns.add(groups);
         }
-        int columnHeight = 0;
-        for (List<Group> col : columns) {
-            int h = 0;
-            for (Group g : col) {
-                h += g.height();
-            }
-            columnHeight = Math.max(columnHeight, h);
-        }
+    }
 
-        int panelW = columns.size() * COL_W + (columns.size() + 1) * PAD;
-        int panelH = Theme.HEADER_H + 6 + columnHeight + ROW_STEP + PAD;
+    @Override
+    protected void init() {
+        // Small window or big GUI scale: the rows flow over up to three columns, and when even that doesn't
+        // fit, the whole page is drawn scaled down instead of rows running off the screen. Always from the real
+        // size, since init() runs again on resize.
+        int realW = this.client.getWindow().getScaledWidth();
+        int realH = this.client.getWindow().getScaledHeight();
+        this.headers.clear();
+        List<Group> groups = groups();
+        Layout layout = null;
+        for (int n = 1; n <= MAX_COLUMNS; n++) {
+            Layout l = balanced(groups, n);
+            if (layout == null || l.scale(realW, realH) > layout.scale(realW, realH) + 0.001F) {
+                layout = l;
+            }
+        }
+        this.uiScale = layout.scale(realW, realH);
+        this.width = Math.round(realW / this.uiScale);
+        this.height = Math.round(realH / this.uiScale);
+
+        int panelW = layout.panelW();
+        int panelH = layout.panelH();
         this.panelX0 = this.width / 2 - panelW / 2;
-        this.panelY0 = Math.max(4, this.height / 2 - panelH / 2);
+        this.panelY0 = Math.max(MARGIN, this.height / 2 - panelH / 2);
         this.panelX1 = this.panelX0 + panelW;
         this.panelY1 = this.panelY0 + panelH;
 
-        for (int c = 0; c < columns.size(); c++) {
+        for (int c = 0; c < layout.columns().size(); c++) {
             int x = this.panelX0 + PAD + c * (COL_W + PAD);
             int y = this.panelY0 + Theme.HEADER_H + 6;
-            for (Group g : columns.get(c)) {
-                this.headers.add(new Header(g.title(), x, y, COL_W));
-                y += SECTION_H;
-                for (Setting s : g.settings()) {
+            for (Object o : layout.columns().get(c)) {
+                if (o instanceof Setting s) {
                     addDrawableChild(new SettingRow(x, y, COL_W, ROW_H, s));
                     y += ROW_STEP;
+                } else {
+                    this.headers.add(new Header((String) o, x, y, COL_W));
+                    y += SECTION_H;
                 }
             }
         }
         int doneW = 80;
         addDrawableChild(new RtsButton(this.panelX1 - PAD - doneW, this.panelY1 - PAD - ROW_H, doneW, ROW_H,
                 "Done", this::close).selected(() -> true));
+    }
+
+    @Override
+    public boolean mouseClicked(double mx, double my, int button) {
+        return super.mouseClicked(mx / this.uiScale, my / this.uiScale, button);
+    }
+
+    @Override
+    public boolean mouseReleased(double mx, double my, int button) {
+        return super.mouseReleased(mx / this.uiScale, my / this.uiScale, button);
+    }
+
+    /** The hovered setting's explanation, drawn here so it's scaled with the page. */
+    private void drawTip(DrawContext ctx, int mx, int my) {
+        for (var child : children()) {
+            if (child instanceof SettingRow row && row.isHovered()) {
+                String tip = row.setting.tip();
+                ctx.drawOrderedTooltip(this.textRenderer, this.textRenderer.wrapLines(Text.literal(tip), 220), mx, my);
+                return;
+            }
+        }
     }
 
     private static String onOff(boolean b) {
@@ -263,6 +368,16 @@ public final class RtsSettingsScreen extends Screen {
 
     @Override
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
+        int mx = Math.round(mouseX / this.uiScale);
+        int my = Math.round(mouseY / this.uiScale);
+        ctx.getMatrices().push();
+        ctx.getMatrices().scale(this.uiScale, this.uiScale, 1.0F);
+        renderScaled(ctx, mx, my, delta);
+        drawTip(ctx, mx, my);
+        ctx.getMatrices().pop();
+    }
+
+    private void renderScaled(DrawContext ctx, int mouseX, int mouseY, float delta) {
         ctx.fill(0, 0, this.width, this.height, 0x88000000);
         Theme.panel(ctx, this.textRenderer, this.panelX0, this.panelY0, this.panelX1, this.panelY1, "RTS SETTINGS");
         for (Header h : this.headers) {
@@ -291,7 +406,6 @@ public final class RtsSettingsScreen extends Screen {
         SettingRow(int x, int y, int w, int h, Setting setting) {
             super(x, y, w, h, Text.literal(setting.name()));
             this.setting = setting;
-            setTooltip(Tooltip.of(Text.literal(setting.tip())));
         }
 
         @Override

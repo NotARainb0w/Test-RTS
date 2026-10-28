@@ -22,7 +22,11 @@ import java.util.function.Supplier;
  * north side (z = 0); doors and furnaces face accordingly and turn with the blueprint.
  */
 public final class Presets {
-    public record Preset(String name, String description, Item icon, Supplier<Blueprint> build) {
+    /** @param requires mod id the preset is made for (only listed when it's loaded), or null */
+    public record Preset(String name, String description, Item icon, Supplier<Blueprint> build, String requires) {
+        public Preset(String name, String description, Item icon, Supplier<Blueprint> build) {
+            this(name, description, icon, build, null);
+        }
     }
 
     private Presets() {
@@ -80,10 +84,110 @@ public final class Presets {
                 new Preset("Rail station", "13 long platform beside a track, with a roof, lights and benches",
                         Items.RAIL, Presets::railStation),
                 new Preset("Bee yard", "9x9 fenced flower meadow with hives and a composter (Productive Bees and friends)",
-                        Items.BEEHIVE, Presets::beeYard));
+                        Items.BEEHIVE, Presets::beeYard),
+                // Rooms for ATM10 / ATM10 To the Sky, made of the pack's own blocks; only listed when the mod is there.
+                new Preset("Block generator room", "13x7 deepslate room with every Cobblestone Generators Galore tier "
+                        + "(stone to netherite) along the back, a barrel on each", Items.COBBLESTONE, Presets::blockGenRoom,
+                        "cobblegengalore"),
+                new Preset("Power generator room", "11x9 room: Generator Galore generators down both sides, Powah cable "
+                        + "to an energy cell at the back", Items.FURNACE, Presets::powerGenRoom, "generatorgalore"),
+                new Preset("Sieve station", "11x9 roofed Ex Deorum station: sieves, compressed sieves, barrels, crucibles "
+                        + "and a flux sieve with a loot barrel (To the Sky)", Items.GRAVEL, Presets::sieveStation, "exdeorum"))
+                .stream().filter(p -> p.requires() == null || net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded(p.requires())).toList();
     }
 
+
     // ------------------------------------------------------------------ designs
+
+    // ------------------------------------------------------------------ modpack rooms (ATM10, ATM10 To the Sky)
+    // Built from the pack's own blocks (Chipped, Rechiseled, Connected Glass, Supplementaries...); each one
+    // falls back to a vanilla look-alike if that mod isn't there.
+
+    /** Every Cobblestone Generators Galore tier in a row along the back, a barrel on each to catch what it makes. */
+    private static Blueprint blockGenRoom() {
+        Shape b = new Shape("Block generator room");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_brick_pattern", Blocks.DEEPSLATE_BRICKS);
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        BlockState glass = mod("connectedglass:borderless_glass", Blocks.GLASS);
+        b.box(0, 0, 0, 12, 0, 6, mod("chipped:bordered_deepslate", Blocks.POLISHED_DEEPSLATE));
+        b.box(1, 0, 3, 11, 0, 3, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        b.walls(0, 1, 0, 12, 4, 6, wall);
+        for (int[] q : new int[][]{{0, 0}, {6, 0}, {12, 0}, {0, 6}, {6, 6}, {12, 6}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], post);
+        }
+        b.box(2, 2, 0, 4, 3, 0, glass);
+        b.box(8, 2, 0, 10, 3, 0, glass);
+        b.box(0, 5, 0, 12, 5, 6, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(3, 5, 2, 9, 5, 4, glass);
+        String[] tiers = {"stone", "copper", "iron", "gold", "diamond", "emerald", "netherite"};
+        for (int i = 0; i < tiers.length; i++) {
+            put(b, 3 + i, 1, 5, mod("cobblegengalore:block_gen_" + tiers[i], Blocks.AIR));
+            b.set(3 + i, 2, 5, turned(mod("sophisticatedstorage:barrel", Blocks.BARREL), Direction.NORTH));
+        }
+        put(b, 1, 3, 3, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.EAST));
+        put(b, 11, 3, 3, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.WEST));
+        door(b, 6, 1, 0, Blocks.DARK_OAK_DOOR, Direction.SOUTH);
+        return b.blueprint();
+    }
+
+    /** Generator Galore generators down both sides facing in, Powah cable to an energy cell at the back. */
+    private static Blueprint powerGenRoom() {
+        Shape b = new Shape("Power generator room");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_bricks", Blocks.DEEPSLATE_BRICKS);
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        b.box(0, 0, 0, 10, 0, 8, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(3, 0, 1, 7, 0, 7, mod("chipped:bordered_deepslate", Blocks.POLISHED_DEEPSLATE));
+        b.walls(0, 1, 0, 10, 4, 8, wall);
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}, {0, 4}, {10, 4}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], post);
+        }
+        b.box(0, 5, 0, 10, 5, 8, wall);
+        b.box(4, 5, 3, 6, 5, 5, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        String[] left = {"iron", "gold", "diamond", "emerald", "netherite"};
+        String[] right = {"copper", "magmatic", "ender", "honey", "culinary"};
+        for (int i = 0; i < 5; i++) {
+            int z = 2 + i;
+            put(b, 1, 1, z, turned(mod("generatorgalore:" + left[i] + "_generator", Blocks.AIR), Direction.EAST));
+            put(b, 9, 1, z, turned(mod("generatorgalore:" + right[i] + "_generator", Blocks.AIR), Direction.WEST));
+            put(b, 2, 1, z, mod("powah:energy_cable_starter", Blocks.AIR));
+            put(b, 8, 1, z, mod("powah:energy_cable_starter", Blocks.AIR));
+        }
+        for (int x = 2; x <= 8; x++) {
+            put(b, x, 1, 7, x == 5 ? mod("powah:energy_cell_basic", Blocks.AIR) : mod("powah:energy_cable_starter", Blocks.AIR));
+        }
+        put(b, 5, 3, 7, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.NORTH));
+        door(b, 5, 1, 0, Blocks.IRON_DOOR, Direction.SOUTH);
+        b.set(3, 2, 0, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        b.set(7, 2, 0, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        return b.blueprint();
+    }
+
+    /** Ex Deorum: a roofed station with sieves, compressed sieves, barrels and crucibles round a loot barrel. */
+    private static Blueprint sieveStation() {
+        Shape b = new Shape("Sieve station");
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        b.box(0, 0, 0, 10, 0, 8, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(1, 0, 4, 9, 0, 4, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}}) {
+            b.box(q[0], 1, q[1], q[0], 3, q[1], post);
+        }
+        b.box(0, 4, 0, 10, 4, 8, slab(Blocks.DARK_OAK_SLAB, false));
+        b.box(3, 4, 3, 7, 4, 5, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        for (int x = 2; x <= 8; x += 2) {
+            put(b, x, 1, 2, mod("exdeorum:oak_sieve", Blocks.AIR));
+            put(b, x, 1, 6, mod("exdeorum:oak_compressed_sieve", Blocks.AIR));
+        }
+        put(b, 1, 1, 7, mod("exdeorum:oak_barrel", Blocks.AIR));
+        put(b, 9, 1, 7, mod("exdeorum:oak_barrel", Blocks.AIR));
+        put(b, 1, 1, 1, mod("exdeorum:porcelain_crucible", Blocks.AIR));
+        put(b, 9, 1, 1, mod("exdeorum:porcelain_crucible", Blocks.AIR));
+        put(b, 5, 1, 4, mod("exmachinis:flux_sieve", Blocks.AIR));
+        b.set(5, 2, 4, turned(mod("sophisticatedstorage:barrel", Blocks.BARREL), Direction.UP));
+        for (int[] q : new int[][]{{3, 3}, {7, 3}, {3, 5}, {7, 5}}) {
+            b.set(q[0], 3, q[1], Blocks.LANTERN.getDefaultState().with(net.minecraft.state.property.Properties.HANGING, true));
+        }
+        return b.blueprint();
+    }
 
     private static Blueprint house() {
         Shape b = new Shape("Starter house");
@@ -242,7 +346,8 @@ public final class Presets {
         }
         b.set(1, 11, 1, state(Blocks.TORCH));
         b.set(3, 11, 3, state(Blocks.TORCH));
-        b.set(2, 3, 2, state(Blocks.LANTERN).with(Properties.HANGING, true));
+        // Hangs from the underside of the platform (a hanging lantern needs a block above it).
+        b.set(2, 9, 2, state(Blocks.LANTERN).with(Properties.HANGING, true));
         return b.blueprint();
     }
 
@@ -628,6 +733,28 @@ public final class Presets {
     }
 
     // ------------------------------------------------------------------ block states
+
+    /** A block of another mod by id (default state), or {@code fallback} when the mod isn't there. */
+    private static BlockState mod(String id, Block fallback) {
+        net.minecraft.util.Identifier key = net.minecraft.util.Identifier.tryParse(id);
+        return key != null && net.minecraft.registry.Registries.BLOCK.containsId(key)
+                ? net.minecraft.registry.Registries.BLOCK.get(key).getDefaultState() : fallback.getDefaultState();
+    }
+
+    /** {@code s} facing {@code d}, if it can face that way. */
+    private static BlockState turned(BlockState s, Direction d) {
+        if (d.getAxis() != Direction.Axis.Y && s.contains(Properties.HORIZONTAL_FACING)) {
+            return s.with(Properties.HORIZONTAL_FACING, d);
+        }
+        return s.contains(Properties.FACING) ? s.with(Properties.FACING, d) : s;
+    }
+
+    /** Set a block unless it's air (a modded block whose mod isn't there). */
+    private static void put(Shape b, int x, int y, int z, BlockState s) {
+        if (!s.isAir()) {
+            b.set(x, y, z, s);
+        }
+    }
 
     private static BlockState state(Block block) {
         return block.getDefaultState();

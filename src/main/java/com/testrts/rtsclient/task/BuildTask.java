@@ -1,12 +1,15 @@
 package com.testrts.rtsclient.task;
 
+import com.testrts.rtsclient.build.BuildSession;
 import com.testrts.rtsclient.exec.Engine;
 import com.testrts.rtsclient.config.RtsConfig;
 import com.testrts.rtsclient.storage.StorageManager;
 import com.testrts.rtsclient.util.Messages;
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.item.Item;
+import net.minecraft.state.property.Property;
 import net.minecraft.util.math.BlockPos;
 
 import java.util.Collections;
@@ -54,6 +57,56 @@ public final class BuildTask implements RtsTask {
         int before = this.blocks.size();
         this.blocks.values().removeIf(s -> s.getBlock().asItem() == item);
         return changed(before - this.blocks.size());
+    }
+
+    /**
+     * Put {@code to} in place of every block of {@code item} in this order (the Materials list's replace button),
+     * keeping the properties both blocks share (facing, axis, half...). Restarts the builder like {@link #removeItem}.
+     *
+     * @return how many positions were changed
+     */
+    public int replaceItem(Item item, Block to) {
+        int changed = 0;
+        for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
+            if (e.getValue().getBlock().asItem() == item) {
+                e.setValue(carryProperties(e.getValue(), to.getDefaultState()));
+                changed++;
+            }
+        }
+        return changed(changed);
+    }
+
+    private static BlockState carryProperties(BlockState from, BlockState to) {
+        for (Property<?> property : from.getProperties()) {
+            to = BuildSession.withProperty(to, property.getName(), valueName(from, property));
+        }
+        return to;
+    }
+
+    private static <T extends Comparable<T>> String valueName(BlockState state, Property<T> property) {
+        return property.name(state.get(property));
+    }
+
+    /** Put these states in place of the order's blocks at the same positions (Restyle). @return how many changed */
+    public int restyle(Map<BlockPos, BlockState> changes) {
+        int n = 0;
+        for (Map.Entry<BlockPos, BlockState> e : changes.entrySet()) {
+            if (this.blocks.containsKey(e.getKey())) {
+                this.blocks.put(e.getKey(), e.getValue());
+                n++;
+            }
+        }
+        if (n > 0) {
+            this.version++;
+        }
+        return changed(n);
+    }
+
+    /** Bumped whenever blocks change state without the count changing (the hologram redraws). */
+    private int version;
+
+    public int version() {
+        return this.version;
     }
 
     /** Take these positions out of the order (Destroy over the hologram: a doorway in a queued box). */
@@ -236,7 +289,22 @@ public final class BuildTask implements RtsTask {
         this.lastMissing = missing;
         this.fetchRounds++;
         this.detail = "fetching materials";
-        queue.pushFront(new FetchTask(fromStorage(missing)));
+        java.util.Set<Item> keep = MinecraftClient.getInstance().world == null ? java.util.Set.of()
+                : MaterialPlanner.required(MinecraftClient.getInstance().world, this.blocks).keySet();
+        queue.pushFront(new FetchTask(fromStorage(missing)).keep(keep));
+    }
+
+    /** What a queued build (not a clear order) wants at {@code p}, or null: its hologram block there. */
+    public static BlockState queuedAt(BlockPos p) {
+        for (RtsTask task : TaskQueue.get().snapshot()) {
+            if (task instanceof BuildTask build && !build.clearing()) {
+                BlockState wanted = build.blocks().get(p);
+                if (wanted != null && !wanted.isAir()) {
+                    return wanted;
+                }
+            }
+        }
+        return null;
     }
 
     private static Map<Item, Integer> fromStorage(Map<Item, Integer> missing) {

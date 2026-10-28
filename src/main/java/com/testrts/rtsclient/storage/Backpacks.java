@@ -21,48 +21,89 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Traveler's Backpack: the backpack you wear (or carry) as a storage the builder takes from, without
- * walking anywhere. It's opened the way the mod's own key does it (worn) or by using it (carried),
- * and stacks are shift-clicked out of its storage slots.
+ * Traveler's Backpack and Sophisticated Backpacks (unofficial Fabric port): the backpack you wear (or
+ * carry) as a storage the builder takes from, without walking anywhere. It's opened the way the mod's
+ * own key does it (worn) or by using it (carried), and stacks are shift-clicked out of its storage slots.
  */
 public final class Backpacks {
     private Backpacks() {
     }
 
-    private static boolean tried;
-    private static Class<?> menuClass;
-    private static Class<?> itemClass;
+    private static boolean triedTravelers;
+    private static Class<?> travelersMenu;
+    private static Class<?> travelersItem;
 
-    public static boolean loaded() {
+    private static boolean triedSophisticated;
+    private static Class<?> sophisticatedMenu;
+    private static Class<?> sophisticatedItem;
+    /** Sophisticated Core's slot for stored items; null falls back to guessing from slot class names. */
+    private static @Nullable Class<?> sophisticatedStorageSlot;
+
+    private static boolean travelers() {
         if (!FabricLoader.getInstance().isModLoaded("travelersbackpack")) {
             return false;
         }
-        if (!tried) {
-            tried = true;
+        if (!triedTravelers) {
+            triedTravelers = true;
             try {
-                menuClass = Class.forName("com.tiviacz.travelersbackpack.inventory.menu.AbstractBackpackMenu");
-                itemClass = Class.forName("com.tiviacz.travelersbackpack.items.TravelersBackpackItem");
+                travelersMenu = Class.forName("com.tiviacz.travelersbackpack.inventory.menu.AbstractBackpackMenu");
+                travelersItem = Class.forName("com.tiviacz.travelersbackpack.items.TravelersBackpackItem");
             } catch (ReflectiveOperationException | LinkageError e) {
-                RtsClientMod.LOGGER.warn("Traveler's Backpack is installed but works differently than expected; backpacks won't be used", e);
+                RtsClientMod.LOGGER.warn("Traveler's Backpack is installed but works differently than expected; its backpacks won't be used", e);
             }
         }
-        return menuClass != null && itemClass != null;
+        return travelersMenu != null && travelersItem != null;
+    }
+
+    private static boolean sophisticated() {
+        if (!FabricLoader.getInstance().isModLoaded("sophisticatedbackpacks")) {
+            return false;
+        }
+        if (!triedSophisticated) {
+            triedSophisticated = true;
+            try {
+                sophisticatedMenu = Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.common.gui.BackpackContainer");
+                sophisticatedItem = Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackItem");
+            } catch (ReflectiveOperationException | LinkageError e) {
+                RtsClientMod.LOGGER.warn("Sophisticated Backpacks is installed but works differently than expected; its backpacks won't be used", e);
+            }
+            try {
+                sophisticatedStorageSlot = Class.forName("net.p3pp3rf1y.sophisticatedcore.common.gui.StorageInventorySlot");
+            } catch (ReflectiveOperationException | LinkageError e) {
+                sophisticatedStorageSlot = null;
+            }
+        }
+        return sophisticatedMenu != null && sophisticatedItem != null;
+    }
+
+    public static boolean loaded() {
+        return travelers() || sophisticated();
+    }
+
+    private static boolean isSophisticated(ScreenHandler menu) {
+        return sophisticated() && sophisticatedMenu.isInstance(menu);
     }
 
     /** A backpack slot that holds stored items (not upgrades, tools, filters, fluids or crafting). */
-    private static boolean storageSlot(Slot slot) {
+    private static boolean storageSlot(ScreenHandler menu, Slot slot) {
         if (slot.inventory instanceof PlayerInventory) {
             return false;
         }
+        if (sophisticatedStorageSlot != null && isSophisticated(menu)) {
+            return sophisticatedStorageSlot.isInstance(slot);
+        }
         String name = slot.getClass().getSimpleName();
         return !(name.contains("Upgrade") || name.contains("Filter") || name.contains("Tool") || name.contains("Fluid")
-                || name.contains("Crafting") || name.contains("Result") || name.contains("Disabled"));
+                || name.contains("Crafting") || name.contains("Result") || name.contains("Disabled") || name.contains("Supplied"));
     }
 
     private static int carriedSlot(ClientPlayerEntity player) {
+        if (!travelers()) {
+            return -1;
+        }
         PlayerInventory inv = player.getInventory();
         for (int i = 0; i < 36; i++) {
-            if (GRID.isWirelessItem(inv.getStack(i))) {
+            if (travelersItem.isInstance(inv.getStack(i).getItem())) {
                 return i;
             }
         }
@@ -97,7 +138,7 @@ public final class Backpacks {
 
         @Override
         public boolean alwaysTry() {
-            return true; // usually worn on the back, where we can't see it
+            return true; // usually worn on the back (or in a Trinkets slot), where we can't see it
         }
 
         @Override
@@ -107,7 +148,7 @@ public final class Backpacks {
 
         @Override
         public boolean isTerminal(@Nullable ScreenHandler menu) {
-            return menu != null && loaded() && menuClass.isInstance(menu);
+            return menu != null && (travelers() && travelersMenu.isInstance(menu) || isSophisticated(menu));
         }
 
         @Override
@@ -120,7 +161,7 @@ public final class Backpacks {
             List<Entry> out = new ArrayList<>();
             for (Slot slot : menu.slots) {
                 ItemStack stack = slot.getStack();
-                if (!stack.isEmpty() && storageSlot(slot)) {
+                if (!stack.isEmpty() && storageSlot(menu, slot)) {
                     out.add(new Entry(slot.id, stack.getItem(), stack.getCount()));
                 }
             }
@@ -140,19 +181,38 @@ public final class Backpacks {
         @Override
         public boolean isWireless(ScreenHandler menu) {
             // Worn or carried; a backpack placed as a block isn't "on us".
+            if (isSophisticated(menu)) {
+                try {
+                    Object context = menu.getClass().getMethod("getBackpackContext").invoke(menu);
+                    return !context.getClass().getSimpleName().startsWith("Block");
+                } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+                    return true;
+                }
+            }
             return !menu.getClass().getSimpleName().contains("BlockEntity");
         }
 
         @Override
         public boolean isWirelessItem(ItemStack stack) {
-            return !stack.isEmpty() && loaded() && itemClass.isInstance(stack.getItem());
+            return !stack.isEmpty() && (travelers() && travelersItem.isInstance(stack.getItem())
+                    || sophisticated() && sophisticatedItem.isInstance(stack.getItem()));
         }
 
         @Override
         public List<String> wirelessOpeners() {
-            ClientPlayerEntity player = MinecraftClient.getInstance().player;
-            // One in the inventory is opened by using it; otherwise the worn one, like the mod's key.
-            return player != null && carriedSlot(player) >= 0 ? List.of("held", "worn") : List.of("worn");
+            List<String> out = new ArrayList<>();
+            if (sophisticated()) {
+                out.add("sophisticated"); // finds one anywhere on the player, like its key
+            }
+            if (travelers()) {
+                ClientPlayerEntity player = MinecraftClient.getInstance().player;
+                // One in the inventory is opened by using it; otherwise the worn one, like the mod's key.
+                if (player != null && carriedSlot(player) >= 0) {
+                    out.add("held");
+                }
+                out.add("worn");
+            }
+            return out;
         }
 
         @Override
@@ -163,6 +223,14 @@ public final class Backpacks {
                 return false;
             }
             try {
+                if (opener.equals("sophisticated")) {
+                    // What the mod's own "open backpack" key sends: opens the first backpack found on the player.
+                    Object message = Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.network.BackpackOpenMessage")
+                            .getConstructor().newInstance();
+                    Class.forName("net.p3pp3rf1y.sophisticatedbackpacks.network.SBPPacketHandler")
+                            .getMethod("sendToServer", Object.class).invoke(null, message);
+                    return true;
+                }
                 if (opener.equals("held")) {
                     int slot = carriedSlot(player);
                     if (slot < 0 || !Inventories.hold(client, player.getInventory().getStack(slot).getItem())) {

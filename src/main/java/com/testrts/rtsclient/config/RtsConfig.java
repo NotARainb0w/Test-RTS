@@ -34,6 +34,24 @@ public final class RtsConfig {
     public float previewOpacity = 0.9F;
     /** Build one Y layer at a time (bottom-up; clearing goes top-down). */
     public boolean buildInLayers = true;
+    /**
+     * Built-in engine, building in layers with mid-air placing: also place blocks of the next 2 layers that are
+     * already in reach (faster, fewer laps around the build), so the build doesn't strictly go layer by layer.
+     */
+    public boolean buildAhead = false;
+    /**
+     * Built-in engine: get up high on ladders or vines up a wall, or on scaffolding (the block), when carried,
+     * instead of pillaring up on dirt or cobble.
+     */
+    public boolean climbingAids = true;
+    /** Built-in engine: jump across gaps of up to three blocks (sprinting for the wider ones) instead of going round. */
+    public boolean parkour = true;
+    /**
+     * Put up temporary blocks (dirt/cobble pillars and supports, bridging steps, scaffolding, ladders) to reach
+     * and support blocks. Off: only the build's own blocks are placed; what can't be reached or attached to
+     * is skipped. Also Baritone's bridging and pillaring.
+     */
+    public boolean useScaffolding = true;
     /** Cheap blocks the built-in engine may use as temporary scaffolding, in order of preference. */
     public List<String> scaffoldBlocks = new ArrayList<>(List.of(
             "minecraft:dirt", "minecraft:cobblestone", "minecraft:cobbled_deepslate", "minecraft:netherrack",
@@ -52,19 +70,31 @@ public final class RtsConfig {
     public boolean autoRepair = false;
     /** Built-in engine: place blocks against the empty cell itself, so nothing needs to be next to them. */
     public boolean airPlace = true;
-    /** When the player may fly (creative...), the builder flies to blocks instead of walking. */
+    /**
+     * When the player may fly (creative, a flight item like an Angel Ring or Mystical
+     * Agriculture flight armor, or Apotheosis's Flying potion), the builder flies to blocks
+     * instead of walking. Off: it walks (landing first if you're flying).
+     */
     public boolean creativeFlight = true;
     /**
-     * Also fly to blocks in survival when an item lets you fly (Angel Ring, flight charms...). Off: the
-     * builder walks there (it lands first if you're flying). Mining in the air is 5x slower in survival.
+     * Flying while building in layers: hover above the layer being worked on (see hoverGap; it's empty there:
+     * the layers above come later), so our body never gets in the way of the blocks being placed.
      */
-    public boolean flySurvival = false;
+    public boolean flyAboveLayer = true;
+    /** Fly above the layer: how far the feet stay above the tops of the layer's blocks (higher: clear of them, less reach). */
+    public double hoverGap = 1.5;
     /**
      * Built-in engine mining speed. 0 Normal: aim exactly, the game's 5-tick pause between blocks.
      * 1 Fast: start once roughly facing the block (still turning), no pause. 2 Fastest: start right away
      * while turning, no pause (closest to Baritone). Strict anti-cheat plugins may notice the missing pause.
      */
     public int miningSpeed = 1;
+    /**
+     * Built-in engine: blocks put down per click round. 1: one at a time, turning to each. More: after the block
+     * it turned to, up to this many minus one others in reach go down in the same tick, each clicked with a look
+     * sent just for that click (like hold-Z). Much faster; strict anti-cheat plugins may notice.
+     */
+    public int multiPlace = 1;
     /** In creative mode, spawn the blocks a build needs instead of fetching them or stopping. */
     public boolean creativeSupply = true;
     /**
@@ -82,6 +112,10 @@ public final class RtsConfig {
     public boolean showHologram = true;
     /** How far (from the eyes) hold-Z places hologram blocks; 0 = as far as you can reach. */
     public double autoPlaceRange = 0;
+    /** Hold-Z places only the lowest layer of a build that isn't finished, moving up once it is. */
+    public boolean autoPlaceLayers = true;
+    /** Outside RTS mode with Hold-Z in layers: the layer to place next glows, seen through walls. */
+    public boolean glowLayer = true;
     /** Blocks per second for hold-Z (server-safe placing caps it at 5, the pace of holding right-click). */
     public double autoPlaceSpeed = 5;
     /**

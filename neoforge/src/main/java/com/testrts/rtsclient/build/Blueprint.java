@@ -35,13 +35,39 @@ public final class Blueprint {
     private final int sizeZ;
     /** Positions relative to the minimum corner. */
     private final Map<BlockPos, BlockState> blocks;
+    /**
+     * FramedBlocks: the camo each framed block gets (right-clicked onto it after it's placed), by the same
+     * relative positions. Empty for everything else. Not kept in saved files.
+     */
+    private final Map<BlockPos, BlockState> camo;
 
     public Blueprint(String name, int sizeX, int sizeY, int sizeZ, Map<BlockPos, BlockState> blocks) {
+        this(name, sizeX, sizeY, sizeZ, blocks, Map.of());
+    }
+
+    public Blueprint(String name, int sizeX, int sizeY, int sizeZ, Map<BlockPos, BlockState> blocks, Map<BlockPos, BlockState> camo) {
         this.name = name;
         this.sizeX = sizeX;
         this.sizeY = sizeY;
         this.sizeZ = sizeZ;
         this.blocks = blocks;
+        this.camo = camo;
+    }
+
+    public Map<BlockPos, BlockState> camo() {
+        return this.camo;
+    }
+
+    /** Where the camo goes once placed (same turning and mirroring as {@link #placed}). */
+    public Map<BlockPos, BlockState> placedCamo(BlockPos origin, int quarterTurns, boolean mirror) {
+        int r = Math.floorMod(quarterTurns, 4);
+        Map<BlockPos, BlockState> out = new LinkedHashMap<>();
+        for (Map.Entry<BlockPos, BlockState> e : this.camo.entrySet()) {
+            BlockPos p = e.getKey();
+            int x = mirror ? this.sizeX - 1 - p.getX() : p.getX();
+            out.put(origin.offset(rotX(x, p.getZ(), r), p.getY(), rotZ(x, p.getZ(), r)), e.getValue());
+        }
+        return out;
     }
 
     public String name() {
@@ -86,7 +112,9 @@ public final class Blueprint {
     /** Items needed to build it, most-used first. */
     public Map<net.minecraft.world.item.Item, Integer> materials() {
         if (this.materials == null) {
-            Map<net.minecraft.world.item.Item, Integer> counts = OrderPlanner.materials(this.blocks);
+            Map<net.minecraft.world.item.Item, Integer> counts = new LinkedHashMap<>(OrderPlanner.materials(this.blocks));
+            // Camo blocks are used up when they go onto the frames.
+            OrderPlanner.materials(this.camo).forEach((item, n) -> counts.merge(item, n, Integer::sum));
             Map<net.minecraft.world.item.Item, Integer> sorted = new LinkedHashMap<>();
             counts.entrySet().stream()
                     .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
@@ -97,7 +125,7 @@ public final class Blueprint {
     }
 
     public Blueprint renamed(String newName) {
-        return new Blueprint(newName, this.sizeX, this.sizeY, this.sizeZ, this.blocks);
+        return new Blueprint(newName, this.sizeX, this.sizeY, this.sizeZ, this.blocks, this.camo);
     }
 
     /** Copy every non-air block between two corners. */

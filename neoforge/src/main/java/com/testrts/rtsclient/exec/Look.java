@@ -57,6 +57,20 @@ public final class Look {
         return false;
     }
 
+    /**
+     * {@link #toward}, but looking steeply down (or up) the yaw hardly moves where we look, so it counts only that
+     * much: a block right under us otherwise had the head chasing a yaw that jumps with every bit of drift, never
+     * "facing" it. Not for blocks whose facing comes from the yaw.
+     */
+    public static boolean towardLoose(LocalPlayer player, float yaw, float pitch) {
+        float weight = Math.abs(Mth.cos(pitch * Mth.DEG_TO_RAD));
+        float dYaw = Mth.wrapDegrees(yaw - player.getYRot());
+        if (Math.abs(dYaw) * weight <= AIMED && Math.abs(pitch - player.getXRot()) <= AIMED) {
+            return true;
+        }
+        return toward(player, yaw, pitch);
+    }
+
     /** {@link #toward} for a point in the world. */
     public static boolean at(LocalPlayer player, Vec3 target) {
         float[] r = anglesTo(player, target);

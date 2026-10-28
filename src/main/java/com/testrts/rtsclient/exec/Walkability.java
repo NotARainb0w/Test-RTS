@@ -28,6 +28,9 @@ public final class Walkability {
         if (fluid.isIn(FluidTags.LAVA)) {
             return false;
         }
+        if (state.isIn(net.minecraft.registry.tag.BlockTags.CLIMBABLE)) {
+            return true; // ladders, vines, scaffolding: climbed through like a player does
+        }
         return state.getCollisionShape(world, pos).isEmpty();
     }
 
@@ -40,6 +43,9 @@ public final class Walkability {
         if (dangerous(state)) {
             return false;
         }
+        if (state.isOf(Blocks.SCAFFOLDING)) {
+            return true; // stood on from above (no collision box without a player to measure against)
+        }
         VoxelShape shape = state.getCollisionShape(world, pos);
         if (shape.isEmpty()) {
             // Swimming: still water counts as somewhere we can be.
@@ -50,7 +56,45 @@ public final class Walkability {
 
     /** Feet at {@code feet}: body fits and there is ground (or water) under it. */
     public static boolean standable(ClientWorld world, BlockPos feet) {
-        return passable(world, feet) && passable(world, feet.up()) && floor(world, feet.down());
+        return passable(world, feet) && passable(world, feet.up()) && (floor(world, feet.down()) || climbable(world, feet));
+    }
+
+    /**
+     * Minecraft's scaffolding distance for a piece at {@code pos}: 0 over solid ground, the piece below's on top of
+     * scaffolding, else one more than the nearest piece beside it. At 7 it falls (6 out from a column at most).
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static int scaffoldDistance(net.minecraft.world.World world, BlockPos pos) {
+        BlockState below = world.getBlockState(pos.down());
+        int dist = 7;
+        if (below.isOf(net.minecraft.block.Blocks.SCAFFOLDING)) {
+            dist = distanceOf(below);
+        } else if (below.isSideSolidFullSquare(world, pos.down(), Direction.UP)) {
+            return 0;
+        }
+        for (Direction dir : new Direction[]{Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST}) {
+            BlockState n = world.getBlockState(pos.offset(dir));
+            if (n.isOf(net.minecraft.block.Blocks.SCAFFOLDING)) {
+                dist = Math.min(dist, distanceOf(n) + 1);
+            }
+        }
+        return dist;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static int distanceOf(BlockState s) {
+        for (net.minecraft.state.property.Property p : s.getProperties()) {
+            if (p.getName().equals("distance")) {
+                return (Integer) s.get(p);
+            }
+        }
+        return 7;
+    }
+
+    /** Climbed like a ladder: ladders, vines, scaffolding (the climbable tag). */
+    @SuppressWarnings("deprecation")
+    public static boolean climbable(ClientWorld world, BlockPos pos) {
+        return world.isChunkLoaded(pos) && world.getBlockState(pos).isIn(net.minecraft.registry.tag.BlockTags.CLIMBABLE);
     }
 
     /**
@@ -62,6 +106,9 @@ public final class Walkability {
             return 1.0;
         }
         BlockState state = world.getBlockState(pos);
+        if (state.isOf(Blocks.SCAFFOLDING)) {
+            return 1.0;
+        }
         VoxelShape shape = state.getCollisionShape(world, pos);
         if (shape.isEmpty()) {
             return state.getFluidState().isIn(FluidTags.WATER) ? 0.9 : 0.0;
@@ -71,6 +118,9 @@ public final class Walkability {
 
     /** The Y the player's feet are actually at when standing on the node {@code feet}. */
     public static double standY(ClientWorld world, BlockPos feet) {
+        if (climbable(world, feet) && !floor(world, feet.down())) {
+            return feet.getY(); // holding on to a ladder or vine
+        }
         return feet.getY() - 1 + floorTop(world, feet.down());
     }
 

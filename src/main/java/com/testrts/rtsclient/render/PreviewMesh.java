@@ -61,7 +61,9 @@ public final class PreviewMesh implements AutoCloseable {
         /** Blocks to be mined. */
         CLEAR(0x55FF4040, 0xCCFF6060),
         /** A region being selected (copy). */
-        SELECT(0x40FFD54F, 0xCCFFD54F);
+        SELECT(0x40FFD54F, 0xCCFFD54F),
+        /** The layer to place next, outside RTS mode: bright, seen through walls and pulsing. */
+        GLOW(0x50FFE45C, 0xFFFFF59D);
 
         final int fill;
         final int edge;
@@ -99,7 +101,7 @@ public final class PreviewMesh implements AutoCloseable {
     private static final BufferBuilder[] BUILDERS = new BufferBuilder[3];
     private static final ConcurrentLinkedQueue<Finished> FINISHED = new ConcurrentLinkedQueue<>();
 
-    private record Finished(PreviewMesh target, Object key, Parts parts, CountDownLatch uploaded) {
+    private record Finished(PreviewMesh target, Object key, Parts parts, CountDownLatch uploaded, @Nullable BlockPos anchor) {
     }
 
     private static final class Parts {
@@ -130,7 +132,7 @@ public final class PreviewMesh implements AutoCloseable {
         Finished f;
         while ((f = FINISHED.poll()) != null) {
             try {
-                f.target().accept(f.key(), f.parts());
+                f.target().accept(f.key(), f.parts(), f.anchor());
             } catch (RuntimeException e) {
                 RtsClientMod.LOGGER.warn("Preview upload failed", e);
             } finally {
@@ -157,6 +159,15 @@ public final class PreviewMesh implements AutoCloseable {
     private Object queuedKey;
     private Supplier<Blocks> queuedSupplier;
     private boolean queuedOffThread;
+    @Nullable
+    private BlockPos queuedAnchor;
+    /** Where the shown mesh was built for (see {@link #request(Object, Supplier, boolean, BlockPos)}). */
+    @Nullable
+    private BlockPos shownAnchor;
+    /** Draw the shown mesh this far from where it was built (a paste preview following the cursor). */
+    private int shiftX;
+    private int shiftY;
+    private int shiftZ;
     private boolean closed;
 
     private int blocks;
@@ -174,6 +185,14 @@ public final class PreviewMesh implements AutoCloseable {
      * @param offThread false when the supplier reads the world (it then runs right away on this thread)
      */
     public void request(Object key, Supplier<Blocks> supplier, boolean offThread) {
+        request(key, supplier, offThread, null);
+    }
+
+    /**
+     * @param anchor where this mesh is built for; with {@link #setShift} it can then be drawn elsewhere
+     *               without building it again (moving a paste preview is instant, whatever its size)
+     */
+    public void request(Object key, Supplier<Blocks> supplier, boolean offThread, @Nullable BlockPos anchor) {
         if (this.closed || key.equals(this.requestedKey)) {
             return;
         }
@@ -182,12 +201,24 @@ public final class PreviewMesh implements AutoCloseable {
             this.queuedKey = key;
             this.queuedSupplier = supplier;
             this.queuedOffThread = offThread;
+            this.queuedAnchor = anchor;
             return;
         }
-        submit(key, supplier, offThread);
+        submit(key, supplier, offThread, anchor);
     }
 
-    private void submit(Object key, Supplier<Blocks> supplier, boolean offThread) {
+    @Nullable
+    public BlockPos shownAnchor() {
+        return this.shownAnchor;
+    }
+
+    public void setShift(int dx, int dy, int dz) {
+        this.shiftX = dx;
+        this.shiftY = dy;
+        this.shiftZ = dz;
+    }
+
+    private void submit(Object key, Supplier<Blocks> supplier, boolean offThread, @Nullable BlockPos anchor) {
         this.inFlight = true;
         Blocks ready = offThread ? null : supplier.get();
         ClientWorld world = MinecraftClient.getInstance().world;
@@ -203,7 +234,7 @@ public final class PreviewMesh implements AutoCloseable {
                 parts.release();
                 parts = new Parts();
             }
-            FINISHED.add(new Finished(this, key, parts, latch));
+            FINISHED.add(new Finished(this, key, parts, latch, anchor));
             try {
                 // Don't touch the builders again until the render thread has uploaded them.
                 latch.await();
@@ -213,20 +244,25 @@ public final class PreviewMesh implements AutoCloseable {
         });
     }
 
-    private void accept(Object key, Parts parts) {
+    private void accept(Object key, Parts parts, @Nullable BlockPos anchor) {
         this.inFlight = false;
-        if (!this.closed && key.equals(this.requestedKey)) {
+        // Show the newest finished mesh even if a newer one was asked for meanwhile: with big previews
+        // that keep changing (a paste following the cursor), throwing it away meant nothing ever showed.
+        if (!this.closed && this.requestedKey != null) {
             upload(parts);
             this.shownKey = key;
+            this.shownAnchor = anchor;
         }
         if (!this.closed && this.queuedKey != null) {
             Object k = this.queuedKey;
             Supplier<Blocks> s = this.queuedSupplier;
             boolean off = this.queuedOffThread;
+            BlockPos a = this.queuedAnchor;
             this.queuedKey = null;
             this.queuedSupplier = null;
+            this.queuedAnchor = null;
             if (k.equals(this.requestedKey)) {
-                submit(k, s, off);
+                submit(k, s, off, a);
             }
         }
     }
@@ -282,7 +318,7 @@ public final class PreviewMesh implements AutoCloseable {
 
     @Nullable
     public Box bounds() {
-        return this.bounds;
+        return this.bounds == null ? null : this.bounds.offset(this.shiftX, this.shiftY, this.shiftZ);
     }
 
     /** Stop showing anything (keeps GPU buffers for reuse). */
@@ -293,6 +329,9 @@ public final class PreviewMesh implements AutoCloseable {
         this.queuedSupplier = null;
         this.hasGhost = this.hasFill = this.hasEdges = false;
         this.bounds = null;
+        this.shownAnchor = null;
+        this.queuedAnchor = null;
+        this.shiftX = this.shiftY = this.shiftZ = 0;
         this.blocks = 0;
         this.truncated = false;
     }
@@ -316,7 +355,8 @@ public final class PreviewMesh implements AutoCloseable {
             return;
         }
         matrices.push();
-        matrices.translate(this.origin.getX() - cam.x, this.origin.getY() - cam.y, this.origin.getZ() - cam.z);
+        matrices.translate(this.origin.getX() + this.shiftX - cam.x, this.origin.getY() + this.shiftY - cam.y,
+                this.origin.getZ() + this.shiftZ - cam.z);
         Matrix4f model = matrices.peek().getPositionMatrix();
 
         RenderSystem.enableBlend();
@@ -342,6 +382,13 @@ public final class PreviewMesh implements AutoCloseable {
         }
         RenderSystem.depthMask(false);
         RenderSystem.disableCull();
+        boolean glow = this.style == Style.GLOW;
+        if (glow) {
+            // Seen through walls, and slowly pulsing so it catches the eye.
+            RenderSystem.disableDepthTest();
+            float pulse = 0.65F + 0.35F * (float) Math.sin(System.currentTimeMillis() / 300.0);
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, pulse);
+        }
         if (this.hasFill) {
             this.fillBuffer.bind();
             this.fillBuffer.draw(model, projection, GameRenderer.getPositionColorProgram());
@@ -351,6 +398,10 @@ public final class PreviewMesh implements AutoCloseable {
             this.edgeBuffer.draw(model, projection, GameRenderer.getPositionColorProgram());
         }
         VertexBuffer.unbind();
+        if (glow) {
+            RenderSystem.setShaderColor(1.0F, 1.0F, 1.0F, 1.0F);
+            RenderSystem.enableDepthTest();
+        }
 
         RenderSystem.depthMask(true);
         RenderSystem.enableCull();
@@ -392,17 +443,41 @@ public final class PreviewMesh implements AutoCloseable {
         }
 
         List<BlockPos> surfaceOnly = new ArrayList<>();
-        if (style == Style.GHOST && states.size() <= ghostLimit && world != null) {
-            bakeGhosts(parts, states, world, surfaceOnly);
+        // Big structures: only their outer shell can be seen, so only it gets real block models (much
+        // faster, and big schematics show as blocks instead of plain boxes); boxes past the limit.
+        Map<BlockPos, BlockState> visible = style == Style.GHOST && world != null && states.size() > ghostLimit ? shell(states) : states;
+        if (style == Style.GHOST && world != null && visible.size() <= ghostLimit) {
+            bakeGhosts(parts, states, visible, world, surfaceOnly);
         } else {
-            surfaceOnly.addAll(states.keySet());
+            surfaceOnly.addAll(visible.keySet());
         }
         if (!surfaceOnly.isEmpty()) {
             bakeSurface(parts, surfaceOnly, style);
         }
     }
 
-    private static void bakeGhosts(Parts parts, Map<BlockPos, BlockState> states, ClientWorld world, List<BlockPos> surfaceOnly) {
+    /** The blocks with at least one side not against another block of the set (the ones that can be seen). */
+    private static Map<BlockPos, BlockState> shell(Map<BlockPos, BlockState> states) {
+        it.unimi.dsi.fastutil.longs.LongOpenHashSet set = new it.unimi.dsi.fastutil.longs.LongOpenHashSet(states.size() * 2);
+        for (BlockPos p : states.keySet()) {
+            set.add(p.asLong());
+        }
+        Map<BlockPos, BlockState> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<BlockPos, BlockState> e : states.entrySet()) {
+            BlockPos p = e.getKey();
+            for (Direction d : Direction.values()) {
+                if (!set.contains(BlockPos.asLong(p.getX() + d.getOffsetX(), p.getY() + d.getOffsetY(), p.getZ() + d.getOffsetZ()))) {
+                    out.put(p, e.getValue());
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
+    /** @param states every block (for culling hidden faces), @param draw the ones to draw */
+    private static void bakeGhosts(Parts parts, Map<BlockPos, BlockState> states, Map<BlockPos, BlockState> draw, ClientWorld world,
+                                   List<BlockPos> surfaceOnly) {
         Map<Long, BlockState> byLong = new HashMap<>(states.size() * 2);
         for (Map.Entry<BlockPos, BlockState> e : states.entrySet()) {
             byLong.put(e.getKey().asLong(), e.getValue());
@@ -415,7 +490,7 @@ public final class PreviewMesh implements AutoCloseable {
         MatrixStack matrices = new MatrixStack();
         Random random = Random.create();
         BlockPos o = parts.origin;
-        for (Map.Entry<BlockPos, BlockState> e : states.entrySet()) {
+        for (Map.Entry<BlockPos, BlockState> e : draw.entrySet()) {
             BlockState state = e.getValue();
             BlockPos p = e.getKey();
             if (state.isAir()) {

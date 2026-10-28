@@ -27,8 +27,11 @@ Both have the same features and controls.
 - Fabric: Minecraft 1.20.1, Fabric Loader 0.14.21+, Fabric API
 - NeoForge: Minecraft 1.21.1, NeoForge 21.1+ (Baritone's NeoForge build for 1.21 is optional, as on Fabric)
 - Optional: [Baritone](https://github.com/cabaletta/baritone) for 1.20.1 (the Fabric build). It is better at
-  long or awkward paths (it can bridge and pillar); without it the built-in engine is used, which walks,
-  climbs single steps and drops, but doesn't build its own bridges.
+  long or awkward paths; without it the built-in engine is used. That one walks, climbs, drops (any height
+  into water), jumps gaps of up to three blocks (**Parkour jumps** in Settings), steps around mobs, plans long
+  walks a stretch at a time, and plans again when a block on the route changes; while building it can also
+  bridge, pillar and tunnel. Several of these ideas come from
+  [mineflayer-pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder) (MIT).
 
 ## Controls (in RTS mode)
 
@@ -45,7 +48,7 @@ Both have the same features and controls.
 | 1-8 | Tools: Build, Destroy, Interact, Link storage, Blueprint, Terrain, Measure, Protect |
 | Ctrl+0-9 / Shift+0-9 | Save the camera position to a slot / jump back to it |
 | `[` `]` | Previous / next shape |
-| M | Build mode (Fill / Replace / Replace type / Cover), or Terrain mode (Flatten / Light up) |
+| M | Build mode (Fill / Replace / Replace type / Cover), or Terrain mode (Flatten / Blend / Level / Light up...) |
 | R / H | Rotate (blocks, or the blueprint being pasted) / toggle hollow |
 | I | Dome, pyramid or cone upside down: where you click is the bottom (the tip) and it widens upward - a funnel or bowl to build, or a pit to dig (click its deepest point; cut view helps) |
 | N | Mirror the blueprint being pasted |
@@ -57,6 +60,7 @@ Both have the same features and controls.
 | V, PageUp/PageDown | Cut view: hide everything above a Y level to see inside builds; move the cut |
 | Ctrl+Z | Undo the last order (queues orders that put the old blocks back) |
 | F | Search items |
+| K | Skip the rest of the current layer: the built-in builder goes on with the next one (also outside RTS mode; with nothing building, hold-Z in layers moves up a layer). Rebind in Controls |
 | Ctrl+click an item | Fetch a stack of it from storage into your inventory |
 | E, T, / | Inventory, chat, command (RTS resumes when you close them) |
 | **F1** or the **?** button | Show every control over the view |
@@ -102,9 +106,9 @@ builder too). If a modded block opens its screen anyway, it's closed again and t
 
 - **Build**: pick a block from the item bar, then click. Shapes: Block, Line, Floor, Wall, Box, Circle,
   Cylinder, Sphere, Dome (half sphere), Pyramid, Cone, Torus, Arch (Height = how high it rises; solid makes a
-  gateway), Bridge (Height = width; the **Bridge** button next to Mode picks a look: Classic in the brush block with matching railings, or Medieval, Viaduct, Garden, Stone, Overgrown and Covered with their own materials, pillars going down to the ground or river bed), Stairs (one up per block, stair blocks face up the
-  stairs; Height = width), Spiral (spiral staircase around a centre), Vein (every touching block of one type) and Hole (fills an enclosed pit or pond up to the
-  level you click). Two-point shapes: click A, click B, then click again or press Enter.
+  gateway), Bridge (Height = width; the **Style** button next to Mode picks a look: Classic in the brush block with matching railings, or Medieval, Viaduct, Garden, Stone, Overgrown, Covered, Rope, Nether, Sandstone, Modern, Japanese, Bamboo, Suspension, Trestle (with a minecart track), Truss, Dwarven, Ocean and End with their own materials, pillars going down to the ground or river bed; the **Hump / Sag** button (Inverted's place, [I]) makes the deck sag down in the middle like a rope bridge instead), Stairs (one up per block, stair blocks face up the
+  stairs; Height = width), Spiral (spiral staircase around a centre), Vein (every touching block of one type) Hole (fills an enclosed pit or pond up to the
+  level you click) and Island (a floating island: A is the middle of its top, B sets the radius, so drag further out to scale it up; Height = how deep the underside hangs, 1-3 for about the radius; **Style** picks Grassy, Snowy, Desert, Cherry, Mushroom or Crimson, each with its own blocks, trees and plants; the **Bottom** button (Inverted's place, [I]) picks the underside: Pointed, Rounded, Stepped or Torn out, which is ragged with roots and loose chunks falling away below; Hollow builds only a 2 block shell). Two-point shapes: click A, click B, then click again or press Enter.
   - **Modes**: *Fill* only fills empty space; *Replace* turns everything in the shape into the brush;
     *Replace type* swaps only the block type you click first; *Cover* only fills empty spaces resting on
     solid ground (carpets, paths over terrain).
@@ -161,6 +165,17 @@ builder too). If a modded block opens its screen anyway, it's closed again and t
 - **Terrain**: click two corners of an area.
   - *Flatten* levels it to the height of the first corner: everything above (up to the "mine above" height,
     Ctrl+scroll) is mined and dips below are filled with the brush block (dirt if none is picked).
+  - *Blend* is a brush instead: hold the left button and drag over rough ground to paint it (Shift+drag erases,
+    Ctrl+scroll or -/+ for the brush size, X clears). The painted ground is tinted and the result previewed
+    (red is mined, ghosts are filled); Enter queues it. The painted heights are smoothed toward the unpainted
+    land around them, so bumps are mined down, dips filled and steps become slopes that run into the terrain.
+    *Strength* (1-10) sets how far it smooths. Only natural ground (dirt, grass, stone, sand...) is changed;
+    buildings, trees and water are left alone. Fills use the ground's own blocks (dirt under grass), and
+    *Top: keep surface* tops raised ground with grass (or podzol...); if you don't have enough of them (they
+    can't be crafted), dirt goes on top instead and grass grows back over it. Lowered ground is left as dirt.
+  - *Level* paints the same way, but the painted ground is mined or filled flat to one height: the height where
+    you start painting (*Level Y* -/+ to change it). *Edge* (0-10) sets how wide the slope is from the level
+    back into the land around it, so there's no cliff at the edge (0 leaves a sharp step).
   - *Quarry* digs the area out layer by layer, from the top down to the depth you set (Ctrl+scroll or -/+),
     and stores what it digs in linked storage when the inventory fills up.
   - *Fell trees* chops every tree in the area, picks up the wood and replants saplings.
@@ -168,6 +183,10 @@ builder too). If a modded block opens its screen anyway, it's closed again and t
   - *Plant trees* plants saplings spread out over the area (spacing -/+), on grass or dirt with room to grow and
     away from other trees: the brush sapling, or the one you have most of. Dark oak is planted 2x2.
   - *Light up* places torches on every dark floor spot in the area (spaced out, so it doesn't need hundreds).
+- **Getting through**: when the built-in engine can't walk to a block, it tunnels: it mines its way through
+  plain terrain (never order blocks, protected areas, chests, slow blocks, or next to water or lava) and, once
+  the order is done, puts back what it dug. Stone goes back as cobblestone and grass as dirt if that's what you
+  have.
 - **Air placement** (B, or the Air button): the cursor targets a flat layer at a chosen height, so you can
   click empty space to build floating blocks and shapes. Alt+scroll (or -/+) moves the layer; a grid and a drop
   line to the ground show where it is. While drawing a shape, pointing at the sky uses the first corner's layer.
@@ -211,8 +230,20 @@ The built-in engine also handles shapes that overhang or float, like spheres and
 - **Smooth turning** (Settings: Turn speed): the character turns its head toward each block it places or mines at a
   limited speed and only clicks once it faces it, instead of snapping to a new angle every block. *Instant* restores
   the old snapping.
-- **Creative flight** (Settings, on by default): when you can fly (creative mode, or a server that allows it), the
+- **Creative flight** (Settings, on by default): when you can fly (creative mode, a flight item like an Angel Ring, or a server that allows it), the
   character flies straight to a spot within reach of each block instead of walking, pillaring or scaffolding.
+- **Multi-place** (Settings: Off / 2 / 4 / 8 at once): the built-in engine also puts down other blocks in reach in
+  the same tick, like hold-Z (each click sends its own look instead of turning). Much faster; strict anti-cheat may notice.
+- **Multi-place while flying**: with Multi-place on, a flying builder puts blocks down as it flies past instead of
+  stopping at each one, and (**Fly above the layer**, on by default) hovers just above the layer it builds. Measured on a
+  845-block dome in creative: 307 s off, 181 s with Multi-place 4.
+- **Build ahead** (Settings, off by default): the built-in engine, building in layers with mid-air placing, also
+  places blocks of the next 2 layers that are already in reach. Off: strictly one layer at a time.
+- **Glow layer** (Settings, on by default): outside RTS mode with Hold-Z in layers, the blocks of the layer to
+  place next glow yellow and show through walls.
+- **Scaffolding** (Settings, on by default): off, the builder never puts up temporary blocks (pillars, supports,
+  bridging steps, scaffolding, ladders) and Baritone doesn't bridge or pillar; blocks it can't reach or attach to
+  are skipped. Air place and flying still work.
 - **Creative supply** (Settings, on by default): in creative mode the builder spawns the blocks and scaffolding it
   needs into your hotbar instead of fetching them from storage. Does nothing in survival.
 - **Clear blocks in the way** (Settings, on by default): shapes mine whatever is in their cells (terrain, trees,
@@ -296,7 +327,8 @@ walks to any chest:
 The backpack you wear or carry is used first, before AE2, Refined Storage or chests - no walking: it opens for a
 moment, what the build needs is shift-clicked out, and it closes again. NeoForge (ATM10): **Sophisticated
 Backpacks** (in the inventory, worn or in a Curios slot). Fabric (Prominence II): **Traveler's Backpack** (worn, or
-carried in the inventory). Its contents count in the item bar once it has been opened, and **Index** reads it.
+carried in the inventory) and the unofficial Fabric port of **Sophisticated Backpacks** (in the inventory, worn or
+in a Trinkets slot). Only stored items are taken - upgrade, filter and crafting slots are left alone. Its contents count in the item bar once it has been opened, and **Index** reads it.
 Turn it off with **Use backpacks** in Settings.
 
 ### Refined Storage (NeoForge)

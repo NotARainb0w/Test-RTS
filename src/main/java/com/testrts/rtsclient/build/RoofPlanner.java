@@ -450,6 +450,13 @@ public final class RoofPlanner {
             return false;
         }
         BlockState s = world.getBlockState(p);
+        if (s.isAir() || s.isReplaceable()) {
+            // A queued build's hologram counts as built: a roof can go on a house that's still to be built.
+            BlockState ghost = com.testrts.rtsclient.task.BuildTask.queuedAt(p);
+            if (ghost != null) {
+                s = ghost;
+            }
+        }
         return !s.isAir() && !s.isReplaceable() && !s.getCollisionShape(world, p).isEmpty();
     }
 

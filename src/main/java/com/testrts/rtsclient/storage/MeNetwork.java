@@ -39,6 +39,11 @@ public final class MeNetwork {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     /** After a wireless terminal didn't open, don't try again for this long. */
     private static final long WIRELESS_RETRY_MS = 60_000;
+    /**
+     * What a backpack holds changes without it being opened (pickup / magnet upgrades), and looking again
+     * is quick: past this age its last contents no longer rule out an item.
+     */
+    private static final long PORTABLE_STALE_MS = 20_000;
 
     /** A terminal part on one face of a cable block. */
     public record Terminal(BlockPos pos, Direction side) {
@@ -422,11 +427,13 @@ public final class MeNetwork {
      * into yet (then the only way to find out is to open a terminal).
      */
     public boolean mightHave(MinecraftClient client, Item item) {
-        return reachable(client) && (count(item) > 0 || !this.indexed);
+        return reachable(client) && (count(item) > 0 || !this.indexed
+                || this.mod.portable() && System.currentTimeMillis() - this.indexedAt > PORTABLE_STALE_MS);
     }
 
     public void record(Map<Item, Long> contents) {
         if (this.indexed && this.items.equals(contents)) {
+            this.indexedAt = System.currentTimeMillis(); // still current
             return;
         }
         this.items.clear();

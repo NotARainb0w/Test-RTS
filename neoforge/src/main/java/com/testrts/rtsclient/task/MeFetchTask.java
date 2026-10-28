@@ -8,6 +8,9 @@ import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
@@ -22,7 +25,7 @@ import java.util.Map;
  * needed straight into the inventory and closes the terminal again.
  */
 public final class MeFetchTask implements RtsTask {
-    private enum Phase { WALK, OPEN, WAIT_OPEN, SETTLE, TAKE, ARRIVE, DONE }
+    private enum Phase { WALK, OPEN, WAIT_OPEN, SETTLE, ROOM, TAKE, ARRIVE, DONE }
 
     /** Ticks to wait for a terminal to open after clicking it. */
     private static final int OPEN_TIMEOUT_TICKS = 30;
@@ -38,6 +41,8 @@ public final class MeFetchTask implements RtsTask {
     /** After the last request, wait until the inventory has been still this long. */
     private static final int ARRIVE_QUIET_TICKS = 8;
     private static final int ARRIVE_TIMEOUT_TICKS = 100;
+    /** Longest a backpack gets to take things we put away to make room. */
+    private static final int ROOM_MAX_TICKS = 20;
 
     private final Map<Item, Integer> wanted;
     @Nullable
@@ -56,6 +61,8 @@ public final class MeFetchTask implements RtsTask {
     /** Stacks still to ask for, per entry serial. */
     private final Map<Object, Integer> requests = new LinkedHashMap<>();
     private Map<Item, Integer> lastCounts;
+    /** Items the order still uses: never put away in a backpack to make room. */
+    private java.util.Set<Item> keep = java.util.Set.of();
 
     /** At a linked terminal of {@code network}, or through its wireless terminal when {@code terminal} is null. */
     public MeFetchTask(MeNetwork network, Map<Item, Integer> wanted, @Nullable MeNetwork.Terminal terminal) {
@@ -65,6 +72,11 @@ public final class MeFetchTask implements RtsTask {
         this.terminal = terminal;
         this.walk = terminal == null ? null : new WalkPhase(terminal.pos());
         this.phase = terminal == null ? Phase.OPEN : Phase.WALK;
+    }
+
+    public MeFetchTask keep(java.util.Set<Item> keep) {
+        this.keep = keep;
+        return this;
     }
 
     public MeNetwork network() {
@@ -87,6 +99,7 @@ public final class MeFetchTask implements RtsTask {
         return switch (this.phase) {
             case WALK -> "walking to " + where;
             case OPEN, WAIT_OPEN, SETTLE -> "opening " + where;
+            case ROOM -> "making room";
             case TAKE, ARRIVE -> "taking items";
             case DONE -> "done";
         };
@@ -205,6 +218,11 @@ public final class MeFetchTask implements RtsTask {
                     return Status.FAILED;
                 }
                 if (settled || this.timer >= SETTLE_MAX_TICKS) {
+                    if (this.mod.portable()) {
+                        this.phase = Phase.ROOM;
+                        this.timer = 0;
+                        return Status.RUNNING;
+                    }
                     planRequests(player.getInventory());
                     if (this.requests.isEmpty()) {
                         close(player);
@@ -214,6 +232,24 @@ public final class MeFetchTask implements RtsTask {
                     this.phase = Phase.TAKE;
                     this.timer = 0;
                 }
+                return Status.RUNNING;
+            }
+            case ROOM -> {
+                if (!stillOpen(player)) {
+                    return Status.FAILED;
+                }
+                // Moves land a tick or so later; once nothing more needs to (or can) go, ask for the items.
+                if (++this.timer < ROOM_MAX_TICKS && (this.timer % 3 != 1 || makeRoom(client, player) > 0)) {
+                    return Status.RUNNING;
+                }
+                planRequests(player.getInventory());
+                if (this.requests.isEmpty()) {
+                    close(player);
+                    return Status.DONE;
+                }
+                this.lastCounts = counts(player.getInventory());
+                this.phase = Phase.TAKE;
+                this.timer = 0;
                 return Status.RUNNING;
             }
             case TAKE -> {
@@ -263,6 +299,47 @@ public final class MeFetchTask implements RtsTask {
     }
 
     /** How many stacks of which entries to ask for, limited by free inventory space. */
+    /**
+     * Backpacks: when the inventory hasn't room for what's wanted, put things the order doesn't use into the
+     * backpack (main inventory only, never the hotbar, tools or other backpacks). Returns the clicks made.
+     */
+    private int makeRoom(Minecraft client, LocalPlayer player) {
+        if (client.gameMode == null) {
+            return 0;
+        }
+        Inventory inv = player.getInventory();
+        int free = 0;
+        for (int i = 0; i < inv.items.size(); i++) {
+            if (inv.items.get(i).isEmpty()) {
+                free++;
+            }
+        }
+        Map<Item, Long> have = com.testrts.rtsclient.storage.GridMod.totals(this.mod.entries(this.handler));
+        int stacks = 0;
+        for (Map.Entry<Item, Integer> w : this.wanted.entrySet()) {
+            long n = Math.min(w.getValue(), have.getOrDefault(w.getKey(), 0L));
+            int perStack = Math.max(1, w.getKey().getDefaultMaxStackSize());
+            stacks += (int) ((n + perStack - 1) / perStack);
+        }
+        int clicks = 0;
+        for (Slot slot : this.handler.slots) {
+            if (clicks >= stacks - free || clicks >= CLICKS_PER_TICK) {
+                break;
+            }
+            if (!(slot.container instanceof Inventory) || slot.getContainerSlot() < 9 || slot.getContainerSlot() >= 36) {
+                continue;
+            }
+            ItemStack stack = slot.getItem();
+            if (stack.isEmpty() || stack.isDamageableItem() || this.wanted.containsKey(stack.getItem())
+                    || this.keep.contains(stack.getItem()) || this.mod.isWirelessItem(stack)) {
+                continue;
+            }
+            client.gameMode.handleInventoryMouseClick(this.handler.containerId, slot.index, 0, ClickType.QUICK_MOVE, player);
+            clicks++;
+        }
+        return clicks;
+    }
+
     private void planRequests(Inventory inv) {
         this.requests.clear();
         int freeSlots = 0;

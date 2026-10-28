@@ -87,6 +87,20 @@ public final class PathFollower {
     @Nullable
     private Scaffolder scaffolder;
     private int buildTicks;
+    /** Check the next steps are still walkable as we go (planned routes only, see {@link #routeChanged}). */
+    private boolean watchRoute;
+    /** Steps ahead checked by {@link #routeChanged}. */
+    private static final int LOOKAHEAD = 6;
+
+    // A parkour jump in progress (see tickParkour)
+    @Nullable
+    private BlockPos jumpTarget;
+    private int jumpTicks;
+    private boolean jumped;
+    private boolean airborne;
+    private boolean landed;
+    /** Back up to the rear of the take-off block first, for a long jump. */
+    private boolean runUp;
 
     /** Places the temporary blocks a route needs. Implemented by the builder. */
     public interface Scaffolder {
@@ -100,6 +114,10 @@ public final class PathFollower {
 
         /** A scaffolding block was put at {@code at} by the follower itself (pillaring). */
         void placed(BlockPos at);
+
+        /** {@code was} at {@code at} is being mined to tunnel through (to be put back later). */
+        default void dug(BlockPos at, BlockState was) {
+        }
     }
 
     public PathFollower(List<BlockPos> path) {
@@ -120,6 +138,14 @@ public final class PathFollower {
     public PathFollower building(List<PathFinder.Action> actions, Scaffolder scaffolder) {
         this.actions = actions;
         this.scaffolder = scaffolder;
+        this.watchRoute = true;
+        return this;
+    }
+
+    /** How each step of a walking route is taken (walks, climbs, parkour jumps); also watches the route ahead. */
+    public PathFollower steps(List<PathFinder.Action> actions) {
+        this.actions = actions;
+        this.watchRoute = true;
         return this;
     }
 
@@ -158,6 +184,27 @@ public final class PathFollower {
     }
 
     public State tick(Minecraft client) {
+        this.descending = false;
+        State state = tickSteps(client);
+        // Sneaking on scaffolding drops us through it: never, unless this step is meant to go down.
+        if (client.player != null && client.level != null && !this.descending) {
+            BlockPos at = client.player.blockPosition();
+            if (client.level.getBlockState(at).is(net.minecraft.world.level.block.Blocks.SCAFFOLDING) || client.level.getBlockState(at.below()).is(net.minecraft.world.level.block.Blocks.SCAFFOLDING)) {
+                MovementInput.acquire(client.player).sneak = false;
+            }
+        }
+        return state;
+    }
+
+    /** Set by a climb step going down (sneaking through scaffolding is then wanted). */
+    private boolean descending;
+    /** The climb step being worked on, the closest we got to its height, and ticks since that improved. */
+    @Nullable
+    private BlockPos climbTarget;
+    private double climbBest;
+    private int climbTicks;
+
+    private State tickSteps(Minecraft client) {
         LocalPlayer player = client.player;
         ClientLevel world = client.level;
         if (player == null || world == null) {
@@ -165,10 +212,33 @@ public final class PathFollower {
         }
         MovementInput input = MovementInput.acquire(player);
         if (player.getAbilities().flying) {
-            // Flying (a flight item in survival, or creative): the route is for walking, so come down
-            // first. Holding sneak descends; the game turns flight off once we touch the ground.
+            // Flying (a flight item in survival, or creative): the route is for walking. Fly over to the next
+            // node and come down onto it (the game turns flight off once we touch the ground); just sinking
+            // where we are would never land over the void or deep water.
             input.release();
-            input.sneak = true;
+            if (this.path.isEmpty() || ++this.ticks > this.path.size() * TICKS_PER_NODE + 200) {
+                return State.STUCK;
+            }
+            BlockPos node = this.path.get(Math.min(this.index, this.path.size() - 1));
+            Vec3 pos = player.position();
+            double dx = node.getX() + 0.5 - pos.x;
+            double dz = node.getZ() + 0.5 - pos.z;
+            double dy = Walkability.standY(world, node) - pos.y;
+            double flat = Math.sqrt(dx * dx + dz * dz);
+            if (flat > 0.3) {
+                float yaw = (float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F;
+                Look.toward(player, yaw, player.getXRot());
+                float rad = player.getYRot() * Mth.DEG_TO_RAD;
+                double forward = -dx * Mth.sin(rad) + dz * Mth.cos(rad);
+                double left = dx * Mth.cos(rad) + dz * Mth.sin(rad);
+                input.forward = forward > 0.15;
+                input.back = forward < -0.15;
+                input.left = left > 0.15;
+                input.right = left < -0.15;
+            }
+            input.jump = dy > 0.3;
+            // Stay up until over the node, so we don't drop into a gap on the way.
+            input.sneak = dy < -0.2 && flat < 1.5;
             return State.WALKING;
         }
         if (this.start == null) {
@@ -195,6 +265,25 @@ public final class PathFollower {
         }
         BlockPos target = this.path.get(this.index);
         PathFinder.Action action = action(this.index);
+        // Straight up or down a ladder, vine or scaffolding column.
+        BlockPos at = player.blockPosition();
+        if (target.getX() == at.getX() && target.getZ() == at.getZ() && target.getY() != at.getY()
+                && (Walkability.climbable(world, at) || Walkability.climbable(world, target) || Walkability.climbable(world, at.below()))) {
+            return tickClimb(world, player, input, target);
+        }
+        // A block placed or mined on the route since it was planned (by us, another player, an enderman...):
+        // plan again rather than walk into it or off it.
+        if (this.watchRoute && this.ticks % 5 == 0 && routeChanged(world)) {
+            this.offPath = true;
+            input.release();
+            return State.STUCK;
+        }
+        if (action == PathFinder.Action.PARKOUR) {
+            State s = tickParkour(world, player, input, target);
+            if (s != null) {
+                return s;
+            }
+        }
         if (action != PathFinder.Action.WALK && this.scaffolder != null) {
             State s = tickBuildStep(client, world, player, input, target, action);
             if (s != null) {
@@ -365,13 +454,196 @@ public final class PathFollower {
                 }
                 return State.WALKING;
             }
+            case TUNNEL -> {
+                BlockPos from = this.index > 0 ? this.path.get(this.index - 1) : this.start;
+                BlockPos cell = null;
+                for (BlockPos c : PathFinder.tunnelCells(from, target)) {
+                    if (!Walkability.passable(world, c)) {
+                        cell = c;
+                        break;
+                    }
+                }
+                if (cell == null) {
+                    // Through: walk the step like any other.
+                    this.buildTicks = 0;
+                    this.windowTicks = 0;
+                    return null;
+                }
+                input.release();
+                // Sand or gravel falling in keeps it busy a while; give up only if it never clears.
+                if (++this.buildTicks > 400 || !Reach.inReach(client, cell)) {
+                    return State.STUCK;
+                }
+                if (player.onGround()) {
+                    BlockState s = world.getBlockState(cell);
+                    this.scaffolder.dug(cell, s);
+                    Inventories.holdBestTool(client, s);
+                    Vec3 eye = player.getEyePosition();
+                    Vec3 center = Vec3.atCenterOf(cell);
+                    this.breakingSide = Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
+                    this.breaking = cell.immutable();
+                    this.breakTicks = 0;
+                    this.breakStarted = false;
+                    this.digging = true;
+                }
+                return State.WALKING;
+            }
             default -> {
                 return null;
             }
         }
     }
 
+    /** One of the next few walking (or jumping) steps can't be stood on any more. */
+    private boolean routeChanged(ClientLevel world) {
+        int end = Math.min(this.path.size(), this.index + LOOKAHEAD);
+        for (int i = this.index; i < end; i++) {
+            PathFinder.Action a = action(i);
+            if ((a == PathFinder.Action.WALK || a == PathFinder.Action.PARKOUR) && !Walkability.standable(world, this.path.get(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * A parkour step: face the gap, back up first for a long jump, run (sprinting for gaps wider than one) and jump
+     * off the edge, then steer onto the landing. A missed jump is reported as stuck on this step, so the next plan
+     * goes another way.
+     *
+     * @return the state to report, or null once landed (the rest is walked like any step)
+     */
+    @Nullable
+    private State tickParkour(ClientLevel world, LocalPlayer player, MovementInput input, BlockPos target) {
+        BlockPos from = this.index > 0 ? this.path.get(this.index - 1) : this.start;
+        if (!target.equals(this.jumpTarget)) {
+            this.jumpTarget = target.immutable();
+            this.jumpTicks = 0;
+            this.jumped = false;
+            this.airborne = false;
+            this.landed = false;
+            this.runUp = from.distSqr(target.atY(from.getY())) >= 3.5 * 3.5;
+        }
+        if (this.landed) {
+            return null;
+        }
+        input.release();
+        if (++this.jumpTicks > 100) {
+            return State.STUCK;
+        }
+        // The jump's direction (straight or at an angle) and length, centre to centre.
+        double jx = target.getX() - from.getX();
+        double jz = target.getZ() - from.getZ();
+        double length = Math.sqrt(jx * jx + jz * jz);
+        double dx = jx / length;
+        double dz = jz / length;
+        // Where the take-off block ends along that direction: 0.5 straight out, 0.71 diagonally.
+        double edge = 0.5 / Math.max(Math.abs(dx), Math.abs(dz));
+        boolean sprint = length > 2.9;
+        Vec3 pos = player.position();
+        double fromY = Walkability.standY(world, from);
+        double targetY = Walkability.standY(world, target);
+        if (!this.jumped) {
+            if (!player.onGround()) {
+                if (pos.y < fromY - 0.5) {
+                    this.offPath = true; // slipped off the edge before the jump
+                    return State.STUCK;
+                }
+                return State.WALKING;
+            }
+            // How far past the middle of the take-off block we are, toward the gap, and how far off the line.
+            double ox = pos.x - (from.getX() + 0.5);
+            double oz = pos.z - (from.getZ() + 0.5);
+            double along = ox * dx + oz * dz;
+            double across = ox * dz - oz * dx;
+            float yaw = (float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F;
+            boolean facing = Look.toward(player, yaw, 0.0F);
+            if (this.runUp || Math.abs(across) > 0.2) {
+                // Line up in the middle of the block (at its back for a long jump: a run-up).
+                double back = this.runUp ? 0.25 : 0.0;
+                double bx = from.getX() + 0.5 - dx * back - pos.x;
+                double bz = from.getZ() + 0.5 - dz * back - pos.z;
+                if (bx * bx + bz * bz > 0.08 * 0.08) {
+                    nudge(player, input, bx, bz);
+                    return State.WALKING;
+                }
+                this.runUp = false;
+            }
+            if (!facing) {
+                return State.WALKING;
+            }
+            input.forward = true;
+            player.setSprinting(sprint);
+            // Jump near the edge: late enough to clear the gap, before the floor runs out (0.3 past the edge).
+            if (along >= (length >= 3.5 ? edge : edge - 0.2)) {
+                input.jump = true;
+                this.jumped = true;
+            }
+            return State.WALKING;
+        }
+        if (!this.airborne) {
+            // Jump pressed; we leave the ground next tick.
+            this.airborne = !player.onGround();
+            input.forward = true;
+            input.jump = true;
+            if (sprint) {
+                player.setSprinting(true);
+            }
+            return State.WALKING;
+        }
+        if (player.onGround() || player.isInWater()) {
+            if (pos.y < targetY - 0.5) {
+                return State.STUCK; // fell short into the gap
+            }
+            this.landed = true;
+            return null;
+        }
+        // In the air: keep going toward the landing, letting go near it so we don't sail past.
+        double remaining = (target.getX() + 0.5 - pos.x) * dx + (target.getZ() + 0.5 - pos.z) * dz;
+        input.forward = remaining > 0.6;
+        input.back = remaining < 0.0;
+        return State.WALKING;
+    }
+
     /** Press the keys that move us by (dx, dz), whichever way we're facing. Sneaks. */
+    /**
+     * Climbing like a player: centred on the column, holding jump goes up a ladder, vine or scaffolding; down,
+     * sneaking drops through scaffolding, and letting go slides down a ladder or vine.
+     */
+    private State tickClimb(ClientLevel world, LocalPlayer player, MovementInput input, BlockPos target) {
+        input.release();
+        var pos = player.position();
+        double dx = target.getX() + 0.5 - pos.x;
+        double dz = target.getZ() + 0.5 - pos.z;
+        // Watchdog: a climb that gains no height (or loses none, going down) for 2 seconds is re-planned
+        // instead of waiting for the route's own, much longer, timeout.
+        double gap = Math.abs(target.getY() - pos.y);
+        if (this.climbTarget == null || !this.climbTarget.equals(target)) {
+            this.climbTarget = target.immutable();
+            this.climbBest = gap;
+            this.climbTicks = 0;
+        } else if (gap < this.climbBest - 0.05) {
+            this.climbBest = gap;
+            this.climbTicks = 0;
+        } else if (++this.climbTicks > 40) {
+            this.climbTarget = null;
+            input.release();
+            return State.STUCK;
+        }
+        if (dx * dx + dz * dz > 0.25 * 0.25) {
+            nudge(player, input, dx, dz);
+        }
+        BlockPos at = player.blockPosition();
+        if (target.getY() > at.getY()) {
+            input.sneak = false;
+            input.jump = true;
+        } else {
+            this.descending = true;
+            input.sneak = world.getBlockState(at).is(net.minecraft.world.level.block.Blocks.SCAFFOLDING) || world.getBlockState(at.below()).is(net.minecraft.world.level.block.Blocks.SCAFFOLDING);
+        }
+        return State.WALKING;
+    }
+
     private static void nudge(LocalPlayer player, MovementInput input, double dx, double dz) {
         float yaw = player.getYRot() * Mth.DEG_TO_RAD;
         // The player's forward is (-sin, cos) and left is (cos, sin).

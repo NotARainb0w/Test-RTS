@@ -22,13 +22,25 @@ import java.util.function.Supplier;
  * north side (z = 0); doors and furnaces face accordingly and turn with the blueprint.
  */
 public final class Presets {
-    public record Preset(String name, String description, Item icon, Supplier<Blueprint> build) {
+    /** @param requires mod id the preset is made for (only listed when it's loaded), or null */
+    public record Preset(String name, String description, Item icon, Supplier<Blueprint> build, String requires) {
+        public Preset(String name, String description, Item icon, Supplier<Blueprint> build) {
+            this(name, description, icon, build, null);
+        }
     }
 
     private Presets() {
     }
 
     public static List<Preset> all() {
+        // With FramedBlocks: a fresh set built from framed blocks (the builder puts the camo on afterwards).
+        if (com.testrts.rtsclient.Platform.isModLoaded("framedblocks")) {
+            return framedPresets();
+        }
+        return plainPresets();
+    }
+
+    private static List<Preset> plainPresets() {
         return List.of(
                 new Preset("Starter house", "7x7 oak cabin: windows, door, gable roof, crafting table, furnace and chests",
                         Items.OAK_DOOR, Presets::house),
@@ -80,10 +92,402 @@ public final class Presets {
                 new Preset("Rail station", "13 long platform beside a track, with a roof, lights and benches",
                         Items.RAIL, Presets::railStation),
                 new Preset("Bee yard", "9x9 fenced flower meadow with hives and a composter (Productive Bees and friends)",
-                        Items.BEEHIVE, Presets::beeYard));
+                        Items.BEEHIVE, Presets::beeYard),
+                // Rooms for ATM10 / ATM10 To the Sky, made of the pack's own blocks; only listed when the mod is there.
+                new Preset("Block generator room", "13x7 deepslate room with every Cobblestone Generators Galore tier "
+                        + "(stone to netherite) along the back, a barrel on each", Items.COBBLESTONE, Presets::blockGenRoom,
+                        "cobblegengalore"),
+                new Preset("Power generator room", "11x9 room: Generator Galore generators down both sides, Powah cable "
+                        + "to an energy cell at the back", Items.FURNACE, Presets::powerGenRoom, "generatorgalore"),
+                new Preset("Sieve station", "11x9 roofed Ex Deorum station: sieves, compressed sieves, barrels, crucibles "
+                        + "and a flux sieve with a loot barrel (To the Sky)", Items.GRAVEL, Presets::sieveStation, "exdeorum"))
+                .stream().filter(p -> p.requires() == null || com.testrts.rtsclient.Platform.isModLoaded(p.requires())).toList();
+    }
+
+
+    /** Every preset, both sets (the framed one and the plain one), for lookups by name (tests). */
+    public static List<Preset> everything() {
+        List<Preset> all = new java.util.ArrayList<>(framedPresets());
+        if (com.testrts.rtsclient.Platform.isModLoaded("framedblocks")) {
+            // all() only lists the framed set then; add the plain ones (not modded) under their own names.
+            java.util.Set<String> names = new java.util.HashSet<>();
+            all.forEach(p -> names.add(p.name()));
+            for (Preset p : plainPresets()) {
+                if (names.add(p.name())) {
+                    all.add(p);
+                }
+            }
+            return all;
+        }
+        return all();
+    }
+
+    private static List<Preset> framedPresets() {
+        return List.of(
+                new Preset("Cottage", "9x7 spruce and plaster cottage, dark oak roof; framed shutters, a lattice gable window "
+                        + "and a porch on slim framed posts", Items.SPRUCE_DOOR, Presets::cottage),
+                new Preset("Workshop", "11x7 open-fronted workshop: crafting, smithing, stonecutter, anvil, furnaces and chests; "
+                        + "framed shelves and a lattice tool rack", Items.CRAFTING_TABLE, Presets::workshop2),
+                new Preset("Storage hall", "11x9 deepslate hall: barrels up both sides, chests at the back; framed shelves "
+                        + "and corner trim", Items.CHEST, Presets::storageHall),
+                new Preset("Greenhouse", "11x11 glass greenhouse with four dirt beds round a cross path (hoe them, add water); "
+                        + "framed trellis, potting bench and corner trim", Items.GLASS, Presets::greenhouse2),
+                new Preset("Watchtower", "5x5 deepslate tower, 9 high, ladder inside, roofed lookout; framed lattice railing "
+                        + "and window grilles", Items.LADDER, Presets::tower2),
+                new Preset("Block generator room", "13x7 room with every Cobblestone Generators Galore tier along the back, "
+                        + "a barrel on each", Items.COBBLESTONE, Presets::blockGenRoom, "cobblegengalore"),
+                new Preset("Power generator room", "11x9 room: Generator Galore generators down both sides, Powah cable to an "
+                        + "energy cell", Items.FURNACE, Presets::powerGenRoom, "generatorgalore"),
+                new Preset("Sieve station", "11x9 roofed Ex Deorum station: sieves, compressed sieves, barrels, crucibles "
+                        + "and a flux sieve", Items.GRAVEL, Presets::sieveStation, "exdeorum"))
+                .stream().filter(p -> p.requires() == null || com.testrts.rtsclient.Platform.isModLoaded(p.requires())).toList();
+    }
+
+    // ------------------------------------------------------------------ designs with FramedBlocks decoration
+    // Walls, floors and roofs are ordinary blocks; FramedBlocks pieces (wearing a camo the builder puts on
+    // afterwards) only dress them up. Without FramedBlocks those pieces are a vanilla look-alike or left out.
+
+    /** Shutters (framed panels) either side of a window in a north (z = 0) or south wall, on the outside. */
+    private static void shutters(Shape b, int x, int y, int z, boolean north, BlockState skin) {
+        String face = north ? "facing=south" : "facing=north";
+        int out = north ? z - 1 : z + 1;
+        for (int dx : new int[]{-1, 1}) {
+            b.deco(x + dx, y, out, "framed_panel", face, skin, Blocks.AIR.defaultBlockState());
+        }
+    }
+
+    private static Blueprint cottage() {
+        Shape b = new Shape("Cottage");
+        BlockState log = state(Blocks.STRIPPED_SPRUCE_LOG);
+        BlockState dark = state(Blocks.DARK_OAK_PLANKS);
+        b.box(0, 0, 0, 8, 0, 6, state(Blocks.SPRUCE_PLANKS));
+        b.walls(0, 1, 0, 8, 3, 6, state(Blocks.CALCITE));
+        for (int[] q : new int[][]{{0, 0}, {8, 0}, {0, 6}, {8, 6}, {4, 6}, {0, 3}, {8, 3}}) {
+            b.box(q[0], 1, q[1], q[0], 3, q[1], log);
+        }
+        for (int x = 0; x <= 8; x++) {
+            b.set(x, 4, 0, axis(log, Direction.Axis.X));
+            b.set(x, 4, 6, axis(log, Direction.Axis.X));
+        }
+        for (int z = 1; z <= 5; z++) {
+            b.set(0, 4, z, axis(log, Direction.Axis.Z));
+            b.set(8, 4, z, axis(log, Direction.Axis.Z));
+        }
+        BlockState pane = state(Blocks.GLASS_PANE);
+        for (int x : new int[]{2, 6}) {
+            b.box(x, 2, 0, x, 3, 0, pane);
+            b.box(x, 2, 6, x, 3, 6, pane);
+            shutters(b, x, 2, 0, true, dark);
+            shutters(b, x, 3, 0, true, dark);
+            shutters(b, x, 2, 6, false, dark);
+            shutters(b, x, 3, 6, false, dark);
+        }
+        b.set(0, 2, 1, pane);
+        b.set(0, 2, 5, pane);
+        b.set(8, 2, 1, pane);
+        b.set(8, 2, 5, pane);
+        door(b, 4, 1, 0, Blocks.SPRUCE_DOOR, Direction.SOUTH);
+        gableRoof(b, 0, 8, 5, 0, 6, Blocks.DARK_OAK_STAIRS, Blocks.DARK_OAK_SLAB, state(Blocks.SPRUCE_PLANKS));
+        // A lattice window high in each gable end.
+        b.deco(0, 6, 3, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, pane);
+        b.deco(8, 6, 3, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, pane);
+        // Porch: a slab canopy over the door on two slim framed posts.
+        for (int x = 3; x <= 5; x++) {
+            b.set(x, 4, -1, slab(Blocks.DARK_OAK_SLAB, false));
+            b.set(x, 0, -1, state(Blocks.SPRUCE_PLANKS));
+        }
+        for (int x : new int[]{3, 5}) {
+            b.deco(x, 1, -1, "framed_half_pillar", "facing=up", log, state(Blocks.SPRUCE_FENCE));
+            b.deco(x, 2, -1, "framed_half_pillar", "facing=up", log, state(Blocks.SPRUCE_FENCE));
+            b.deco(x, 3, -1, "framed_half_pillar", "facing=up", log, state(Blocks.SPRUCE_FENCE));
+        }
+        b.set(1, 1, 5, state(Blocks.CRAFTING_TABLE));
+        b.set(2, 1, 5, facing(Blocks.FURNACE, Direction.NORTH));
+        b.set(6, 1, 5, facing(Blocks.CHEST, Direction.NORTH));
+        b.set(7, 1, 5, facing(Blocks.CHEST, Direction.NORTH));
+        b.set(1, 1, 1, state(Blocks.LANTERN));
+        // A shelf over the bench.
+        for (int x = 1; x <= 3; x++) {
+            b.deco(x, 3, 5, "framed_slab", "top=true", dark, slab(Blocks.DARK_OAK_SLAB, true));
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint workshop2() {
+        Shape b = new Shape("Workshop");
+        BlockState post = state(Blocks.STRIPPED_DARK_OAK_LOG);
+        BlockState spruce = state(Blocks.SPRUCE_PLANKS);
+        b.box(0, 0, 0, 10, 0, 6, state(Blocks.POLISHED_ANDESITE));
+        b.box(1, 0, 1, 9, 0, 5, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        b.box(0, 1, 6, 10, 3, 6, spruce);
+        b.box(0, 1, 0, 0, 3, 6, spruce);
+        b.box(10, 1, 0, 10, 3, 6, spruce);
+        for (int[] q : new int[][]{{0, 0}, {5, 0}, {10, 0}, {0, 6}, {10, 6}}) {
+            b.box(q[0], 1, q[1], q[0], 3, q[1], post);
+        }
+        b.box(0, 4, 0, 10, 4, 6, slab(Blocks.DARK_OAK_SLAB, false));
+        b.box(1, 1, 0, 4, 1, 0, state(Blocks.SPRUCE_FENCE));
+        b.box(6, 1, 0, 9, 1, 0, state(Blocks.SPRUCE_FENCE));
+        b.set(1, 1, 5, state(Blocks.CRAFTING_TABLE));
+        b.set(2, 1, 5, state(Blocks.SMITHING_TABLE));
+        b.set(3, 1, 5, facing(Blocks.STONECUTTER, Direction.NORTH));
+        b.set(4, 1, 5, facing(Blocks.ANVIL, Direction.EAST));
+        b.set(5, 1, 5, facing(Blocks.FURNACE, Direction.NORTH));
+        b.set(6, 1, 5, facing(Blocks.BLAST_FURNACE, Direction.NORTH));
+        b.set(7, 1, 5, facing(Blocks.SMOKER, Direction.NORTH));
+        b.set(8, 1, 5, facing(Blocks.CHEST, Direction.NORTH));
+        b.set(9, 1, 5, facing(Blocks.CHEST, Direction.NORTH));
+        b.set(5, 3, 3, Blocks.LANTERN.defaultBlockState().setValue(BlockStateProperties.HANGING, true));
+        // Framed shelf along the back wall over the bench, and a lattice tool rack on each side wall.
+        for (int x = 1; x <= 9; x++) {
+            b.deco(x, 3, 5, "framed_slab", "top=true", state(Blocks.DARK_OAK_PLANKS), slab(Blocks.DARK_OAK_SLAB, true));
+        }
+        for (int z = 2; z <= 4; z++) {
+            b.deco(1, 2, z, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", spruce, Blocks.AIR.defaultBlockState());
+            b.deco(9, 2, z, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", spruce, Blocks.AIR.defaultBlockState());
+        }
+        return b.blueprint();
+    }
+
+    private static Blueprint storageHall() {
+        Shape b = new Shape("Storage hall");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_bricks", Blocks.DEEPSLATE_BRICKS);
+        BlockState dark = state(Blocks.DARK_OAK_PLANKS);
+        b.box(0, 0, 0, 10, 0, 8, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.walls(0, 1, 0, 10, 4, 8, wall);
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}, {5, 8}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], state(Blocks.STRIPPED_DARK_OAK_LOG));
+        }
+        b.box(0, 5, 0, 10, 5, 8, slab(Blocks.DEEPSLATE_TILE_SLAB, false));
+        for (int[] q : new int[][]{{3, 3}, {7, 3}, {3, 6}, {7, 6}}) {
+            b.set(q[0], 5, q[1], state(Blocks.SEA_LANTERN));
+        }
+        for (int z = 1; z <= 6; z++) {
+            for (int y = 1; y <= 3; y++) {
+                b.set(1, y, z, facing(Blocks.BARREL, Direction.EAST));
+                b.set(9, y, z, facing(Blocks.BARREL, Direction.WEST));
+            }
+        }
+        for (int x = 2; x <= 8; x++) {
+            b.set(x, 1, 7, facing(Blocks.CHEST, Direction.NORTH));
+            b.deco(x, 2, 7, "framed_slab", "top=false", dark, slab(Blocks.SPRUCE_SLAB, false));
+        }
+        // Dark oak trim up the inside corners.
+        for (int y = 1; y <= 4; y++) {
+            b.deco(1, y, 1, "framed_corner_pillar", "facing=north", dark, Blocks.AIR.defaultBlockState());
+            b.deco(9, y, 1, "framed_corner_pillar", "facing=east", dark, Blocks.AIR.defaultBlockState());
+        }
+        door(b, 5, 1, 0, Blocks.IRON_DOOR, Direction.SOUTH);
+        return b.blueprint();
+    }
+
+    private static Blueprint greenhouse2() {
+        Shape b = new Shape("Greenhouse");
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        BlockState glass = mod("connectedglass:borderless_glass", Blocks.GLASS);
+        BlockState oak = state(Blocks.OAK_PLANKS);
+        b.box(0, 0, 0, 10, 0, 10, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        b.walls(0, 0, 0, 10, 0, 10, mod("chipped:bordered_deepslate", Blocks.POLISHED_DEEPSLATE));
+        for (int bx : new int[]{1, 6}) {
+            for (int bz : new int[]{1, 6}) {
+                b.box(bx, 0, bz, bx + 3, 0, bz + 3, state(Blocks.DIRT));
+            }
+        }
+        b.walls(0, 1, 0, 10, 1, 10, mod("rechiseled:cobbled_deepslate_brick_pattern", Blocks.DEEPSLATE_BRICKS));
+        b.walls(0, 2, 0, 10, 4, 10, glass);
+        for (int[] q : new int[][]{{0, 0}, {5, 0}, {10, 0}, {0, 10}, {5, 10}, {10, 10}, {0, 5}, {10, 5}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], post);
+        }
+        gableRoof(b, 0, 10, 5, 0, 10, Blocks.DARK_OAK_STAIRS, Blocks.DARK_OAK_SLAB, glass);
+        door(b, 5, 1, 0, Blocks.SPRUCE_DOOR, Direction.SOUTH);
+        b.remove(5, 3, 0);
+        b.set(5, 3, 0, post);
+        b.set(1, 1, 9, state(Blocks.COMPOSTER));
+        b.set(9, 1, 9, facing(Blocks.BARREL, Direction.UP));
+        // Trellis against the back wall for climbing plants, a framed potting bench by the composter.
+        for (int x = 2; x <= 8; x++) {
+            if (x != 5) {
+                for (int y = 2; y <= 3; y++) {
+                    b.deco(x, y, 9, "framed_lattice_block", "x_axis=true,y_asix=true,z_axis=false", oak, Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        b.deco(1, 1, 8, "framed_slab", "top=true", oak, slab(Blocks.OAK_SLAB, true));
+        b.deco(1, 1, 7, "framed_slab", "top=true", oak, slab(Blocks.OAK_SLAB, true));
+        return b.blueprint();
+    }
+
+    private static Blueprint tower2() {
+        Shape b = new Shape("Watchtower");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_bricks", Blocks.DEEPSLATE_BRICKS);
+        BlockState dark = state(Blocks.DARK_OAK_PLANKS);
+        b.box(0, 0, 0, 4, 0, 4, wall);
+        b.walls(0, 1, 0, 4, 8, 4, wall);
+        for (int[] q : new int[][]{{0, 0}, {4, 0}, {0, 4}, {4, 4}}) {
+            b.box(q[0], 1, q[1], q[0], 8, q[1], state(Blocks.STRIPPED_DARK_OAK_LOG));
+        }
+        for (int y = 1; y <= 9; y++) {
+            b.set(2, y, 3, facing(Blocks.LADDER, Direction.NORTH));
+        }
+        b.box(0, 9, 0, 4, 9, 4, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.set(2, 9, 3, facing(Blocks.LADDER, Direction.NORTH));
+        // Arrow slits with framed lattice grilles.
+        b.deco(2, 5, 0, "framed_lattice_block", "x_axis=true,y_asix=true,z_axis=false", dark, state(Blocks.GLASS_PANE));
+        b.deco(0, 5, 2, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, state(Blocks.GLASS_PANE));
+        b.deco(4, 5, 2, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, state(Blocks.GLASS_PANE));
+        door(b, 2, 1, 0, Blocks.SPRUCE_DOOR, Direction.SOUTH);
+        // Lookout: corner posts, a lattice railing between them, a roof on top.
+        for (int[] q : new int[][]{{0, 0}, {4, 0}, {0, 4}, {4, 4}}) {
+            b.box(q[0], 10, q[1], q[0], 11, q[1], state(Blocks.STRIPPED_DARK_OAK_LOG));
+        }
+        for (int i = 1; i <= 3; i++) {
+            b.deco(i, 10, 0, "framed_lattice_block", "x_axis=true,y_asix=true,z_axis=false", dark, state(Blocks.DARK_OAK_FENCE));
+            b.deco(i, 10, 4, "framed_lattice_block", "x_axis=true,y_asix=true,z_axis=false", dark, state(Blocks.DARK_OAK_FENCE));
+            b.deco(0, 10, i, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, state(Blocks.DARK_OAK_FENCE));
+            b.deco(4, 10, i, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", dark, state(Blocks.DARK_OAK_FENCE));
+        }
+        gableRoof(b, 0, 4, 12, 0, 4, Blocks.DARK_OAK_STAIRS, Blocks.DARK_OAK_SLAB, dark);
+        // Hangs from the ridge slab (nothing is right above the middle lower down).
+        b.set(2, 13, 2, Blocks.LANTERN.defaultBlockState().setValue(BlockStateProperties.HANGING, true));
+        return b.blueprint();
+    }
+
+    // ------------------------------------------------------------------ FramedBlocks
+
+    @org.jetbrains.annotations.Nullable
+    private static BlockState framed(String name) {
+        BlockState s = mod("framedblocks:" + name, Blocks.AIR);
+        return s.isAir() ? null : s;
+    }
+
+    /** {@code s} with property {@code name} set to {@code value}, if it has one that takes that value. */
+    private static BlockState byName(BlockState s, String name, String value) {
+        net.minecraft.world.level.block.state.properties.Property<?> p = s.getBlock().getStateDefinition().getProperty(name);
+        return p == null ? s : withValue(s, p, value);
+    }
+
+    private static <T extends Comparable<T>> BlockState withValue(BlockState s, net.minecraft.world.level.block.state.properties.Property<T> p, String value) {
+        return p.getValue(value).map(v -> s.setValue(p, v)).orElse(s);
+    }
+
+    private static BlockState axis(BlockState s, Direction.Axis axis) {
+        return s.hasProperty(BlockStateProperties.AXIS) ? s.setValue(BlockStateProperties.AXIS, axis) : s;
     }
 
     // ------------------------------------------------------------------ designs
+
+    // ------------------------------------------------------------------ modpack rooms (ATM10, ATM10 To the Sky)
+    // Built from the pack's own blocks (Chipped, Rechiseled, Connected Glass, Supplementaries...); each one
+    // falls back to a vanilla look-alike if that mod isn't there.
+
+    /** Every Cobblestone Generators Galore tier in a row along the back, a barrel on each to catch what it makes. */
+    private static Blueprint blockGenRoom() {
+        Shape b = new Shape("Block generator room");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_brick_pattern", Blocks.DEEPSLATE_BRICKS);
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        BlockState glass = mod("connectedglass:borderless_glass", Blocks.GLASS);
+        b.box(0, 0, 0, 12, 0, 6, mod("chipped:bordered_deepslate", Blocks.POLISHED_DEEPSLATE));
+        b.box(1, 0, 3, 11, 0, 3, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        b.walls(0, 1, 0, 12, 4, 6, wall);
+        for (int[] q : new int[][]{{0, 0}, {6, 0}, {12, 0}, {0, 6}, {6, 6}, {12, 6}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], post);
+        }
+        b.box(2, 2, 0, 4, 3, 0, glass);
+        b.box(8, 2, 0, 10, 3, 0, glass);
+        b.box(0, 5, 0, 12, 5, 6, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(3, 5, 2, 9, 5, 4, glass);
+        String[] tiers = {"stone", "copper", "iron", "gold", "diamond", "emerald", "netherite"};
+        for (int i = 0; i < tiers.length; i++) {
+            put(b, 3 + i, 1, 5, mod("cobblegengalore:block_gen_" + tiers[i], Blocks.AIR));
+            b.set(3 + i, 2, 5, turned(mod("sophisticatedstorage:barrel", Blocks.BARREL), Direction.NORTH));
+        }
+        put(b, 1, 3, 3, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.EAST));
+        put(b, 11, 3, 3, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.WEST));
+        // Framed shelf above the barrels, dark oak trim up the inside corners.
+        for (int x = 2; x <= 10; x++) {
+            b.deco(x, 3, 5, "framed_slab", "top=true", state(Blocks.DARK_OAK_PLANKS), Blocks.AIR.defaultBlockState());
+        }
+        for (int y = 1; y <= 4; y++) {
+            b.deco(1, y, 1, "framed_corner_pillar", "facing=north", state(Blocks.DARK_OAK_PLANKS), Blocks.AIR.defaultBlockState());
+            b.deco(11, y, 1, "framed_corner_pillar", "facing=east", state(Blocks.DARK_OAK_PLANKS), Blocks.AIR.defaultBlockState());
+        }
+        door(b, 6, 1, 0, Blocks.DARK_OAK_DOOR, Direction.SOUTH);
+        return b.blueprint();
+    }
+
+    /** Generator Galore generators down both sides facing in, Powah cable to an energy cell at the back. */
+    private static Blueprint powerGenRoom() {
+        Shape b = new Shape("Power generator room");
+        BlockState wall = mod("rechiseled:cobbled_deepslate_bricks", Blocks.DEEPSLATE_BRICKS);
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        b.box(0, 0, 0, 10, 0, 8, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(3, 0, 1, 7, 0, 7, mod("chipped:bordered_deepslate", Blocks.POLISHED_DEEPSLATE));
+        b.walls(0, 1, 0, 10, 4, 8, wall);
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}, {0, 4}, {10, 4}}) {
+            b.box(q[0], 1, q[1], q[0], 4, q[1], post);
+        }
+        b.box(0, 5, 0, 10, 5, 8, wall);
+        b.box(4, 5, 3, 6, 5, 5, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        String[] left = {"iron", "gold", "diamond", "emerald", "netherite"};
+        String[] right = {"copper", "magmatic", "ender", "honey", "culinary"};
+        for (int i = 0; i < 5; i++) {
+            int z = 2 + i;
+            put(b, 1, 1, z, turned(mod("generatorgalore:" + left[i] + "_generator", Blocks.AIR), Direction.EAST));
+            put(b, 9, 1, z, turned(mod("generatorgalore:" + right[i] + "_generator", Blocks.AIR), Direction.WEST));
+            put(b, 2, 1, z, mod("powah:energy_cable_starter", Blocks.AIR));
+            put(b, 8, 1, z, mod("powah:energy_cable_starter", Blocks.AIR));
+        }
+        for (int x = 2; x <= 8; x++) {
+            put(b, x, 1, 7, x == 5 ? mod("powah:energy_cell_basic", Blocks.AIR) : mod("powah:energy_cable_starter", Blocks.AIR));
+        }
+        put(b, 5, 3, 7, turned(mod("supplementaries:sconce_wall_green", Blocks.AIR), Direction.NORTH));
+        // Framed lattice guard rails in front of the generators.
+        for (int z = 2; z <= 6; z++) {
+            b.deco(3, 1, z, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", state(Blocks.DARK_OAK_PLANKS),
+                    Blocks.AIR.defaultBlockState());
+            b.deco(7, 1, z, "framed_lattice_block", "x_axis=false,y_asix=true,z_axis=true", state(Blocks.DARK_OAK_PLANKS),
+                    Blocks.AIR.defaultBlockState());
+        }
+        door(b, 5, 1, 0, Blocks.IRON_DOOR, Direction.SOUTH);
+        b.set(3, 2, 0, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        b.set(7, 2, 0, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        return b.blueprint();
+    }
+
+    /** Ex Deorum: a roofed station with sieves, compressed sieves, barrels and crucibles round a loot barrel. */
+    private static Blueprint sieveStation() {
+        Shape b = new Shape("Sieve station");
+        BlockState post = mod("chipped:bundled_dark_oak_log", Blocks.STRIPPED_DARK_OAK_LOG);
+        b.box(0, 0, 0, 10, 0, 8, mod("rechiseled:cobbled_deepslate_large_tiles", Blocks.DEEPSLATE_TILES));
+        b.box(1, 0, 4, 9, 0, 4, mod("chipped:bordered_mud_bricks", Blocks.MUD_BRICKS));
+        for (int[] q : new int[][]{{0, 0}, {10, 0}, {0, 8}, {10, 8}}) {
+            b.box(q[0], 1, q[1], q[0], 3, q[1], post);
+        }
+        b.box(0, 4, 0, 10, 4, 8, slab(Blocks.DARK_OAK_SLAB, false));
+        b.box(3, 4, 3, 7, 4, 5, mod("connectedglass:borderless_glass", Blocks.GLASS));
+        for (int x = 2; x <= 8; x += 2) {
+            put(b, x, 1, 2, mod("exdeorum:oak_sieve", Blocks.AIR));
+            put(b, x, 1, 6, mod("exdeorum:oak_compressed_sieve", Blocks.AIR));
+        }
+        put(b, 1, 1, 7, mod("exdeorum:oak_barrel", Blocks.AIR));
+        put(b, 9, 1, 7, mod("exdeorum:oak_barrel", Blocks.AIR));
+        put(b, 1, 1, 1, mod("exdeorum:porcelain_crucible", Blocks.AIR));
+        put(b, 9, 1, 1, mod("exdeorum:porcelain_crucible", Blocks.AIR));
+        put(b, 5, 1, 4, mod("exmachinis:flux_sieve", Blocks.AIR));
+        b.set(5, 2, 4, turned(mod("sophisticatedstorage:barrel", Blocks.BARREL), Direction.UP));
+        // Slim framed posts under the roof's middle, framed shelves for the sieve meshes.
+        for (int[] q : new int[][]{{5, 0}, {5, 8}, {0, 4}, {10, 4}}) {
+            for (int y = 1; y <= 3; y++) {
+                b.deco(q[0], y, q[1], "framed_half_pillar", "facing=up", state(Blocks.STRIPPED_DARK_OAK_LOG), Blocks.AIR.defaultBlockState());
+            }
+        }
+        b.deco(4, 2, 8, "framed_slab", "top=false", state(Blocks.DARK_OAK_PLANKS), Blocks.AIR.defaultBlockState());
+        b.deco(6, 2, 8, "framed_slab", "top=false", state(Blocks.DARK_OAK_PLANKS), Blocks.AIR.defaultBlockState());
+        for (int[] q : new int[][]{{3, 3}, {7, 3}, {3, 5}, {7, 5}}) {
+            b.set(q[0], 3, q[1], Blocks.LANTERN.defaultBlockState().setValue(BlockStateProperties.HANGING, true));
+        }
+        return b.blueprint();
+    }
 
     private static Blueprint house() {
         Shape b = new Shape("Starter house");
@@ -242,7 +646,8 @@ public final class Presets {
         }
         b.set(1, 11, 1, state(Blocks.TORCH));
         b.set(3, 11, 3, state(Blocks.TORCH));
-        b.set(2, 3, 2, state(Blocks.LANTERN).setValue(BlockStateProperties.HANGING, true));
+        // Hangs from the underside of the platform (a hanging lantern needs a block above it).
+        b.set(2, 9, 2, state(Blocks.LANTERN).setValue(BlockStateProperties.HANGING, true));
         return b.blueprint();
     }
 
@@ -629,6 +1034,28 @@ public final class Presets {
 
     // ------------------------------------------------------------------ block states
 
+    /** A block of another mod by id (default state), or {@code fallback} when the mod isn't there. */
+    private static BlockState mod(String id, Block fallback) {
+        net.minecraft.resources.ResourceLocation key = net.minecraft.resources.ResourceLocation.tryParse(id);
+        return key != null && net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(key)
+                ? net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(key).defaultBlockState() : fallback.defaultBlockState();
+    }
+
+    /** {@code s} facing {@code d}, if it can face that way. */
+    private static BlockState turned(BlockState s, Direction d) {
+        if (d.getAxis() != Direction.Axis.Y && s.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            return s.setValue(BlockStateProperties.HORIZONTAL_FACING, d);
+        }
+        return s.hasProperty(BlockStateProperties.FACING) ? s.setValue(BlockStateProperties.FACING, d) : s;
+    }
+
+    /** Set a block unless it's air (a modded block whose mod isn't there). */
+    private static void put(Shape b, int x, int y, int z, BlockState s) {
+        if (!s.isAir()) {
+            b.set(x, y, z, s);
+        }
+    }
+
     private static BlockState state(Block block) {
         return block.defaultBlockState();
     }
@@ -655,12 +1082,41 @@ public final class Presets {
             this.name = name;
         }
 
+        /** FramedBlocks: the camo each framed block gets. */
+        private final Map<BlockPos, BlockState> camo = new HashMap<>();
+
         void set(int x, int y, int z, BlockState state) {
-            this.blocks.put(new BlockPos(x, y, z), state);
+            BlockPos p = new BlockPos(x, y, z);
+            this.blocks.put(p, state);
+            this.camo.remove(p);
         }
 
         void remove(int x, int y, int z) {
-            this.blocks.remove(new BlockPos(x, y, z));
+            BlockPos p = new BlockPos(x, y, z);
+            this.blocks.remove(p);
+            this.camo.remove(p);
+        }
+
+        /**
+         * A FramedBlocks decoration: {@code id} with {@code props} (e.g. "facing=south"), wearing {@code skin}.
+         * Without FramedBlocks, {@code fallback} instead (air: nothing).
+         */
+        void deco(int x, int y, int z, String id, String props, BlockState skin, BlockState fallback) {
+            BlockState framed = framed(id);
+            if (framed == null) {
+                if (!fallback.isAir()) {
+                    set(x, y, z, fallback);
+                }
+                return;
+            }
+            for (String kv : props.split(",")) {
+                String[] p = kv.split("=");
+                if (p.length == 2) {
+                    framed = byName(framed, p[0].trim(), p[1].trim());
+                }
+            }
+            set(x, y, z, framed);
+            this.camo.put(new BlockPos(x, y, z), skin);
         }
 
         void box(int x0, int y0, int z0, int x1, int y1, int z1, BlockState state) {
@@ -700,15 +1156,30 @@ public final class Presets {
         }
 
         Blueprint blueprint() {
+            // Relative to the minimum corner: a porch or an overhang may reach below 0.
+            int minX = 0;
+            int minY = 0;
+            int minZ = 0;
+            for (BlockPos p : this.blocks.keySet()) {
+                minX = Math.min(minX, p.getX());
+                minY = Math.min(minY, p.getY());
+                minZ = Math.min(minZ, p.getZ());
+            }
+            BlockPos shift = new BlockPos(-minX, -minY, -minZ);
+            Map<BlockPos, BlockState> blocks = new HashMap<>();
+            Map<BlockPos, BlockState> camo = new HashMap<>();
             int sx = 0;
             int sy = 0;
             int sz = 0;
-            for (BlockPos p : this.blocks.keySet()) {
+            for (Map.Entry<BlockPos, BlockState> e : this.blocks.entrySet()) {
+                BlockPos p = e.getKey().offset(shift);
+                blocks.put(p, e.getValue());
                 sx = Math.max(sx, p.getX() + 1);
                 sy = Math.max(sy, p.getY() + 1);
                 sz = Math.max(sz, p.getZ() + 1);
             }
-            return new Blueprint(this.name, sx, sy, sz, new HashMap<>(this.blocks));
+            this.camo.forEach((p, s) -> camo.put(p.offset(shift), s));
+            return new Blueprint(this.name, sx, sy, sz, blocks, camo);
         }
     }
 }

@@ -123,10 +123,9 @@ public final class MaterialsScreen extends Screen {
         Messages.info("Removed " + removed + "x " + item.getName().getString() + " from the queued orders");
     }
 
-    /** x of the remove button column, and whether {@code (mx, my)} is on a row's button (that row's index, else -1). */
-    private int removeRowAt(double mx, double my) {
-        int x1 = this.panelX1 - PAD;
-        if (mx < x1 - 12 || mx > x1 || my < this.listY0) {
+    /** The index of the row under {@code (mx, my)} when the mouse is within columns {@code left..right}, else -1. */
+    private int rowAt(double mx, double my, int left, int right) {
+        if (mx < left || mx > right || my < this.listY0) {
             return -1;
         }
         int r = (int) ((my - this.listY0) / ROW_H);
@@ -136,7 +135,13 @@ public final class MaterialsScreen extends Screen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
-        int i = button == 0 ? removeRowAt(mx, my) : -1;
+        int x1 = this.panelX1 - PAD;
+        int swap = button == 0 ? rowAt(mx, my, x1 - 24, x1 - 13) : -1;
+        if (swap >= 0) {
+            this.client.setScreen(new ReplaceBlockScreen(this, this.lines.get(swap).item()));
+            return true;
+        }
+        int i = button == 0 ? rowAt(mx, my, x1 - 12, x1) : -1;
         if (i >= 0) {
             Item item = this.lines.get(i).item();
             long now = System.currentTimeMillis();
@@ -170,9 +175,9 @@ public final class MaterialsScreen extends Screen {
         int x0 = this.panelX0 + PAD;
         int x1 = this.panelX1 - PAD;
         int hy = this.panelY0 + Theme.HEADER_H + 5;
-        int cNeed = x1 - 124;
-        int cHave = x1 - 86;
-        int cStore = x1 - 48;
+        int cNeed = x1 - 134;
+        int cHave = x1 - 96;
+        int cStore = x1 - 58;
         ctx.drawText(this.textRenderer, "ITEM", x0 + 20, hy, Theme.TEXT_FAINT, false);
         ctx.drawText(this.textRenderer, "NEED", cNeed, hy, Theme.TEXT_FAINT, false);
         ctx.drawText(this.textRenderer, "HAVE", cHave, hy, Theme.TEXT_FAINT, false);
@@ -181,6 +186,7 @@ public final class MaterialsScreen extends Screen {
             ctx.drawCenteredTextWithShadow(this.textRenderer, "No build orders queued", this.width / 2, this.listY0 + 12, Theme.TEXT_DIM);
         }
         int rows = visibleRows();
+        boolean swapTip = false;
         int missingTotal = 0;
         for (Line l : this.lines) {
             missingTotal += Math.max(0, l.shortBy() - l.stored());
@@ -203,6 +209,11 @@ public final class MaterialsScreen extends Screen {
                 ctx.drawText(this.textRenderer, "Remove?", x1 - 54, y + 5, Theme.BAD, false);
             }
             ctx.drawText(this.textRenderer, "\u2715", x1 - 9, y + 5, armedRow ? Theme.BAD : Theme.TEXT_FAINT, false);
+            if (!armedRow) {
+                boolean swapHover = mouseX >= x1 - 24 && mouseX <= x1 - 13 && mouseY >= y && mouseY < y + ROW_H;
+                ctx.drawText(this.textRenderer, "⇄", x1 - 22, y + 5, swapHover ? Theme.ACCENT : Theme.TEXT_FAINT, false);
+                swapTip |= swapHover;
+            }
             ctx.drawText(this.textRenderer, Integer.toString(l.stored()), cStore, y + 5,
                     !shortItem ? Theme.TEXT_DIM : coverable ? Theme.GOOD : Theme.BAD, false);
         }
@@ -211,6 +222,9 @@ public final class MaterialsScreen extends Screen {
                 : missingTotal + " block(s) not available anywhere";
         ctx.drawText(this.textRenderer, summary, x0 + 116, this.panelY1 - PAD - 12, missingTotal == 0 ? Theme.GOOD : Theme.BAD, false);
         super.render(ctx, mouseX, mouseY, delta);
+        if (swapTip) {
+            ctx.drawTooltip(this.textRenderer, Text.literal("Replace with another block in every queued order"), mouseX, mouseY);
+        }
     }
 
     @Override

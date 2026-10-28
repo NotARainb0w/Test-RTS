@@ -20,7 +20,25 @@ public final class BuildSession {
     public boolean inverted;
     /** The look of the Bridge shape. */
     public BridgeStyle bridgeStyle = BridgeStyle.MEDIEVAL;
+    /** The look of the Island shape. */
+    public IslandStyle islandStyle = IslandStyle.GRASSY;
+    /** The underside of the Island shape. */
+    public IslandBottom islandBottom = IslandBottom.ROUNDED;
+    /** The kind of mountain the Mountain shape makes. */
+    public MountainForm mountainForm = MountainForm.PEAKED;
+    /** The Giant tree's kind, and what the Rocks shape makes and of what. */
+    public TreeKind treeKind = TreeKind.OAK;
+    public RockForm rockForm = RockForm.BOULDERS;
+    public RockLook rockLook = RockLook.STONE;
+    /** The Maze shape's walls and paths, and the Backrooms' look. */
+    public MazeStyle mazeStyle = MazeStyle.HEDGE;
+    public MazeLayout mazeLayout = MazeLayout.CLASSIC;
+    public BackroomsLevel backroomsLevel = BackroomsLevel.LEVEL_0;
+    /** Which design the next island gets; a new one after each island is queued (or with [N]). */
+    public long islandSeed = new java.util.Random().nextLong();
     public int height = 3;
+    /** Circle with Hollow off: how wide a hole is cut from the centre (0: none, 1: just the centre block). */
+    public int circleHole;
     public ItemStack brush = ItemStack.EMPTY;
     public final PlacementOrientation orientation = new PlacementOrientation();
     /** Block-state properties the player picked by hand (slab half, stair shape...), by property name. */
@@ -35,7 +53,8 @@ public final class BuildSession {
     @Nullable
     public BlockPos pasteAnchor;
     /** Mine blocks inside the blueprint's box that are air in the blueprint, for an exact copy. */
-    public boolean pasteClearsAir;
+    /** Also dig out the blueprint's empty spaces (rooms, doorways) when pasting into terrain. */
+    public boolean pasteClearsAir = true;
     /** Paste the blueprint mirrored (left-right). */
     public boolean pasteMirror;
     /** Copying also mines the original (move instead of copy). */
@@ -46,6 +65,24 @@ public final class BuildSession {
     public int terrainClearHeight = 16;
     /** Plant trees: blocks between saplings. */
     public int treeSpacing = 5;
+    /** The newer Terrain modes' size: road/river/bridge width, hill height, lake depth, terrace step... */
+    public int terrainSize = 4;
+    /** Blend brush: painted columns (see {@link TerrainBlend#key}) to the height the brush touched. */
+    public final java.util.LinkedHashMap<Long, Integer> blendPaint = new java.util.LinkedHashMap<>();
+    /** Bumped on every paint change, so previews know to plan again. */
+    public int blendVersion;
+    /** When the paint last changed (ms): previews wait until a stroke pauses instead of planning every mouse move. */
+    public long blendChangedAt;
+    /** Blend brush radius in blocks. */
+    public int blendRadius = 3;
+    /** Blend smoothing strength (1-10). */
+    public int blendStrength = 3;
+    /** Level brush: the ground height to level to; set where a new painting starts. */
+    public int levelY = 64;
+    /** Level brush: how wide the sloped edge into the surrounding land is (0-10). */
+    public int levelRamp = 3;
+    /** Blend puts grass (or whatever the surface was) back on top of the columns it changes. */
+    public boolean blendKeepTop = true;
     /** Paste the blueprint as a grid of copies: count along x and z, and the gap between copies. */
     public int arrayX = 1;
     public int arrayZ = 1;
@@ -85,6 +122,22 @@ public final class BuildSession {
         this.anchorA = null;
         this.anchorB = null;
         this.replaceTarget = null;
+        if (!this.blendPaint.isEmpty()) {
+            this.blendPaint.clear();
+            this.blendVersion++;
+            this.blendChangedAt = System.currentTimeMillis();
+        }
+    }
+
+    /** Paint (or erase) the Blend brush around {@code center}. */
+    public void paintBlend(BlockPos center, boolean erase) {
+        if (this.blendPaint.isEmpty() && !erase) {
+            this.levelY = center.getY();
+        }
+        if (TerrainBlend.paint(this.blendPaint, center, this.blendRadius, erase)) {
+            this.blendVersion++;
+            this.blendChangedAt = System.currentTimeMillis();
+        }
     }
 
     public boolean hasPendingOrder() {
@@ -153,7 +206,16 @@ public final class BuildSession {
         return property.getValue(value).map(v -> state.setValue(property, v)).orElse(state);
     }
 
+    /** The Circle has no height; with Hollow off, the height controls size a hole in its middle instead. */
+    public boolean circleHoleMode() {
+        return this.shape == BuildShape.CIRCLE && !this.hollow;
+    }
+
     public void adjustHeight(int delta) {
+        if (circleHoleMode()) {
+            this.circleHole = Math.max(0, Math.min(64, this.circleHole + delta));
+            return;
+        }
         int h = this.height + delta;
         if (h == 0) {
             h = delta > 0 ? 1 : -1;

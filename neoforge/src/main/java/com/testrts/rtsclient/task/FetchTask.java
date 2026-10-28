@@ -36,9 +36,16 @@ public final class FetchTask implements RtsTask {
     private final Map<MeNetwork, Integer> meAttempts = new java.util.HashMap<>();
     private final java.util.Set<MeNetwork> meFinished = new java.util.HashSet<>();
     private Map<Item, Integer> before;
+    /** Items the order still uses, never moved out of the inventory to make room. */
+    private Set<Item> keep = Set.of();
 
     public FetchTask(Map<Item, Integer> wanted) {
         this.remaining = new LinkedHashMap<>(wanted);
+    }
+
+    public FetchTask keep(Set<Item> keep) {
+        this.keep = keep;
+        return this;
     }
 
     @Override
@@ -72,19 +79,21 @@ public final class FetchTask implements RtsTask {
         if (this.remaining.isEmpty()) {
             return Status.DONE;
         }
-        if (player.getInventory().getFreeSlot() < 0) {
-            Messages.warn("Inventory full, stopped fetching");
-            return Status.DONE;
-        }
+        // A full inventory can still take from a backpack: it makes room by putting things away in it.
+        boolean full = player.getInventory().getFreeSlot() < 0;
         if (!this.meDone) {
-            MeFetchTask me = meVisit(client, player.blockPosition());
+            MeFetchTask me = meVisit(client, player.blockPosition(), full);
             if (me != null) {
                 this.meAttempts.merge(me.network(), 1, Integer::sum);
                 this.before = counts(player.getInventory());
-                this.visit = me;
+                this.visit = me.keep(this.keep);
                 return Status.RUNNING;
             }
             this.meDone = true;
+        }
+        if (full) {
+            Messages.warn("Inventory full, stopped fetching");
+            return Status.DONE;
         }
         BlockPos next = nextContainer(player.blockPosition());
         if (next == null) {
@@ -100,10 +109,12 @@ public final class FetchTask implements RtsTask {
     /**
      * Get what a storage network (AE2, then Refined Storage) may have: through its wireless terminal, or
      * if that can't be used (or just failed), at its nearest linked terminal. Null when there's nothing to try.
+     * With a full inventory only a backpack is worth opening.
      */
-    private MeFetchTask meVisit(Minecraft client, BlockPos near) {
+    private MeFetchTask meVisit(Minecraft client, BlockPos near, boolean full) {
         for (MeNetwork me : MeNetwork.all()) {
-            if (this.meFinished.contains(me) || this.meAttempts.getOrDefault(me, 0) >= 2 || !me.reachable(client)) {
+            if (this.meFinished.contains(me) || this.meAttempts.getOrDefault(me, 0) >= 2 || !me.reachable(client)
+                    || full && !me.mod().portable()) {
                 continue;
             }
             Map<Item, Integer> fromMe = new LinkedHashMap<>();
